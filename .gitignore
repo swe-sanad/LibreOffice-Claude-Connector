@@ -1,0 +1,30 @@
+# --- Secrets: never commit API keys or local config ---
+*.key
+.env
+.env.*
+secrets.json
+config.local.json
+**/apikey*.txt
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# --- Build artifacts ---
+build/
+dist/
+*.oxt
+*.zip
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
