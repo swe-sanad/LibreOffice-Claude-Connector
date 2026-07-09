@@ -8,6 +8,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Phase 4-5: packaged, installable `.oxt` extension with in-app settings and secure
+  key storage.**
+  [src/connector.py](../src/connector.py) — the registered UNO component: a
+  `com.sun.star.frame.ProtocolHandler` implementing `XDispatchProvider`/`XDispatch`/
+  `XInitialization`/`XServiceInfo`, exposing command URLs
+  `com.swepioneers.claudeconnector:Transform` and `:Settings`. It reads the selection
+  on the main thread, runs the Claude call on a worker thread via
+  `uno_ui.run_with_progress` (a modal progress dialog whose completion is marshalled
+  back to the main thread with `com.sun.star.awt.AsyncCallback`), then performs the
+  document write back on the main thread; any error becomes an AWT message box.
+- [src/uno_ui.py](../src/uno_ui.py) — AWT message boxes, a modal instruction-prompt
+  dialog, a settings dialog (model dropdown + masked API-key field), and
+  `run_with_progress`, all built from `UnoControlDialogModel` controls.
+- [src/config.py](../src/config.py) — JSON user settings (model, temperature,
+  max_tokens, timeout, base_url, anthropic_version, ca_file) persisted per-user (e.g.
+  `%APPDATA%\LibreOffice-Claude-Connector\config.json`), merged over defaults;
+  `client_kwargs()` maps the config onto `ClaudeClient(...)`.
+- [src/keystore.py](../src/keystore.py) — API key storage, deliberately separate from
+  the JSON config: `ANTHROPIC_API_KEY` env var takes precedence; otherwise the key is
+  stored **encrypted with Windows DPAPI** (via `ctypes`, zero third-party
+  dependencies) on Windows, or a documented-as-NOT-encrypted base64 file on other
+  platforms. The key is never written to the JSON config.
+- `ext/` extension scaffold: `description.xml`, `META-INF/manifest.xml`, `Addons.xcu`
+  (a top-level "Claude" menu + a toolbar button, scoped to Calc + Writer),
+  `ProtocolHandler.xcu`, `description/desc_en.txt`, and generated `icons/*.png`.
+- Helper modules (`claude_client`, `calc_actions`, `writer_actions`, `uno_bridge`,
+  `config`, `keystore`, `uno_ui`) are bundled as the `claudeconn` package under
+  `pythonpath/` inside the `.oxt` to avoid top-level module-name collisions with other
+  extensions; `connector.py` tries the packaged import first, falling back to a flat
+  import for local/dev runs.
+- [scripts/build_oxt.py](../scripts/build_oxt.py) — assembles the installable `.oxt`
+  from `ext/` + `src/`. [scripts/make_icons.py](../scripts/make_icons.py) generates the
+  extension's icons (stdlib only). [scripts/install_and_verify.ps1](../scripts/install_and_verify.ps1)
+  builds the `.oxt`, installs it into an isolated profile, does a warm-up boot (an
+  installed extension only activates on the *next* boot), then a second boot that
+  verifies both dispatch commands resolve.
+- [tests/test_config_keystore.py](../tests/test_config_keystore.py) — offline tests
+  for `config` (defaults-merging, save/load) and `keystore` (including a real DPAPI
+  encrypt/decrypt round-trip on Windows asserting the key is never stored in
+  plaintext). [tests/integration/test_extension_dispatch.py](../tests/integration/test_extension_dispatch.py)
+  — a LIVE integration test confirming the installed extension's ProtocolHandler
+  resolves both command URLs.
+- Verified: the full offline suite is now **62 tests, all passing** on LibreOffice's
+  bundled Python 3.10.17. `install_and_verify.ps1`'s full build → install → warm-up
+  boot → test boot flow **passed against real LibreOffice 25.2.3.2**, with both
+  dispatch commands confirmed to resolve — the full packaging + import chain works
+  end to end.
+
 - **Phase 3: Writer rewrite-selection + generate-at-caret.**
   [src/writer_actions.py](../src/writer_actions.py) — pure, UNO-free, network-free
   text logic mirroring `calc_actions`: `build_rewrite_system_prompt`/

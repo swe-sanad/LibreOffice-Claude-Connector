@@ -41,9 +41,12 @@ interpreter:
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-All **42** currently pass on the bundled Python 3.10.17. (This discovers only the
-top-level `tests/` directory; the UNO integration tests under `tests/integration/` are
-run separately below, since they require a live LibreOffice instance.)
+All **62** currently pass on the bundled Python 3.10.17, including
+[tests/test_config_keystore.py](../tests/test_config_keystore.py) — config load/save
+defaults-merging, and a real DPAPI encrypt/decrypt round-trip (on Windows) asserting
+the API key is never stored in plaintext. (This discovers only the top-level `tests/`
+directory; the UNO integration tests under `tests/integration/` are run separately
+below, since they require a live LibreOffice instance.)
 
 ## Running the Calc UNO integration test
 
@@ -99,6 +102,33 @@ error-parsing path works before a real key is even configured.
 **Never commit an API key.** Set it as a local/user environment variable
 (`setx ANTHROPIC_API_KEY ...`), not in a file tracked by git.
 
+## Building and installing the extension
+
+[scripts/build_oxt.py](../scripts/build_oxt.py) assembles `dist/claude-connector-
+<version>.oxt` from `ext/` + `src/` (version read from `ext/description.xml`):
+
+```powershell
+& "C:\Program Files\LibreOffice\program\python.exe" scripts\build_oxt.py
+```
+
+[scripts/make_icons.py](../scripts/make_icons.py) (stdlib only) regenerates
+`ext/icons/*.png` if you need to change them.
+
+To build, install into a throwaway profile, and verify the extension actually loads
+and its dispatch commands resolve — without touching your real LibreOffice profile —
+run [scripts/install_and_verify.ps1](../scripts/install_and_verify.ps1):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/install_and_verify.ps1
+```
+
+It builds the `.oxt`, `unopkg add`s it into an isolated `-env:UserInstallation` profile
+under `%TEMP%`, boots headless LibreOffice **twice** (see the warm-up-boot gotcha
+below), then runs [tests/integration/test_extension_dispatch.py](../tests/integration/test_extension_dispatch.py)
+against the second boot to confirm both `com.swepioneers.claudeconnector:Transform` and
+`:Settings` resolve via `queryDispatch`. Adjust `-Port`/`-LOProgram` the same way as
+`run_integration.ps1`.
+
 ## Gotchas
 
 ### LibreOffice caches Python modules
@@ -130,6 +160,38 @@ that mutates a UNO document (inserts, cursor moves, multi-step edits) needs at l
 test that exercises it against a **real, running LibreOffice** — which is exactly what
 `scripts/run_integration.ps1` + `tests/integration/*.py` are for. Don't trust offline
 green checkmarks alone for UNO document-edit logic.
+
+### An installed extension only activates on the NEXT boot — you need a warm-up boot
+
+`unopkg add` registers the extension's files, but LibreOffice only wires up the new
+`Addons.xcu` menu/toolbar entries and `ProtocolHandler.xcu` registration into its
+running configuration on the *next* start after install — the same "restart to apply"
+behavior a real user sees via the Extension Manager. `install_and_verify.ps1` therefore
+boots headless LibreOffice once just to let it pick up the registration ("warm-up
+boot"), terminates it, waits for the UNO socket to fully close, and only then boots a
+second time to actually run the dispatch-resolution check. Skipping the warm-up boot
+is the single most common way to get a false "extension not found" failure.
+
+### Killing leftover headless `soffice` instances between boots
+
+A test-only headless `soffice` process launched with a unique `-env:UserInstallation`
+profile can be told apart from the developer's real, visible LibreOffice window: match
+`Win32_Process` entries whose `CommandLine` contains the test profile's unique marker
+(see `Kill-TestOffice` in `install_and_verify.ps1`) rather than killing by process name
+alone, which would also kill a real open LibreOffice window. Terminate the office
+cleanly first via a `Desktop.terminate()` UNO call over the socket before falling back
+to `Stop-Process -Force`, so file locks and the profile directory are released
+properly.
+
+### Wait for the UNO port to actually close between boots
+
+After terminating the warm-up boot, the UNO socket doesn't necessarily release
+immediately — starting the next boot on the same port too early can either fail to
+bind or connect to a half-shutdown process. `install_and_verify.ps1`'s
+`Wait-PortClosed` polls the port with a `TcpClient` connect attempt until it starts
+failing (meaning nothing is listening any more) before launching the next boot, with a
+generous timeout budget (240s cold start / 40s shutdown) — headless cold starts on a
+loaded CI/dev machine are not fast.
 
 ## APSO
 

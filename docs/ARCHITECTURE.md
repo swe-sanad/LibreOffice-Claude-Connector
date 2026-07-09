@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the technical design of the connector as it stands after
-**Phase 3**. For the underlying research this design is based on (LibreOffice's UNO
+**Phase 4-5**. For the underlying research this design is based on (LibreOffice's UNO
 API, the bundled-Python environment, the Claude Messages API, and prior-art review),
 see [RESEARCH.md](RESEARCH.md). For the phase-by-phase roadmap, see
 [BUILD-PLAN.md](BUILD-PLAN.md).
@@ -15,7 +15,7 @@ Claude-calling logic never needs to know it is running inside LibreOffice:
 LibreOffice (Calc / Writer)
         │  UNO API (getCurrentSelection, getDataArray/setDataArray, insertString)
         ▼
-Extension UI layer        — menu/toolbar/shortcut → ProtocolHandler → XDispatch (Phase 4)
+Extension UI layer        — menu/toolbar/shortcut → ProtocolHandler → XDispatch (Phase 4-5)
         │
         ▼
 UNO I/O layer             — src/uno_bridge.py (Calc + Writer sections)
@@ -27,8 +27,9 @@ Pure action logic         — src/calc_actions.py (Phase 2) / src/writer_actions
 Pure Claude client        — src/claude_client.py (Phase 1)
 ```
 
-**The bottom three layers exist today for both Calc and Writer; only the extension UI layer (Phase 4) remains.**
-[src/claude_client.py](../src/claude_client.py) is deliberately pure: it takes a
+**All four layers are implemented today; Phase 4-5 packages the top layer as a real,
+installable `.oxt` extension.** [src/claude_client.py](../src/claude_client.py) is
+deliberately pure: it takes a
 prompt/messages in, performs one blocking HTTPS call, and returns a typed result — it
 has no knowledge of UNO, threads, or documents. This keeps it independently testable
 (see [tests/test_claude_client.py](../tests/test_claude_client.py)) and reusable from
@@ -191,24 +192,100 @@ ClaudeError
 └── ClaudeNetworkError    DNS/connection/TLS/timeout — no HTTP response was received
 ```
 
-## Threading model (still planned — not yet implemented)
+## The extension layer (`src/connector.py`, Phase 4-5)
+
+[src/connector.py](../src/connector.py) is the **single registered UNO component** in
+the packaged extension: a `com.sun.star.frame.ProtocolHandler` implementing
+`XDispatchProvider` + `XDispatch` + `XInitialization` + `XServiceInfo`. It owns two
+command URLs, wired from the menu/toolbar via [ext/Addons.xcu](../ext/Addons.xcu) and
+registered against the protocol in [ext/ProtocolHandler.xcu](../ext/ProtocolHandler.xcu):
+
+- `com.swepioneers.claudeconnector:Transform` — transform the Calc selection, or
+  rewrite/generate the Writer selection/caret.
+- `com.swepioneers.claudeconnector:Settings` — open the settings dialog.
+
+`queryDispatch` claims any URL under its own protocol; `dispatch()` looks at the
+document type (`uno_bridge.is_calc`/`is_writer`) and routes to the matching Calc or
+Writer path. Any `ClaudeError`/`ClaudeConfigError`/unexpected exception is caught at
+the top of `dispatch()` and turned into an AWT error message box — no exception is
+ever allowed to escape back into UNO.
+
+### Threading model
 
 `ClaudeClient.send()` is **intentionally pure and synchronous**: it blocks on one
-HTTPS request. That is correct in isolation, but calling it directly from LibreOffice's
-UI thread would freeze Calc/Writer for the duration of the request. The locked design
-(see [BUILD-PLAN.md](BUILD-PLAN.md)) is:
+HTTPS request. Calling it directly from LibreOffice's UI thread would freeze Calc/
+Writer for the duration of the request, so `connector.py` splits each command into
+three steps:
 
-1. The UNO/extension layer reads the user's selection on the main thread.
-2. It hands the request off to `ClaudeClient.send()` on a **worker thread**.
-3. The result (or a `ClaudeError`) is marshalled back to the **main thread** before any
-   document mutation (`setDataArray` / `insertString`) is performed — UNO document APIs
-   are not safe to call from arbitrary threads.
+1. **Main thread** — read the user's selection (`uno_bridge.get_calc_selection_range`/
+   `read_range_grid`, or `uno_bridge.get_writer_selection`).
+2. **Worker thread** — [src/uno_ui.py](../src/uno_ui.py)'s `run_with_progress(ctx,
+   win, title, message, work)` spawns a daemon thread running `work()` (which calls
+   `calc_actions.transform_range`/`writer_actions.rewrite_text`/`generate_text`, and
+   therefore `ClaudeClient.send()`) while a modal AWT progress dialog keeps the UI
+   responsive. The dialog's nested event loop (`dialog.execute()`) blocks the caller
+   until the worker signals completion.
+3. **Back on the main thread** — the worker thread cannot safely call UNO/AWT itself,
+   so on completion it hands a `com.sun.star.awt.AsyncCallback` an `_EndDialogCallback`
+   that calls `dialog.endExecute()`; that callback is guaranteed to run on the main
+   thread. Once `run_with_progress` returns, `connector.py` performs the document
+   mutation (`uno_bridge.write_range_grid` / `replace_writer_selection` /
+   `insert_writer_at_caret`) back on the main thread — UNO document APIs are not safe
+   to call from arbitrary threads.
 
-Phase 2's `uno_bridge.transform_selection()` is currently **synchronous end to end**
-(read → call Claude → write, all on the calling thread) — it is suitable for a
-menu-triggered macro today, but does not yet offload the network call to a worker
-thread. The worker-thread/marshalling split described above still lands with the
-packaged extension in Phase 4.
+If `parent_win` is `None` (headless), `run_with_progress` just calls `work()`
+synchronously — this is what the offline/dev paths and the extension-dispatch
+integration test rely on.
+
+### UI (`src/uno_ui.py`)
+
+Built entirely from `com.sun.star.awt.UnoControlDialogModel` controls (no `.xdl`
+files): `info_box`/`error_box` (message boxes), `prompt_instruction` (a modal
+multi-line instruction prompt used by both Transform paths), and `settings_dialog`
+(model dropdown + masked API-key field; a blank key field means "keep the existing
+key"). All of it requires a live UNO frame, so it is only exercised inside LibreOffice,
+not the offline unit tests.
+
+### Packaging (`ext/`, `scripts/build_oxt.py`)
+
+The `.oxt` is a ZIP assembled by [scripts/build_oxt.py](../scripts/build_oxt.py) from
+`ext/` (metadata: `description.xml`, `META-INF/manifest.xml`, `Addons.xcu`,
+`ProtocolHandler.xcu`, `description/desc_en.txt`, generated `icons/*.png` from
+`scripts/make_icons.py`) plus `src/`. `connector.py` is placed at the archive root
+(the one registered component); every other helper module (`claude_client`,
+`calc_actions`, `writer_actions`, `uno_bridge`, `config`, `keystore`, `uno_ui`) is
+copied under `pythonpath/claudeconn/` as an importable package — this avoids any of
+those generic module names colliding with another extension's top-level modules.
+`connector.py` adds both `pythonpath/` and its own directory to `sys.path` and tries
+the packaged import (`from claudeconn import ...`) first, falling back to a flat
+import for local/dev runs where the helpers sit next to `connector.py` unpackaged.
+`Addons.xcu` scopes the "Claude" menu entry + toolbar button to Calc and Writer only.
+
+### Configuration and key storage
+
+[src/config.py](../src/config.py) persists non-secret settings (model, temperature,
+max_tokens, timeout, base_url, anthropic_version, ca_file) as JSON in a per-user
+directory (`%APPDATA%\LibreOffice-Claude-Connector\config.json` on Windows), merged
+over `DEFAULTS`; unknown keys on disk are ignored and a missing/corrupt file silently
+falls back to defaults. `client_kwargs(cfg)` maps that dict onto `ClaudeClient(...)`'s
+constructor keywords.
+
+[src/keystore.py](../src/keystore.py) stores the Anthropic API key **separately from
+the JSON config, and never in plaintext in it**. `get_api_key()` resolves in order:
+
+1. The `ANTHROPIC_API_KEY` environment variable (developer/CI override) — takes
+   precedence even if a key is also stored on disk.
+2. A stored key in the config directory:
+   - **Windows** — encrypted at rest with **DPAPI**, called via `ctypes`
+     (`crypt32.CryptProtectData`/`CryptUnprotectData`, `CRYPTPROTECT_UI_FORBIDDEN` so
+     it never pops a UI), base64-encoded on disk as `apikey.dpapi`. Per-user: only the
+     same Windows user account can decrypt it.
+   - **Other OSes** — base64 only, in `apikey.plain` (`0600` where supported) — this
+     is a documented, explicit limitation, **not** encryption; the env var is
+     recommended there instead.
+
+`set_api_key()` always clears the other format's file first, so switching platforms
+(or re-saving) never leaves a stale key file behind in the wrong format.
 
 ## Cross-version Python target
 
