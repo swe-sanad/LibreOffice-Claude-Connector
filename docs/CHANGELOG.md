@@ -8,6 +8,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Phase 3: Writer rewrite-selection + generate-at-caret.**
+  [src/writer_actions.py](../src/writer_actions.py) — pure, UNO-free, network-free
+  text logic mirroring `calc_actions`: `build_rewrite_system_prompt`/
+  `build_rewrite_user_prompt`, `build_generate_system_prompt`, `clean_output` (unwraps
+  a whole-output markdown fence but deliberately preserves surrounding quotes/inline
+  backticks — a legitimately quoted rewrite is not damaged), `default_max_tokens(text)`
+  (scales the output budget to input length, bounded to `[512, 8192]`), `rewrite_text(
+  client, selected_text, instruction, ...)`, and `generate_text(client, instruction, ...)`.
+- [src/uno_bridge.py](../src/uno_bridge.py) — Writer section added: `is_writer(doc)`,
+  `get_writer_selection(doc)` (reads the view cursor; `isCollapsed()` is the reliable
+  no-selection signal), `replace_writer_selection`/`insert_writer_at_caret`, a
+  multi-paragraph-aware `_insert_multiline` helper (splits on `\n` into real
+  `PARAGRAPH_BREAK` control characters), `_with_undo` (groups mutations into one named
+  undo step via `getUndoManager()`), and a synchronous `rewrite_writer_selection(doc,
+  client, instruction)` that rewrites the selection or generates at the caret when
+  nothing is selected.
+- [tests/test_writer_actions.py](../tests/test_writer_actions.py) — offline unit tests
+  for `writer_actions` (no UNO, no network, no key required).
+- [tests/integration/test_writer_uno.py](../tests/integration/test_writer_uno.py) — a
+  LIVE integration test driving a real headless LibreOffice Writer: reads the
+  selection, replaces it, verifies a `\n` in the replacement becomes a real paragraph
+  break, and exercises caret-detection + insert-at-caret when nothing is selected.
+- Verified: the full offline suite is now **42 tests, all passing** on LibreOffice's
+  bundled Python 3.10.17. The Writer UNO integration test **passed against real
+  LibreOffice 25.2.3.2** (selection read/replace, multi-paragraph insert, and
+  caret-insert all confirmed end to end); the Calc integration test was re-run
+  alongside it and still passes (no regression).
+- [scripts/run_integration.ps1](../scripts/run_integration.ps1) hardened: it now
+  pre-kills any stale test instance (matched by a unique profile marker, so it never
+  touches a normal LibreOffice window), uses a 150s cold-start budget, and tears down
+  reliably.
+
+### Fixed
+
+- **UNO text-cursor collapse bug in multi-paragraph inserts.** After
+  `XText.insertString`/`insertControlCharacter`, the text cursor still *spans* the
+  just-inserted text rather than collapsing to its end. Left unhandled, a multi-line
+  insert came out reversed/garbled (observed: inserting `"Line one\nLine two"`
+  produced paragraphs `['', 'Line twoLine one']`). Fixed in `uno_bridge._insert_multiline`
+  by calling `cursor.collapseToEnd()` after every insert. This was only caught by the
+  real-LibreOffice integration test — see the "Gotchas" section in
+  [DEVELOPMENT.md](DEVELOPMENT.md).
+
 - **Phase 2: Calc rewrite-selection (transform logic + UNO bridge).**
   [src/calc_actions.py](../src/calc_actions.py) — pure, UNO-free, network-free transform
   logic: `build_system_prompt`/`build_user_prompt`, a tolerant `parse_grid(text, nrows, ncols)`

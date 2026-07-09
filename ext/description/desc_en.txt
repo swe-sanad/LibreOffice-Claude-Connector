@@ -1,0 +1,9 @@
+Claude Connector brings Anthropic's Claude AI into LibreOffice Calc and Writer.
+
+Select cells in Calc or text in Writer, choose "Claude > Transform Selection with
+Claude", type an instruction, and Claude rewrites the selection in place. In Writer
+with no selection, it generates text at the cursor instead.
+
+The connector talks to the Anthropic Messages API directly using only Python's
+standard library (no extra packages to install). Your API key is stored encrypted
+per-user (Windows DPAPI) and is never written to any config file. Licensed MPL-2.0.

@@ -29,18 +29,21 @@ Adjust the path if LibreOffice is installed elsewhere. You can confirm the versi
 ## Running the unit tests
 
 [tests/test_claude_client.py](../tests/test_claude_client.py) (14 tests, mocking
-`urllib`) and [tests/test_calc_actions.py](../tests/test_calc_actions.py) (17 tests,
+`urllib`), [tests/test_calc_actions.py](../tests/test_calc_actions.py) (17 tests,
 covering prompt building, `parse_grid`'s tolerance for fences/prose, dimension-mismatch
-errors, and `coerce_out_cell`) are both fully offline — no API key, no network access,
-and no running LibreOffice required. Run them with the bundled interpreter:
+errors, and `coerce_out_cell`), and [tests/test_writer_actions.py](../tests/test_writer_actions.py)
+(covering `clean_output`'s fence-stripping/quote-preservation, `default_max_tokens`
+bounds, and `rewrite_text`/`generate_text` orchestration) are all fully offline — no API
+key, no network access, and no running LibreOffice required. Run them with the bundled
+interpreter:
 
 ```powershell
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-All **31** currently pass on the bundled Python 3.10.17. (This discovers only the
-top-level `tests/` directory; the UNO integration test under `tests/integration/` is
-run separately below, since it requires a live LibreOffice instance.)
+All **42** currently pass on the bundled Python 3.10.17. (This discovers only the
+top-level `tests/` directory; the UNO integration tests under `tests/integration/` are
+run separately below, since they require a live LibreOffice instance.)
 
 ## Running the Calc UNO integration test
 
@@ -63,6 +66,19 @@ Run with no `-Test` argument, it defaults to `tests/integration/test_calc_uno.py
 `-LOProgram` if LibreOffice is installed somewhere other than
 `C:\Program Files\LibreOffice\program`, and `-Port` if 2002 is already in use.
 
+## Running the Writer UNO integration test
+
+[tests/integration/test_writer_uno.py](../tests/integration/test_writer_uno.py) drives a
+**real, running LibreOffice Writer** the same way the Calc test drives Calc: it reads
+the current selection via the view cursor, replaces it, verifies a `\n` in the
+replacement comes back as a real paragraph (not a literal `\n` in one paragraph), and
+exercises caret-detection + insert-at-caret when nothing is selected. It needs no
+`ANTHROPIC_API_KEY` for the same reason — the Claude call is stubbed.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_integration.ps1 -Test tests/integration/test_writer_uno.py
+```
+
 ## Running the live smoke test
 
 [scripts/spike_http.py](../scripts/spike_http.py) makes one real HTTPS call to
@@ -83,12 +99,37 @@ error-parsing path works before a real key is even configured.
 **Never commit an API key.** Set it as a local/user environment variable
 (`setx ANTHROPIC_API_KEY ...`), not in a file tracked by git.
 
-## Gotcha: LibreOffice caches Python modules
+## Gotchas
+
+### LibreOffice caches Python modules
 
 LibreOffice caches imported Python modules for the lifetime of its process. If you edit
 `src/claude_client.py` (or any module loaded by a macro) while LibreOffice is open,
 **restart LibreOffice** before re-running a macro — otherwise you will silently keep
 executing the old, cached version of the code.
+
+### A UNO text cursor doesn't collapse after an insert — you must do it yourself
+
+Discovered by the Writer integration test, not by any mocked/offline test: after calling
+`XText.insertString(...)` or `XText.insertControlCharacter(...)`, the cursor you passed
+in still *spans* the text you just inserted — it does not collapse to the end of the
+insertion the way you'd assume from, say, a text-editor cursor. If you then insert
+again at that same cursor without collapsing it first, the next insert lands at the
+*start* of the previous span, not after it.
+
+Concretely, inserting the two-line string `"Line one\nLine two"` paragraph-by-paragraph
+without collapsing came out as the paragraphs `['', 'Line twoLine one']` — reversed and
+concatenated — instead of `['Line one', 'Line two']`. The fix is one line,
+`cursor.collapseToEnd()`, called after every single insert (see
+`uno_bridge._insert_multiline`).
+
+**The broader lesson:** this class of bug is invisible to mocked/offline unit tests,
+because a mock UNO object doesn't reproduce the real cursor-spanning behavior — the
+test would pass against a fake and fail silently in the real application. Any code path
+that mutates a UNO document (inserts, cursor moves, multi-step edits) needs at least one
+test that exercises it against a **real, running LibreOffice** — which is exactly what
+`scripts/run_integration.ps1` + `tests/integration/*.py` are for. Don't trust offline
+green checkmarks alone for UNO document-edit logic.
 
 ## APSO
 

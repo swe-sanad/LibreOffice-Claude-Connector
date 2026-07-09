@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<manifest:manifest xmlns:manifest="http://openoffice.org/2001/manifest">
+  <!-- The single registered Python UNO component (the ProtocolHandler). -->
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.uno-component;type=Python"
+      manifest:full-path="connector.py"/>
+  <!-- Menu + toolbar contributions. -->
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.configuration-data"
+      manifest:full-path="Addons.xcu"/>
+  <!-- Maps our command-URL protocol to the component above. -->
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.configuration-data"
+      manifest:full-path="ProtocolHandler.xcu"/>
+</manifest:manifest>

@@ -1,7 +1,7 @@
 # Architecture
 
 This document describes the technical design of the connector as it stands after
-**Phase 2**. For the underlying research this design is based on (LibreOffice's UNO
+**Phase 3**. For the underlying research this design is based on (LibreOffice's UNO
 API, the bundled-Python environment, the Claude Messages API, and prior-art review),
 see [RESEARCH.md](RESEARCH.md). For the phase-by-phase roadmap, see
 [BUILD-PLAN.md](BUILD-PLAN.md).
@@ -18,16 +18,16 @@ LibreOffice (Calc / Writer)
 Extension UI layer        — menu/toolbar/shortcut → ProtocolHandler → XDispatch (Phase 4)
         │
         ▼
-UNO I/O layer             — src/uno_bridge.py (THIS PHASE, Calc only; Writer lands in Phase 3)
+UNO I/O layer             — src/uno_bridge.py (Calc + Writer sections)
         │
         ▼
-Pure action logic         — src/calc_actions.py (THIS PHASE)
+Pure action logic         — src/calc_actions.py (Phase 2) / src/writer_actions.py (Phase 3)
         │
         ▼
 Pure Claude client        — src/claude_client.py (Phase 1)
 ```
 
-**The bottom three layers exist today; only the extension UI layer (Phase 4) remains.**
+**The bottom three layers exist today for both Calc and Writer; only the extension UI layer (Phase 4) remains.**
 [src/claude_client.py](../src/claude_client.py) is deliberately pure: it takes a
 prompt/messages in, performs one blocking HTTPS call, and returns a typed result — it
 has no knowledge of UNO, threads, or documents. This keeps it independently testable
@@ -86,6 +86,59 @@ or a `SheetCellRanges` (multiple disjoint ranges, e.g. a ctrl-click selection).
 - Anything else selected (a shape, a chart, ...) → `None`, and the caller
   (`transform_selection`) raises a `RuntimeError` asking the user to select cells first.
 
+## Writer rewrite-selection / generate-at-caret (Phase 3)
+
+Phase 3 mirrors the Calc split for Writer, with the same hard boundary between pure
+logic and UNO glue:
+
+- **[src/writer_actions.py](../src/writer_actions.py) — pure, UNO-free, network-free.**
+  Writer output is plain text (not a grid), so this is simpler than the Calc side: build
+  a prompt, send, clean the reply. `clean_output` unwraps a whole-output markdown code
+  fence but deliberately does **not** strip surrounding quotes or inline backticks — a
+  legitimately quoted rewrite would otherwise be damaged. `default_max_tokens(text)`
+  scales the output budget to the input length, bounded to `[512, 8192]`, so a short
+  rewrite doesn't reserve 8192 tokens and a long one isn't cut off at a fixed 1024.
+- **[src/uno_bridge.py](../src/uno_bridge.py) (Writer section)** — imports `uno` and is
+  the only code that touches the view cursor / `XText`. It calls into `writer_actions`
+  for the pure prompt/clean logic but never the reverse.
+
+### Rewrite vs. generate
+
+`rewrite_writer_selection(doc, client, instruction)` inspects the current view cursor
+via `get_writer_selection(doc)`, which reads `isCollapsed()` — the reliable signal for
+"nothing is selected, just a caret position":
+
+- **Has a selection** (`isCollapsed() == False`) → `writer_actions.rewrite_text` sends
+  the selected text + instruction to Claude, and `replace_writer_selection` overwrites
+  the selection with the cleaned reply.
+- **No selection** (caret only) → `writer_actions.generate_text` sends just the
+  instruction, and `insert_writer_at_caret` inserts the cleaned reply at the caret
+  without touching surrounding text.
+
+Both paths are synchronous end to end (read → call Claude → write), same as
+`transform_selection` in Calc; the worker-thread split described below still lands in
+Phase 4.
+
+### Multi-paragraph handling
+
+Claude's replies are plain text with `\n` separating what should become separate
+paragraphs, but UNO documents don't understand `\n` — a paragraph break is a distinct
+`PARAGRAPH_BREAK` control character. `uno_bridge._insert_multiline(xtext, xrange, text,
+absorb)` splits the reply on `\n` and inserts the first line via `xtext.insertString`
+(`absorb=True` replaces the range's content for a rewrite, `absorb=False` inserts at a
+caret without replacing), then for every remaining line, inserts a real
+`insertControlCharacter(..., PARAGRAPH_BREAK, ...)` followed by `insertString`. Mutations
+are grouped into one named undo step by `_with_undo` (via `doc.getUndoManager()`), so a
+multi-paragraph rewrite or insert undoes in a single Ctrl+Z.
+
+**Cursor-collapse gotcha:** after each `insertString`/`insertControlCharacter` call, the
+cursor still *spans* the just-inserted text rather than collapsing to its end. Without
+an explicit `cursor.collapseToEnd()` after every insert, each subsequent insert lands at
+the *start* of the previous span and the paragraphs come out reversed/garbled. This is
+handled in `_insert_multiline` but was only caught by the real-LibreOffice integration
+test — see [DEVELOPMENT.md](DEVELOPMENT.md#gotchas) for the full story on why this class
+of bug is invisible to mocked/offline tests.
+
 ## Integration testing approach
 
 Because `uno_bridge.py` imports `uno`, it cannot be unit-tested with a mocked/faked UNO
@@ -100,6 +153,12 @@ terminates that instance — leaving the developer's own open LibreOffice, if an
 untouched. The Calc integration test uses a deterministic stub transform (uppercase
 text, `+1` to numbers) in place of a real Claude call, so it needs no
 `ANTHROPIC_API_KEY` and exercises only the UNO read/selection-normalize/write path.
+[tests/integration/test_writer_uno.py](../tests/integration/test_writer_uno.py) does the
+same for Writer: it drives selection read/replace, confirms a `\n` in the replacement
+becomes a real paragraph break, and exercises caret-detection + insert-at-caret. The
+runner script now pre-kills any stale test instance (matched by a unique profile
+marker, so a normal LibreOffice window is never touched) and uses a 150s cold-start
+budget.
 
 ## The Claude client (`src/claude_client.py`)
 

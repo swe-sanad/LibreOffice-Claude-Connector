@@ -22,8 +22,11 @@ from typing import Any, List, Optional, Sequence, Tuple
 import uno  # provided by LibreOffice's runtime
 from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
 
-import calc_actions
-import writer_actions
+try:
+    from . import calc_actions, writer_actions   # packaged in the .oxt (claudeconn package)
+except ImportError:                               # flat layout (tests / dev)
+    import calc_actions
+    import writer_actions
 
 Grid = List[List[Any]]
 

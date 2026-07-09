@@ -1,0 +1,10 @@
+# Normalize line endings for a clean cross-platform public repo.
+* text=auto eol=lf
+
+# Windows-native scripts keep CRLF.
+*.ps1 text eol=crlf
+
+# Binary assets — never touch.
+*.png binary
+*.oxt binary
+*.zip binary

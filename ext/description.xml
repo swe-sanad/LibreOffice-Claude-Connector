@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<description xmlns="http://openoffice.org/extensions/description/2006"
+             xmlns:d="http://openoffice.org/extensions/description/2006"
+             xmlns:xlink="http://www.w3.org/1999/xlink">
+
+  <identifier value="com.swepioneers.libreoffice-claude-connector"/>
+  <version value="0.1.0"/>
+
+  <dependencies>
+    <!-- OOo API 4.1 == LibreOffice 4.1+. We actually target 24.8+ at runtime. -->
+    <OpenOffice.org-minimal-version value="4.1"
+        d:name="LibreOffice 4.1 (OOo API 4.1)"/>
+  </dependencies>
+
+  <display-name>
+    <name lang="en-US">Claude Connector for LibreOffice</name>
+  </display-name>
+
+  <extension-description>
+    <src xlink:href="description/desc_en.txt" lang="en-US"/>
+  </extension-description>
+
+  <icon>
+    <default xlink:href="icons/icon.png"/>
+  </icon>
+
+  <publisher>
+    <name xlink:href="https://github.com/SWE-Pioneers/LibreOffice-Claude-Connector"
+          lang="en-US">SWE-Pioneers</name>
+  </publisher>
+
+</description>
