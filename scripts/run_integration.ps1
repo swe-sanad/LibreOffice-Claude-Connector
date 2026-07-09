@@ -2,8 +2,8 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #
-# Launch an ISOLATED headless LibreOffice (its own user profile, so it does not
-# disturb any LibreOffice you have open), run a UNO integration test against it,
+# Launch an ISOLATED headless LibreOffice (its own user profile, so it never
+# disturbs any LibreOffice you have open), run a UNO integration test against it,
 # then shut that instance down. Exits with the test's exit code.
 #
 #   powershell -ExecutionPolicy Bypass -File scripts/run_integration.ps1
@@ -23,21 +23,23 @@ foreach ($p in @($soffice, $py)) {
     if (-not (Test-Path $p)) { Write-Host "FAIL: not found: $p"; exit 4 }
 }
 
-# Fresh, isolated profile so we never collide with the user's running office.
-$profileDir = Join-Path $env:TEMP "lo_uno_it_profile"
-if (Test-Path $profileDir) { Remove-Item -Recurse -Force $profileDir -ErrorAction SilentlyContinue }
-New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
-$profileUrl = "file:///" + ($profileDir -replace '\\', '/')
+# A marker unique to OUR test instances. Killing by this marker can NEVER touch
+# a normal LibreOffice (which runs with the default user profile).
+$ProfileName = "lo_uno_it_profile"
+$profileDir  = Join-Path $env:TEMP $ProfileName
+$profileUrl  = "file:///" + ($profileDir -replace '\\', '/')
 
-$accept  = "socket,host=localhost,port=$Port;urp;"
-$soArgs  = @("--headless", "--norestore", "--nologo", "--nofirststartwizard",
-             "--nodefault", "--accept=$accept", "-env:UserInstallation=$profileUrl")
-
-Write-Host "Launching isolated LibreOffice on UNO port $Port ..."
-$proc = Start-Process -FilePath $soffice -ArgumentList $soArgs -PassThru
+function Kill-TestOffice {
+    param([string]$Marker)
+    Get-CimInstance Win32_Process -Filter "name='soffice.bin' or name='soffice.exe'" |
+        Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Marker*" } |
+        ForEach-Object {
+            try { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } catch {}
+        }
+}
 
 function Stop-Office {
-    param([int]$Port, [string]$Py, $Proc)
+    param([int]$Port, [string]$Py, [string]$Marker)
     $term = @"
 import uno
 lc = uno.getComponentContext()
@@ -49,14 +51,26 @@ except Exception:
     pass
 "@
     $term | & $Py - 2>$null
-    if ($Proc -and -not $Proc.HasExited) {
-        try { $Proc.Kill() } catch {}
-    }
+    Start-Sleep -Milliseconds 600
+    Kill-TestOffice -Marker $Marker   # hard-stop anything still alive
 }
 
+# --- Clean slate: kill any leftover test instance, then reset the profile ---
+Kill-TestOffice -Marker $ProfileName
+Start-Sleep -Milliseconds 300
+if (Test-Path $profileDir) { Remove-Item -Recurse -Force $profileDir -ErrorAction SilentlyContinue }
+New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
+
+$accept = "socket,host=localhost,port=$Port;urp;"
+$soArgs = @("--headless", "--norestore", "--nologo", "--nofirststartwizard",
+            "--nodefault", "--accept=$accept", "-env:UserInstallation=$profileUrl")
+
+Write-Host "Launching isolated LibreOffice on UNO port $Port ..."
+Start-Process -FilePath $soffice -ArgumentList $soArgs | Out-Null
+
 try {
-    # Wait (check-first) for the UNO socket to open.
-    $deadline = (Get-Date).AddSeconds(90)
+    # Wait (check-first) for the UNO socket. A first-run cold profile can be slow.
+    $deadline = (Get-Date).AddSeconds(150)
     $ready = $false
     while ((Get-Date) -lt $deadline) {
         try {
@@ -72,7 +86,7 @@ try {
     $code = $LASTEXITCODE
 }
 finally {
-    Stop-Office -Port $Port -Py $py -Proc $proc
+    Stop-Office -Port $Port -Py $py -Marker $ProfileName
 }
 
 exit $code

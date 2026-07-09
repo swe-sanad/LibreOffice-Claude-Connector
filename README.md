@@ -8,17 +8,20 @@ back into your document.
 
 ## Status
 
-**Phase 1 complete: the core Claude API client.** Calc integration (select a range,
-send it to Claude, write the result back with `setDataArray`) is next. See
-[docs/BUILD-PLAN.md](docs/BUILD-PLAN.md) for the full 7-phase plan and
-[docs/RESEARCH.md](docs/RESEARCH.md) for the underlying research (UNO API, LibreOffice's
-bundled Python, the Claude Messages API, and prior-art review).
+**Phase 2 complete: Calc read → transform → write, verified against real LibreOffice.**
+Selecting a range in Calc, sending it to Claude, and writing the transformed result back
+with `setDataArray` now works end to end (the Claude call itself is currently wired
+through a deterministic stub in the integration test; a real API key just needs to be
+set for it to call Claude for real). Writer integration and the packaged `.oxt`
+extension UI are next. See [docs/BUILD-PLAN.md](docs/BUILD-PLAN.md) for the full
+7-phase plan and [docs/RESEARCH.md](docs/RESEARCH.md) for the underlying research (UNO
+API, LibreOffice's bundled Python, the Claude Messages API, and prior-art review).
 
 ## Features
 
 - [x] Zero-dependency Claude Messages API client (stdlib `urllib` + `json` + `ssl` only)
 - [x] Typed error handling, retries with backoff, `retry-after` support
-- [ ] Calc: select a range, transform it with Claude, write results back
+- [x] Calc: select a range, transform it with Claude, write results back
 - [ ] Writer: select text, rewrite it with Claude, replace in place
 - [ ] Packaged `.oxt` extension with menu/toolbar/shortcut
 - [ ] In-app settings (model picker, API key via Windows DPAPI)
@@ -42,7 +45,16 @@ LibreOffice install):
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-These 14 tests mock `urllib` entirely — no API key or network access needed.
+These **31** tests (14 for the Claude client, 17 for the Calc transform logic) mock
+`urllib`/use fake clients entirely — no API key, no network access, and no running
+LibreOffice needed.
+
+To exercise the Calc UNO read/write path against a real, isolated headless LibreOffice
+(no API key needed — the Claude call is a deterministic stub):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_integration.ps1 -Test tests/integration/test_calc_uno.py
+```
 
 To prove live connectivity (TLS, headers, error parsing) from the bundled interpreter,
 set `ANTHROPIC_API_KEY` and run the smoke-test spike:
@@ -60,10 +72,14 @@ including the "LibreOffice caches Python modules" gotcha.
 ```
 LibreOffice-Claude-Connector/
 ├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md
-├── src/             claude_client.py (zero-dependency Claude Messages API client)
+├── src/             claude_client.py (Claude Messages API client)
+│                    calc_actions.py (pure Calc transform/prompt/parse logic)
+│                    uno_bridge.py (UNO glue: selection read/write for Calc)
 ├── ext/             extension scaffold (description.xml, META-INF/, icons/, pythonpath/, registry/)
-├── scripts/         spike_http.py (live smoke test)
-└── tests/           test_claude_client.py (offline unit tests)
+├── scripts/         spike_http.py (live Claude smoke test)
+│                    run_integration.ps1 (launches isolated headless LO, runs a UNO integration test)
+└── tests/           test_claude_client.py, test_calc_actions.py (offline unit tests)
+                     integration/test_calc_uno.py (live UNO integration test)
 ```
 
 ## Documentation

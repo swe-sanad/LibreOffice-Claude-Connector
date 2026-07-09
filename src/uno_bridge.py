@@ -20,8 +20,10 @@ import time
 from typing import Any, List, Optional, Sequence, Tuple
 
 import uno  # provided by LibreOffice's runtime
+from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
 
 import calc_actions
+import writer_actions
 
 Grid = List[List[Any]]
 
@@ -146,3 +148,95 @@ def transform_selection(doc: Any, client: Any, instruction: str, **kwargs: Any) 
     new_grid = calc_actions.transform_range(client, grid, instruction, **kwargs)
     write_range_grid(cell_range, new_grid)
     return cell_range
+
+
+# --------------------------------------------------------------------------- #
+# Writer (text document) helpers
+# --------------------------------------------------------------------------- #
+
+WRITER_DOC_SERVICE = "com.sun.star.text.TextDocument"
+
+
+def is_writer(doc: Any) -> bool:
+    return bool(doc) and doc.supportsService(WRITER_DOC_SERVICE)
+
+
+def get_writer_selection(doc: Any) -> Tuple[str, bool]:
+    """Return ``(selected_text, has_selection)`` from the on-screen view cursor.
+
+    The view cursor's string IS the current selection; ``isCollapsed()`` is the
+    reliable "there is no selection, just a caret" signal.
+    """
+    view_cursor = doc.getCurrentController().getViewCursor()
+    return view_cursor.getString(), (not view_cursor.isCollapsed())
+
+
+def _insert_multiline(xtext: Any, xrange: Any, text: str, absorb: bool) -> None:
+    """Insert ``text`` at/over ``xrange``, turning ``\\n`` into paragraph breaks.
+
+    ``absorb=True`` replaces the range's content with the first line, then adds
+    the remaining lines as new paragraphs. ``absorb=False`` inserts at the range.
+    """
+    parts = text.split("\n")
+    cursor = xtext.createTextCursorByRange(xrange)
+    # After each insert the cursor still SPANS the inserted text, so we must
+    # collapse it to the end before the next insert — otherwise every following
+    # insert lands at the start of the span and the text comes out reversed.
+    xtext.insertString(cursor, parts[0], absorb)
+    cursor.collapseToEnd()
+    for part in parts[1:]:
+        xtext.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+        cursor.collapseToEnd()
+        xtext.insertString(cursor, part, False)
+        cursor.collapseToEnd()
+
+
+def _with_undo(doc: Any, title: str, func: Any) -> None:
+    """Group document mutations into a single named undo step, if supported."""
+    manager = None
+    try:
+        manager = doc.getUndoManager()
+    except Exception:
+        manager = None
+    if manager is not None:
+        manager.enterUndoContext(title)
+    try:
+        func()
+    finally:
+        if manager is not None:
+            manager.leaveUndoContext()
+
+
+def replace_writer_selection(doc: Any, new_text: str,
+                             undo_title: str = "Claude: Rewrite selection") -> None:
+    """Replace the current selection with ``new_text`` (multi-paragraph aware)."""
+    view_cursor = doc.getCurrentController().getViewCursor()
+    xtext = view_cursor.getText()
+    _with_undo(doc, undo_title,
+               lambda: _insert_multiline(xtext, view_cursor, new_text, True))
+
+
+def insert_writer_at_caret(doc: Any, text: str,
+                           undo_title: str = "Claude: Insert") -> None:
+    """Insert ``text`` at the caret without replacing (multi-paragraph aware)."""
+    view_cursor = doc.getCurrentController().getViewCursor()
+    xtext = view_cursor.getText()
+    _with_undo(doc, undo_title,
+               lambda: _insert_multiline(xtext, view_cursor.getStart(), text, False))
+
+
+def rewrite_writer_selection(doc: Any, client: Any, instruction: str,
+                             **kwargs: Any) -> str:
+    """Synchronous: rewrite the selection, or generate at the caret if none.
+
+    Returns the text that was written. The packaged extension splits this so the
+    network call runs off the UI thread.
+    """
+    text, has_selection = get_writer_selection(doc)
+    if has_selection:
+        new_text = writer_actions.rewrite_text(client, text, instruction, **kwargs)
+        replace_writer_selection(doc, new_text)
+    else:
+        new_text = writer_actions.generate_text(client, instruction, **kwargs)
+        insert_writer_at_caret(doc, new_text)
+    return new_text
