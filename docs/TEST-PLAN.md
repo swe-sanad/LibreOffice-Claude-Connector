@@ -48,7 +48,7 @@ config, and the DPAPI keystore (real encrypt/decrypt round-trip on Windows).
 ```powershell
 & "C:\Program Files\LibreOffice\program\python.exe" mcp\test_mcp_protocol.py
 ```
-PASS = `MCP handshake ok; tools/list has 7 tools (...); ping ok.`
+PASS = `MCP handshake ok; tools/list has 37 tools (...); ping ok.`
 
 ### 1c. Real-LibreOffice integration tests (headless, isolated profile)
 Each spins up its own throwaway headless LibreOffice, runs, and tears down. Run
@@ -58,11 +58,17 @@ slow). Expect `EXIT: 0` and `... CHECKS PASSED` for each.
 powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests\integration\test_calc_uno.py
 powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests\integration\test_writer_uno.py
 powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests\integration\test_mcp_tools.py
+powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests\integration\test_mcp_tools_extended.py
 powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests\integration\demo_mcp_client.py
 ```
 - `test_calc_uno` — read/select/write a range; None→"" coercion.
 - `test_writer_uno` — read selection, replace, multi-paragraph, insert-at-caret.
-- `test_mcp_tools` — the MCP tool functions drive Calc (read/write/status).
+- `test_mcp_tools` — the core MCP tool functions drive Calc (read/write/status).
+- `test_mcp_tools_extended` — the full 37-tool set: document lifecycle
+  (create/open/save-as xlsx+docx/PDF export/close), Calc formulas, structure
+  (insert/delete rows+columns, copy, clear, find&replace, used range), sheets,
+  formatting, merge, charts, selection; Writer headings/outline, append,
+  find&replace, format-matches, tables, images, page breaks.
 - `demo_mcp_client` — acts as an MCP client and drives LibreOffice via `tools/call`
   (reads A1:A3, writes B1:B3). Prints the JSON-RPC round-trip.
 
@@ -176,6 +182,10 @@ A1:C10 of the open sheet"*, *"write a summary into E1"*. Tools available:
   Do this between integration runs if one hangs; accumulated headless zombies cause
   flaky "port never opened" first-boots.
 - **Never force-kill a GUI LibreOffice** (`MainWindowHandle -ne 0`) — unsaved work.
+- **Don't run the harness while a GUI office holds its port.** If LibreOffice was
+  started with `start_office_socket.ps1` (port 2002), the integration harness's
+  port is taken; both harness scripts now FAIL fast in that case ("port … already
+  in use"). Close the GUI office or pass `-Port <free port>` to the harness.
 - **Extensions activate on the NEXT boot**, not the one during which they were
   installed. The isolated harness does a warm-up boot for this reason.
 - **First boot of a fresh profile can take tens of seconds to a couple minutes.**
