@@ -63,8 +63,21 @@ def _desktop():
 
 
 def _current_doc():
-    doc = _desktop().getCurrentComponent()
+    desktop = _desktop()
+    doc = desktop.getCurrentComponent()
     if doc is None:
+        # Headless / unfocused sessions have no "current" component even when
+        # documents are open; fall back to the open-components list.
+        docs = []
+        enum = desktop.getComponents().createEnumeration()
+        while enum.hasMoreElements():
+            docs.append(enum.nextElement())
+        if len(docs) == 1:
+            return docs[0]
+        if len(docs) > 1:
+            raise RuntimeError(
+                "%d documents are open but none is focused; focus the one to "
+                "act on (or close the others)." % len(docs))
         raise RuntimeError("No document is currently open/active in LibreOffice.")
     return doc
 
