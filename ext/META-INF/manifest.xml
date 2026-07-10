@@ -1,9 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <manifest:manifest xmlns:manifest="http://openoffice.org/2001/manifest">
-  <!-- The single registered Python UNO component (the ProtocolHandler). -->
+  <!-- The ProtocolHandler component (menu/toolbar dispatch). -->
   <manifest:file-entry
       manifest:media-type="application/vnd.sun.star.uno-component;type=Python"
       manifest:full-path="connector.py"/>
+  <!-- The sidebar panel factory component. -->
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.uno-component;type=Python"
+      manifest:full-path="sidebar_panel.py"/>
+  <!-- Sidebar deck/panel + the factory registration that maps its URL. -->
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.configuration-data"
+      manifest:full-path="registry/org/openoffice/Office/UI/Sidebar.xcu"/>
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.configuration-data"
+      manifest:full-path="registry/org/openoffice/Office/UI/Factories.xcu"/>
   <!-- Menu + toolbar contributions. -->
   <manifest:file-entry
       manifest:media-type="application/vnd.sun.star.configuration-data"

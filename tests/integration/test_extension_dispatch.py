@@ -74,6 +74,17 @@ def main():
                 "failed. Check connector.py imports and ProtocolHandler.xcu.")
         print("\nPASS: extension installed, connector.py imported its "
               "'claudeconn' package, and the ProtocolHandler is registered.")
+
+        # The sidebar panel factory component must also load + register (proves
+        # sidebar_panel.py imports cleanly and is registered under IMPL_NAME).
+        factory = smgr.createInstanceWithContext(
+            "com.swepioneers.claudeconnector.SidebarFactory", ctx)
+        print("sidebar factory   ->", "INSTANTIATED" if factory else "NULL")
+        if factory is None:
+            raise AssertionError(
+                "sidebar_panel.py factory did not register — check its imports "
+                "and Factories.xcu FactoryImplementation.")
+        print("PASS: sidebar panel factory component registered.")
         return 0
     finally:
         try:

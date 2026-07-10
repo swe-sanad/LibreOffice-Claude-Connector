@@ -25,7 +25,10 @@ SRC = os.path.join(ROOT, "src")
 EXT = os.path.join(ROOT, "ext")
 DIST = os.path.join(ROOT, "dist")
 
-# Helper modules bundled as the `claudeconn` package (connector.py is separate).
+# Registered UNO components — live at the .oxt root, listed in the manifest.
+ROOT_COMPONENTS = ["connector", "sidebar_panel"]
+
+# Helper modules bundled as the `claudeconn` package (imported by connector.py).
 PACKAGE_MODULES = [
     "claude_client", "calc_actions", "writer_actions",
     "uno_bridge", "config", "keystore", "uno_ui",
@@ -59,7 +62,8 @@ def build():
             full = os.path.join(base, name)
             arc = os.path.relpath(full, EXT).replace(os.sep, "/")
             files[arc] = full
-    files["connector.py"] = os.path.join(SRC, "connector.py")
+    for component in ROOT_COMPONENTS:
+        files["%s.py" % component] = os.path.join(SRC, component + ".py")
     for module in PACKAGE_MODULES:
         files["pythonpath/claudeconn/%s.py" % module] = os.path.join(SRC, module + ".py")
     license_path = os.path.join(ROOT, "LICENSE")

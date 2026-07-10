@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<oor:component-data oor:name="Sidebar" oor:package="org.openoffice.Office.UI"
+    xmlns:oor="http://openoffice.org/2001/registry"
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <node oor:name="Content">
+
+    <node oor:name="DeckList">
+      <node oor:name="ClaudeDeck" oor:op="replace">
+        <prop oor:name="Title" oor:type="xs:string">
+          <value xml:lang="en-US">Claude</value>
+        </prop>
+        <prop oor:name="Id" oor:type="xs:string"><value>ClaudeDeck</value></prop>
+        <prop oor:name="IconURL" oor:type="xs:string">
+          <value>vnd.sun.star.extension://com.swepioneers.libreoffice-claude-connector/icons/cmd26.png</value>
+        </prop>
+        <!-- Show in BOTH Calc and Writer. Tokens verified against LO core:
+             'Calc' and 'WriterVariants' (NOT 'Writer'/'WriterDocument'). -->
+        <prop oor:name="ContextList">
+          <value oor:separator=";">Calc, any, visible ; WriterVariants, any, visible ;</value>
+        </prop>
+        <prop oor:name="OrderIndex" oor:type="xs:int"><value>100</value></prop>
+      </node>
+    </node>
+
+    <node oor:name="PanelList">
+      <node oor:name="ClaudePanel" oor:op="replace">
+        <prop oor:name="Title" oor:type="xs:string">
+          <value xml:lang="en-US">Claude</value>
+        </prop>
+        <prop oor:name="Id" oor:type="xs:string"><value>ClaudePanel</value></prop>
+        <prop oor:name="DeckId" oor:type="xs:string"><value>ClaudeDeck</value></prop>
+        <prop oor:name="ContextList">
+          <value oor:separator=";">Calc, any, visible ; WriterVariants, any, visible ;</value>
+        </prop>
+        <!-- middle segment 'ClaudeSidebar' MUST equal Factories.xcu <Name> -->
+        <prop oor:name="ImplementationURL" oor:type="xs:string">
+          <value>private:resource/toolpanel/ClaudeSidebar/ClaudePanel</value>
+        </prop>
+        <prop oor:name="OrderIndex" oor:type="xs:int"><value>100</value></prop>
+      </node>
+    </node>
+
+  </node>
+</oor:component-data>
