@@ -15,14 +15,23 @@ Wiring (all four pieces must agree, or the deck silently never appears):
   * this component   — a ``XUIElementFactory`` whose ``createUIElement`` returns
     an ``XUIElement`` → ``XToolPanel`` owning an AWT window.
   * ``manifest.xml`` — registers this file + both .xcu files.
+
+Layout gotchas (the "blank panel" bugs):
+  * The sidebar creates the panel while its parent window is still 0×0, so a
+    one-shot layout at build time produces invisible (negative-width) controls.
+    Controls are therefore (re)laid out from a window-resize listener.
+  * The sidebar decides the panel's height by querying XSidebarPanel
+    ``getHeightForWidth``; a panel that doesn't implement it gets zero height.
 """
 
 import traceback
 
+import uno
 import unohelper
-from com.sun.star.ui import XUIElementFactory, XUIElement, XToolPanel
+from com.sun.star.ui import (XUIElementFactory, XUIElement, XToolPanel,
+                             XSidebarPanel)
 from com.sun.star.ui.UIElementType import TOOLPANEL
-from com.sun.star.awt import XActionListener
+from com.sun.star.awt import XActionListener, XWindowListener
 from com.sun.star.awt.PosSize import POSSIZE
 
 # MUST equal FactoryImplementation in Factories.xcu.
@@ -30,6 +39,11 @@ IMPL_NAME = "com.swepioneers.claudeconnector.SidebarFactory"
 
 _TRANSFORM = "com.swepioneers.claudeconnector:Transform"
 _SETTINGS = "com.swepioneers.claudeconnector:Settings"
+
+_MARGIN = 6
+_PANEL_HEIGHT = 110        # label (6..34) + transform (40..70) + settings (76..100)
+_MIN_INNER_WIDTH = 60
+_FALLBACK_WIDTH = 180      # if neither container nor parent has a size yet
 
 
 class _DispatchButton(unohelper.Base, XActionListener):
@@ -52,7 +66,31 @@ class _DispatchButton(unohelper.Base, XActionListener):
         pass
 
 
-class ClaudeToolPanel(unohelper.Base, XToolPanel):
+class _RelayoutListener(unohelper.Base, XWindowListener):
+    """Re-lays-out the panel whenever the sidebar resizes/shows it."""
+
+    def __init__(self, element):
+        self.element = element
+
+    def windowResized(self, _event):
+        if self.element is not None:
+            self.element.layout()
+
+    def windowShown(self, _event):
+        if self.element is not None:
+            self.element.layout()
+
+    def windowMoved(self, _event):
+        pass
+
+    def windowHidden(self, _event):
+        pass
+
+    def disposing(self, _event):
+        self.element = None
+
+
+class ClaudeToolPanel(unohelper.Base, XToolPanel, XSidebarPanel):
     def __init__(self, window):
         self.Window = window        # the XWindow the sidebar displays
 
@@ -61,6 +99,17 @@ class ClaudeToolPanel(unohelper.Base, XToolPanel):
 
     def getAccessibleContext(self):
         return None
+
+    # XSidebarPanel — the sidebar sizes the panel from this answer.
+    def getHeightForWidth(self, _width):
+        size = uno.createUnoStruct("com.sun.star.ui.LayoutSize")
+        size.Minimum = _PANEL_HEIGHT
+        size.Preferred = _PANEL_HEIGHT
+        size.Maximum = _PANEL_HEIGHT
+        return size
+
+    def getMinimalWidth(self):
+        return _MIN_INNER_WIDTH + 2 * _MARGIN
 
 
 class ClaudeUIElement(unohelper.Base, XUIElement):
@@ -73,6 +122,7 @@ class ClaudeUIElement(unohelper.Base, XUIElement):
         self.Frame = frame
         self._panel = None
         self._root = None
+        self._resize_listener = None
         self._listeners = []        # keep refs so they aren't GC'd
 
     def getRealInterface(self):
@@ -90,9 +140,7 @@ class ClaudeUIElement(unohelper.Base, XUIElement):
         container = self._new("UnoControlContainer")
         container.setModel(self._new("UnoControlContainerModel"))
         container.createPeer(toolkit, self.parent_window)
-        size = self.parent_window.getPosSize()
-        container.setPosSize(0, 0, size.Width, size.Height, POSSIZE)
-        width = size.Width
+        self._root = container
 
         label = self._new("UnoControlFixedText")
         label_model = self._new("UnoControlFixedTextModel")
@@ -100,29 +148,69 @@ class ClaudeUIElement(unohelper.Base, XUIElement):
         label_model.MultiLine = True
         label.setModel(label_model)
         container.addControl("lbl", label)
-        label.setPosSize(6, 6, width - 12, 28, POSSIZE)
 
         self._add_button(container, "btnTransform",
-                         "Transform Selection with Claude",
-                         6, 40, width - 12, 30, _TRANSFORM)
-        self._add_button(container, "btnSettings", "Settings…",
-                         6, 76, width - 12, 24, _SETTINGS)
+                         "Transform Selection with Claude", _TRANSFORM)
+        self._add_button(container, "btnSettings", "Settings…", _SETTINGS)
 
+        self._resize_listener = _RelayoutListener(self)
+        self.parent_window.addWindowListener(self._resize_listener)
+        container.addWindowListener(self._resize_listener)
+
+        self.layout()
         container.setVisible(True)
         return container
 
-    def _add_button(self, container, name, caption, x, y, w, h, command):
+    def layout(self):
+        """Size the container to its parent and lay out the controls.
+
+        Safe to call at any time; called again from the resize listener once
+        the sidebar gives the parent its real size.
+        """
+        container = self._root
+        if container is None:
+            return
+        try:
+            psize = self.parent_window.getPosSize()
+            csize = container.getPosSize()
+            if psize.Width > 0 and (csize.Width != psize.Width or
+                                    csize.Height != max(psize.Height,
+                                                        _PANEL_HEIGHT)):
+                container.setPosSize(0, 0, psize.Width,
+                                     max(psize.Height, _PANEL_HEIGHT), POSSIZE)
+                csize = container.getPosSize()
+
+            width = csize.Width if csize.Width > 0 else psize.Width
+            if width <= 0:
+                width = _FALLBACK_WIDTH
+            inner = max(width - 2 * _MARGIN, _MIN_INNER_WIDTH)
+
+            container.getControl("lbl").setPosSize(
+                _MARGIN, 6, inner, 28, POSSIZE)
+            container.getControl("btnTransform").setPosSize(
+                _MARGIN, 40, inner, 30, POSSIZE)
+            container.getControl("btnSettings").setPosSize(
+                _MARGIN, 76, inner, 24, POSSIZE)
+        except Exception:
+            traceback.print_exc()
+
+    def _add_button(self, container, name, caption, command):
         button = self._new("UnoControlButton")
         model = self._new("UnoControlButtonModel")
         model.Label = caption
         button.setModel(model)
         container.addControl(name, button)
-        button.setPosSize(x, y, w, h, POSSIZE)
         listener = _DispatchButton(self.ctx, self.frame, command)
         button.addActionListener(listener)
         self._listeners.append(listener)
 
     def postDisposing(self):
+        if self._resize_listener is not None:
+            try:
+                self.parent_window.removeWindowListener(self._resize_listener)
+            except Exception:
+                pass
+            self._resize_listener = None
         if self._root is not None:
             try:
                 self._root.dispose()

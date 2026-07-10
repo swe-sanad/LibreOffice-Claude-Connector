@@ -9,18 +9,86 @@ way Claude uses the Figma or Chrome MCP servers.
   JSON-RPC-over-stdio by hand), runs under LibreOffice's **bundled Python** so it
   has the `uno` module, and reuses the proven UNO helpers in `../src/uno_bridge.py`.
 - `test_mcp_protocol.py` — protocol smoke test (no LibreOffice needed).
-- Live tool test: `../tests/integration/test_mcp_tools.py`.
+- Live tool tests: `../tests/integration/test_mcp_tools.py` (core) and
+  `../tests/integration/test_mcp_tools_extended.py` (full 37-tool sweep).
 
-## Tools
+## Tools (44)
+
+**Status & selection**
 
 | Tool | What it does |
 |---|---|
-| `lo_status` / `list_documents` | Check the connection; list open documents |
+| `lo_status` / `list_documents` | Check the connection; list open documents (title, type, url) |
 | `get_current_selection` | The active selection — a Calc range (with data) or selected Writer text |
-| `calc_read_range` | Read a Calc range (`A1:C10`) as a 2-D array |
-| `calc_write_range` | Write a 2-D array into a Calc range (dimensions must match) |
-| `writer_get_text` | Full body text of the active Writer document |
-| `writer_replace_selection` | Replace the Writer selection (or insert at the caret) |
+
+**Document lifecycle**
+
+| Tool | What it does |
+|---|---|
+| `create_document` | New empty `calc` or `writer` document |
+| `open_document` | Open a file (ods/xlsx/csv/odt/docx/…) |
+| `save_document` | Save in place, save-as (ods/xlsx/csv/odt/docx/txt), or export a PDF copy |
+| `close_document` | Close the active document (optionally saving first) |
+
+**Calc — data**
+
+| Tool | What it does |
+|---|---|
+| `calc_read_range` | Read a range (`A1:C10`) as a 2-D array of values |
+| `calc_write_range` | Write a 2-D array into a range (dimensions must match) |
+| `calc_get_formulas` / `calc_set_formulas` | Read/write formulas (`=SUM(A1:A3)`) instead of values |
+| `calc_clear_range` | Clear contents (optionally formatting too) |
+| `calc_copy_range` | Copy a range (values + formulas + formatting) to a target cell/sheet |
+| `calc_find_replace` | Find & replace across one sheet or all sheets |
+| `calc_get_used_range` | The used area of a sheet (A1 range, size, optionally the data) |
+| `calc_insert_rows` / `calc_delete_rows` | Insert/delete rows at an index |
+| `calc_insert_columns` / `calc_delete_columns` | Insert/delete columns at an index |
+
+**Calc — sheets & presentation**
+
+| Tool | What it does |
+|---|---|
+| `calc_list_sheets` / `calc_add_sheet` / `calc_delete_sheet` / `calc_rename_sheet` | Sheet management |
+| `calc_format_range` | Bold/italic/underline, font, colors, wrap, alignment, number format, auto-fit |
+| `calc_merge_cells` | Merge / unmerge a range |
+| `calc_create_chart` | Embedded chart (column, bar, line, pie, area, scatter) |
+| `calc_select_range` | Highlight a range in the GUI for the user |
+
+**Calc — conditional formatting & comments**
+
+| Tool | What it does |
+|---|---|
+| `calc_add_conditional_format` | Highlight cells meeting a condition (`>`,`<`,`between`,`formula`,…) with a color/bold style |
+| `calc_clear_conditional_formats` | Remove all conditional formats from a range |
+| `calc_add_comment` | Add/replace a cell comment (annotation) |
+| `calc_get_comments` | List cell comments (one sheet or all): `[{sheet, cell, author, text}]` |
+
+**Writer**
+
+| Tool | What it does |
+|---|---|
+| `writer_get_text` | Full body text of the active document |
+| `writer_replace_selection` | Replace the selection (or insert at the caret) |
+| `writer_append_text` | Append text at the end (`\n` = paragraph break) |
+| `writer_insert_heading` | Append a Heading 1–6 paragraph |
+| `writer_find_replace` | Find & replace across the document |
+| `writer_format_text` | Apply character formatting to every match of a search |
+| `writer_insert_table` | Insert a table, optionally pre-filled with data |
+| `writer_insert_image` | Insert an image file (sized in mm) |
+| `writer_insert_page_break` | Page break at the end |
+| `writer_get_outline` | The document's headings as `[{level, text}]` |
+
+**Writer — comments & conditional sections**
+
+| Tool | What it does |
+|---|---|
+| `writer_add_comment` | Add a comment, anchored to a searched string / the selection / the end |
+| `writer_get_comments` | List comments: `[{author, text, anchor, resolved}]` |
+| `writer_add_conditional_section` | Writer's analog of conditional formatting: a named text section hidden by a condition (evaluated by Writer's layout) or by `visible=false` |
+
+Not yet covered: pivot tables (UNO DataPilot), Impress/Draw, track-changes,
+Calc data-bar/color-scale/icon-set conditional formats (only value/formula
+conditions are supported). Ask if you need one of these next.
 
 ## Use it from Claude Code
 
