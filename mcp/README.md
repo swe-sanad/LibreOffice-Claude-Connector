@@ -12,7 +12,7 @@ way Claude uses the Figma or Chrome MCP servers.
 - Live tool tests: `../tests/integration/test_mcp_tools.py` (core) and
   `../tests/integration/test_mcp_tools_extended.py` (full 37-tool sweep).
 
-## Tools (44)
+## Tools (50)
 
 **Status & selection**
 
@@ -62,6 +62,7 @@ way Claude uses the Figma or Chrome MCP servers.
 | `calc_clear_conditional_formats` | Remove all conditional formats from a range |
 | `calc_add_comment` | Add/replace a cell comment (annotation) |
 | `calc_get_comments` | List cell comments (one sheet or all): `[{sheet, cell, author, text}]` |
+| `calc_set_borders` | Draw a full grid (or outline-only) border around a range — table styling |
 
 **Writer**
 
@@ -85,6 +86,21 @@ way Claude uses the Figma or Chrome MCP servers.
 | `writer_add_comment` | Add a comment, anchored to a searched string / the selection / the end |
 | `writer_get_comments` | List comments: `[{author, text, anchor, resolved}]` |
 | `writer_add_conditional_section` | Writer's analog of conditional formatting: a named text section hidden by a condition (evaluated by Writer's layout) or by `visible=false` |
+
+**Writer — paragraph / page / table styling**
+
+| Tool | What it does |
+|---|---|
+| `writer_format_paragraph` | Alignment, line spacing, space above/below, indents, or a named paragraph style — on matched paragraphs or all |
+| `writer_set_page_style` | Paper size (A4/Letter/…/custom mm), orientation, margins (mm), column count |
+| `writer_set_header_footer` | Enable/disable and set the header or footer text |
+| `writer_format_table` | Grid border (pt + color) and header-row styling (bold, background, font color) |
+
+**Form controls (Calc + Writer)**
+
+| Tool | What it does |
+|---|---|
+| `insert_form_control` | Insert a **button**, **checkbox**, **text field**, **label**, or **dropdown list box** (position/size in mm; buttons can open a URL/dispatch command) |
 
 Not yet covered: pivot tables (UNO DataPilot), Impress/Draw, track-changes,
 Calc data-bar/color-scale/icon-set conditional formats (only value/formula

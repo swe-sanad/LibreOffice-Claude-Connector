@@ -25,6 +25,9 @@ import libreoffice_mcp as server
 
 PORT = int(os.environ.get("LO_UNO_PORT", "2002"))
 
+# com.sun.star.style.ParagraphAdjust.CENTER (pyuno returns the enum as an int)
+CENTER_ADJUST = 3
+
 # a 1x1 PNG for the image tool
 _PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk"
@@ -150,6 +153,24 @@ def check_calc(tmpdir):
                                           "text": "revised note"}], got_comments)
     print("PASS: calc_add_comment (upsert) + calc_get_comments")
 
+    # table borders on a range
+    bord = server.tool_calc_set_borders({"range": "A1:C3", "width_pt": 1.0,
+                                         "color": "#0000FF"})
+    tb = doc.getSheets().getByIndex(0).getCellRangeByName("A1:C3").getPropertyValue("TableBorder2")
+    _assert(tb.TopLine.LineWidth > 0, "border not applied: %r" % bord)
+    print("PASS: calc_set_borders")
+
+    # form control: a push button on the sheet
+    before = doc.getSheets().getByIndex(0).getDrawPage().getCount()
+    server.tool_insert_form_control({"kind": "button", "label": "Run Claude",
+                                     "name": "btnRun", "x_mm": 60, "y_mm": 5,
+                                     "width_mm": 35, "height_mm": 10})
+    dp = doc.getSheets().getByIndex(0).getDrawPage()
+    _assert(dp.getCount() == before + 1, "control shape not added")
+    _assert(dp.getByIndex(dp.getCount() - 1).getControl().Label == "Run Claude",
+            "button label wrong")
+    print("PASS: insert_form_control (button on Calc sheet)")
+
     # lifecycle: save as xlsx, export pdf, close
     xlsx = os.path.join(tmpdir, "mcp_test.xlsx")
     pdf = os.path.join(tmpdir, "mcp_test.pdf")
@@ -249,6 +270,59 @@ def check_writer(tmpdir):
     _assert(sec2["currently_visible"] is False, "explicit hide should hide: %r" % sec2)
     print("PASS: writer_add_conditional_section (visible=false hides)")
 
+    # paragraph styling: center + 1.5x spacing on paragraphs containing "gamma"
+    pf = server.tool_writer_format_paragraph(
+        {"search": "gamma", "align": "center", "line_spacing_percent": 150,
+         "space_above_mm": 3, "indent_left_mm": 10})
+    _assert(pf["paragraphs_formatted"] >= 1, pf)
+    d = doc.createSearchDescriptor()
+    d.SearchString = "gamma"
+    rng = doc.findFirst(d)
+    _assert(rng.ParaAdjust == CENTER_ADJUST, "align not applied: %r" % rng.ParaAdjust)
+    _assert(rng.ParaLineSpacing.Height == 150, "spacing not applied")
+    _assert(rng.ParaLeftMargin == 1000, "indent not applied: %r" % rng.ParaLeftMargin)
+    print("PASS: writer_format_paragraph (align + spacing + indent verified)")
+
+    # page styling: A4 landscape with margins + 2 columns
+    ps = server.tool_writer_set_page_style(
+        {"paper": "a4", "orientation": "landscape",
+         "margin_top_mm": 15, "margin_left_mm": 20, "columns": 2})
+    style = doc.getStyleFamilies().getByName("PageStyles").getByName(ps["page_style"])
+    _assert(style.IsLandscape and style.Size.Width > style.Size.Height,
+            "landscape not applied: %r" % ps)
+    # ±2 tolerance: LibreOffice round-trips mm through twips (15mm -> 1499)
+    _assert(abs(style.TopMargin - 1500) <= 2 and abs(style.LeftMargin - 2000) <= 2,
+            "margins not applied: top=%d left=%d" % (style.TopMargin, style.LeftMargin))
+    _assert(style.TextColumns.getColumnCount() == 2, "columns not applied")
+    print("PASS: writer_set_page_style (A4 landscape + margins + columns)")
+
+    # header/footer
+    server.tool_writer_set_header_footer(
+        {"which": "header", "enable": True, "text": "Confidential"})
+    _assert(style.HeaderIsOn and style.HeaderText.getString() == "Confidential",
+            "header not set")
+    print("PASS: writer_set_header_footer")
+
+    # table formatting: border + styled header row on the earlier table
+    ft = server.tool_writer_format_table(
+        {"index": 0, "border_width_pt": 1.0, "border_color": "#333333",
+         "header_bold": True, "header_background": "#DDDDDD"})
+    tbl = doc.getTextTables().getByIndex(0)
+    hdr = tbl.getCellByPosition(0, 0)
+    _assert(hdr.BackColor == 0xDDDDDD, "header bg not applied: %r" % hdr.BackColor)
+    print("PASS: writer_format_table (border + header row)")
+
+    # form control: a checkbox in the Writer document
+    before = doc.getDrawPage().getCount()
+    server.tool_insert_form_control(
+        {"kind": "checkbox", "label": "Approved", "name": "cbApproved",
+         "x_mm": 20, "y_mm": 20, "width_mm": 40, "height_mm": 8})
+    dp = doc.getDrawPage()
+    _assert(dp.getCount() == before + 1, "control not added to Writer")
+    _assert(dp.getByIndex(dp.getCount() - 1).getControl().Label == "Approved",
+            "checkbox label wrong")
+    print("PASS: insert_form_control (checkbox in Writer)")
+
     docx = os.path.join(tmpdir, "mcp_test.docx")
     pdf = os.path.join(tmpdir, "mcp_writer.pdf")
     server.tool_save_document({"path": docx})
@@ -267,7 +341,7 @@ def main():
     check_calc(tmpdir)
     print()
     check_writer(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (44-tool server drives real "
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (50-tool server drives real "
           "LibreOffice)")
     return 0
 
