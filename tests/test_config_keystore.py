@@ -7,6 +7,7 @@ Uses a temporary base directory so nothing touches the real user profile. On
 Windows the keystore tests exercise real DPAPI encrypt/decrypt.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -60,6 +61,26 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(kw["model"], cfgmod.DEFAULTS["model"])
         self.assertIn("base_url", kw)
         self.assertNotIn("api_key", kw)
+
+    def _write_raw(self, obj):
+        os.makedirs(cfgmod.config_dir(self.base), exist_ok=True)
+        with open(cfgmod.config_path(self.base), "w", encoding="utf-8") as handle:
+            json.dump(obj, handle)
+
+    def test_coerces_bad_types(self):
+        self._write_raw({"timeout": "120", "max_tokens": "50",
+                         "temperature": "abc", "model": 5})
+        cfg = cfgmod.load_config(self.base)
+        self.assertEqual(cfg["timeout"], 120.0)                  # str -> float
+        self.assertEqual(cfg["max_tokens"], 50)                  # str -> int
+        self.assertIsNone(cfg["temperature"])                   # unparseable -> None
+        self.assertEqual(cfg["model"], cfgmod.DEFAULTS["model"])  # non-str -> default
+
+    def test_bad_timeout_falls_back(self):
+        self._write_raw({"timeout": "not-a-number"})
+        self.assertEqual(cfgmod.load_config(self.base)["timeout"], 120.0)
+        self._write_raw({"timeout": 0})                          # non-positive
+        self.assertEqual(cfgmod.load_config(self.base)["timeout"], 120.0)
 
 
 class TestKeystore(unittest.TestCase):

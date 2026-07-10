@@ -41,7 +41,7 @@ interpreter:
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-All **62** currently pass on the bundled Python 3.10.17, including
+All **65** currently pass on the bundled Python 3.10.17, including
 [tests/test_config_keystore.py](../tests/test_config_keystore.py) — config load/save
 defaults-merging, and a real DPAPI encrypt/decrypt round-trip (on Windows) asserting
 the API key is never stored in plaintext. (This discovers only the top-level `tests/`

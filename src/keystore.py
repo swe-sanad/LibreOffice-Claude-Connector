@@ -84,12 +84,15 @@ def _plain_path(base: Optional[str]) -> str:
 def _write_private(path: str, data: bytes) -> None:
     directory = os.path.dirname(path)
     os.makedirs(directory, exist_ok=True)
-    with open(path, "wb") as handle:
-        handle.write(data)
-    try:  # best-effort tighten perms (POSIX; a no-op guard on Windows)
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+    # Create with 0o600 FROM THE START via os.open — no world-readable window
+    # between create and chmod. (On Windows the mode is largely ignored but the
+    # DPAPI ciphertext, not the raw key, is what is written there anyway.)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    fd = os.open(path, flags, 0o600)
+    try:
+        os.write(fd, data)
+    finally:
+        os.close(fd)
 
 
 # --------------------------------------------------------------------------- #

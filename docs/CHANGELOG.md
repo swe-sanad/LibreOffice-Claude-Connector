@@ -50,7 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   plaintext). [tests/integration/test_extension_dispatch.py](../tests/integration/test_extension_dispatch.py)
   — a LIVE integration test confirming the installed extension's ProtocolHandler
   resolves both command URLs.
-- Verified: the full offline suite is now **62 tests, all passing** on LibreOffice's
+- Verified: the full offline suite is now **65 tests, all passing** on LibreOffice's
   bundled Python 3.10.17. `install_and_verify.ps1`'s full build → install → warm-up
   boot → test boot flow **passed against real LibreOffice 25.2.3.2**, with both
   dispatch commands confirmed to resolve — the full packaging + import chain works

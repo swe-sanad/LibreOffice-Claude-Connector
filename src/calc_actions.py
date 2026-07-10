@@ -116,20 +116,28 @@ def _strip_fences(text: str) -> str:
     return _FENCE_RE.sub("", text.strip())
 
 
-def _extract_json_blob(text: str) -> str:
-    """Return the substring most likely to be the JSON payload.
+def _parse_json_lenient(text: str) -> Any:
+    """Parse the model's reply as JSON, tolerating fences and surrounding prose.
 
-    Tolerates a model that wrapped its answer in prose or fences: we take the
-    span from the first opening bracket to the last matching closing bracket.
+    Tries the WHOLE (fence-stripped) text first — so a valid bare array or object
+    is never mangled even if a cell or the prose contains stray ``{}``/``[]``.
+    Only if that fails do we try the ``{..}`` and ``[..]`` spans, accepting
+    whichever actually parses. Returns the parsed value, or ``None`` if nothing
+    parses.
     """
     stripped = _strip_fences(text)
-    # Prefer an object; fall back to a bare array.
+    candidates = [stripped]
     for open_ch, close_ch in (("{", "}"), ("[", "]")):
         start = stripped.find(open_ch)
         end = stripped.rfind(close_ch)
-        if start != -1 and end != -1 and end > start:
-            return stripped[start:end + 1]
-    return stripped
+        if start != -1 and end > start:
+            candidates.append(stripped[start:end + 1])
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except ValueError:
+            continue
+    return None
 
 
 def parse_grid(text: str, nrows: int, ncols: int) -> Grid:
@@ -137,13 +145,10 @@ def parse_grid(text: str, nrows: int, ncols: int) -> Grid:
 
     Raises :class:`TransformError` with an actionable message on any mismatch.
     """
-    blob = _extract_json_blob(text)
-    try:
-        parsed = json.loads(blob)
-    except ValueError as exc:
+    parsed = _parse_json_lenient(text)
+    if parsed is None:
         raise TransformError(
-            "Model did not return valid JSON (%s). First 200 chars: %r"
-            % (exc, text[:200])
+            "Model did not return valid JSON. First 200 chars: %r" % (text[:200],)
         )
 
     if isinstance(parsed, dict):
@@ -181,6 +186,11 @@ def parse_grid(text: str, nrows: int, ncols: int) -> Grid:
 # Orchestration
 # --------------------------------------------------------------------------- #
 
+# Refuse selections large enough to freeze the UI or blow the token budget.
+# (A whole-column selection in Calc is ~1M rows.)
+MAX_CELLS = 5000
+
+
 def default_max_tokens(nrows: int, ncols: int) -> int:
     """A generous token budget scaled to the grid size (bounded)."""
     cells = max(1, nrows * ncols)
@@ -207,6 +217,10 @@ def transform_range(
     nrows, ncols = grid_dimensions(grid)
     if nrows == 0 or ncols == 0:
         raise TransformError("The selection is empty; nothing to transform.")
+    if nrows * ncols > MAX_CELLS:
+        raise TransformError(
+            "Selection is too large (%d cells; limit is %d). Select a smaller "
+            "range." % (nrows * ncols, MAX_CELLS))
 
     result = client.send(
         system=build_system_prompt(nrows, ncols),
@@ -215,4 +229,8 @@ def transform_range(
         max_tokens=max_tokens or default_max_tokens(nrows, ncols),
         temperature=temperature,
     )
+    if getattr(result, "truncated", False):
+        raise TransformError(
+            "Claude's answer was cut off (hit max_tokens). Select a smaller range "
+            "or raise max_tokens in Claude > Settings.")
     return parse_grid(result.text, nrows, ncols)

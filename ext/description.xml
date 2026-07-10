@@ -1,13 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <description xmlns="http://openoffice.org/extensions/description/2006"
              xmlns:d="http://openoffice.org/extensions/description/2006"
+             xmlns:lo="http://libreoffice.org/extensions/description/2011"
              xmlns:xlink="http://www.w3.org/1999/xlink">
 
   <identifier value="com.swepioneers.libreoffice-claude-connector"/>
   <version value="0.1.0"/>
 
   <dependencies>
-    <!-- OOo API 4.1 == LibreOffice 4.1+. We actually target 24.8+ at runtime. -->
+    <!-- The code needs Python >= 3.8 (from __future__ import annotations,
+         dataclasses). LibreOffice 7.2 is the first with bundled Python 3.8, so
+         gate on it to avoid a broken install on older builds (LO <= 6.x ship
+         Python <= 3.5/3.7). LibreOffice-minimal-version is the real LO gate;
+         the OOo element is the API baseline LO also honors. -->
+    <lo:LibreOffice-minimal-version value="7.2" d:name="LibreOffice 7.2"/>
     <OpenOffice.org-minimal-version value="4.1"
         d:name="LibreOffice 4.1 (OOo API 4.1)"/>
   </dependencies>

@@ -95,10 +95,10 @@ LibreOffice install):
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-These **62** tests (14 for the Claude client, 17 for the Calc transform logic, the
-Writer transform/prompt-building logic, plus config + DPAPI keystore round-trip tests)
-mock `urllib`/use fake clients entirely, or use a temp directory for config/keystore —
-no API key, no network access, and no running LibreOffice needed.
+These **65** tests (Claude client, Calc transform logic, Writer transform/prompt
+logic, plus config + DPAPI keystore round-trip tests) mock `urllib`/use fake clients
+entirely, or use a temp directory for config/keystore — no API key, no network access,
+and no running LibreOffice needed.
 
 To exercise the Calc UNO read/write path against a real, isolated headless LibreOffice
 (no API key needed — the Claude call is a deterministic stub):

@@ -33,6 +33,10 @@ Grid = List[List[Any]]
 CALC_DOC_SERVICE = "com.sun.star.sheet.SpreadsheetDocument"
 
 
+class SelectionError(Exception):
+    """A user-facing problem with the current selection (shown as a message box)."""
+
+
 # --------------------------------------------------------------------------- #
 # Connection (dev / test over a socket)
 # --------------------------------------------------------------------------- #
@@ -97,12 +101,22 @@ def get_calc_selection_range(doc: Any) -> Optional[Any]:
         addrs = sel.getRangeAddresses()
         if not addrs:
             return None
+        if len(addrs) > 1:
+            raise SelectionError(
+                "Please select a single contiguous range. Multiple separate "
+                "selections aren't supported yet.")
         a = addrs[0]
         sheet = doc.getSheets().getByIndex(a.Sheet)
         return sheet.getCellRangeByPosition(a.StartColumn, a.StartRow,
                                             a.EndColumn, a.EndRow)
 
     return None
+
+
+def range_cell_count(cell_range: Any) -> int:
+    """Number of cells in a range, computed from its address (no data read)."""
+    a = cell_range.getRangeAddress()
+    return (a.EndRow - a.StartRow + 1) * (a.EndColumn - a.StartColumn + 1)
 
 
 # --------------------------------------------------------------------------- #

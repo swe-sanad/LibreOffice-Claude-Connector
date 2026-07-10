@@ -80,6 +80,8 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
                 self._do_transform()
             elif command == "Settings":
                 self._do_settings()
+        except uno_bridge.SelectionError as exc:
+            uno_ui.error_box(self.ctx, self._win(), str(exc))
         except ClaudeConfigError as exc:
             uno_ui.error_box(self.ctx, self._win(), str(exc))
         except ClaudeError as exc:
@@ -131,9 +133,16 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
 
     def _transform_calc(self, doc):
         win = self._win()
-        cell_range = uno_bridge.get_calc_selection_range(doc)
+        cell_range = uno_bridge.get_calc_selection_range(doc)  # may raise SelectionError
         if cell_range is None:
             uno_ui.error_box(self.ctx, win, "Select one or more cells first.")
+            return
+        count = uno_bridge.range_cell_count(cell_range)
+        if count > calc_actions.MAX_CELLS:
+            uno_ui.error_box(
+                self.ctx, win,
+                "Selection is too large (%d cells; limit is %d). Select a smaller "
+                "range." % (count, calc_actions.MAX_CELLS))
             return
         instruction = uno_ui.prompt_instruction(
             self.ctx, win, "Ask Claude (Calc)",
@@ -151,6 +160,8 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
 
         new_grid = uno_ui.run_with_progress(
             self.ctx, win, "Claude", "Contacting Claude…", work)
+        if new_grid is uno_ui.CANCELLED:
+            return
         uno_bridge.write_range_grid(cell_range, new_grid)      # main thread
 
     def _transform_writer(self, doc):
@@ -171,10 +182,15 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
                     max_tokens=cfg.get("max_tokens"),
                     temperature=cfg.get("temperature")))
             return ("insert", writer_actions.generate_text(
-                client, instruction, temperature=cfg.get("temperature")))
+                client, instruction,
+                max_tokens=cfg.get("max_tokens") or 1024,
+                temperature=cfg.get("temperature")))
 
-        mode, out = uno_ui.run_with_progress(
+        result = uno_ui.run_with_progress(
             self.ctx, win, "Claude", "Contacting Claude…", work)
+        if result is uno_ui.CANCELLED:
+            return
+        mode, out = result
         if mode == "replace":
             uno_bridge.replace_writer_selection(doc, out)      # main thread
         else:

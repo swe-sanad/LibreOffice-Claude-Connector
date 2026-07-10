@@ -13,20 +13,22 @@ import calc_actions as ca  # noqa: E402
 
 
 class _FakeResult:
-    def __init__(self, text):
+    def __init__(self, text, truncated=False):
         self.text = text
+        self.truncated = truncated
 
 
 class _FakeClient:
     """Records the last send() kwargs and returns a canned reply."""
 
-    def __init__(self, reply_text):
+    def __init__(self, reply_text, truncated=False):
         self.reply_text = reply_text
+        self.truncated = truncated
         self.last_kwargs = None
 
     def send(self, **kwargs):
         self.last_kwargs = kwargs
-        return _FakeResult(self.reply_text)
+        return _FakeResult(self.reply_text, self.truncated)
 
 
 # --------------------------------------------------------------------------- #
@@ -97,6 +99,15 @@ class TestParseGrid(unittest.TestCase):
         with self.assertRaises(ca.TransformError):
             ca.parse_grid('{"cells": ["A"]}', 1, 1)
 
+    def test_bare_array_with_braces_in_cell(self):
+        # Regression: stray braces inside a bare-array cell must NOT break parsing.
+        out = ca.parse_grid('[["{name}", "y"]]', 1, 2)
+        self.assertEqual(out, [["{name}", "y"]])
+
+    def test_object_with_prose_containing_braces(self):
+        text = 'Here you go {ok}: {"cells": [["a", "b"]]}'
+        self.assertEqual(ca.parse_grid(text, 1, 2), [["a", "b"]])
+
 
 class TestTransformRange(unittest.TestCase):
     def test_happy_path_and_kwargs(self):
@@ -119,6 +130,18 @@ class TestTransformRange(unittest.TestCase):
         client = _FakeClient('{"cells": [["only one row"]]}')
         with self.assertRaises(ca.TransformError):
             ca.transform_range(client, (("a",), ("b",)), "x")  # expects 2x1
+
+    def test_oversized_selection_raises_before_calling_model(self):
+        client = _FakeClient('{"cells": []}')  # would fail if actually called
+        big = tuple((i,) for i in range(ca.MAX_CELLS + 1))  # (MAX_CELLS+1) x 1
+        with self.assertRaises(ca.TransformError):
+            ca.transform_range(client, big, "x")
+        self.assertIsNone(client.last_kwargs)  # never sent
+
+    def test_truncated_response_raises(self):
+        client = _FakeClient('{"cells": [["A"]]}', truncated=True)
+        with self.assertRaises(ca.TransformError):
+            ca.transform_range(client, (("a",),), "x")
 
 
 class TestDefaults(unittest.TestCase):

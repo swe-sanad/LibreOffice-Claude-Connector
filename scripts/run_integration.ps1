@@ -58,6 +58,13 @@ except Exception:
 # --- Clean slate: kill any leftover test instance, then reset the profile ---
 Kill-TestOffice -Marker $ProfileName
 Start-Sleep -Milliseconds 300
+# Wait for the UNO port to be free — a prior back-to-back run's instance may still
+# be closing, and connecting to it gives "URP bridge disposed".
+$portFree = (Get-Date).AddSeconds(30)
+while ((Get-Date) -lt $portFree) {
+    try { $tc = New-Object System.Net.Sockets.TcpClient; $tc.Connect("localhost", $Port); $tc.Close(); Start-Sleep -Milliseconds 500 }
+    catch { break }
+}
 if (Test-Path $profileDir) { Remove-Item -Recurse -Force $profileDir -ErrorAction SilentlyContinue }
 New-Item -ItemType Directory -Force -Path $profileDir | Out-Null
 

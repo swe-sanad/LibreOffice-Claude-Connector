@@ -12,11 +12,11 @@ produces something observable before the next adds complexity.*
 | 2 — Calc rewrite-selection | ✅ done | `calc_actions.py` + `uno_bridge.py`; UNO integration test passes on real LO |
 | 3 — Writer rewrite/generate | ✅ done | `writer_actions.py` + Writer UNO helpers; integration test passes |
 | 4 — Package as `.oxt` | ✅ done | `ext/` + `connector.py` + `scripts/build_oxt.py`; installs & dispatch RESOLVES in real LO |
-| 5 — Config & DPAPI key | ✅ done | `config.py` + `keystore.py`; 62 offline tests incl. real DPAPI round-trip |
+| 5 — Config & DPAPI key | ✅ done | `config.py` + `keystore.py`; 65 offline tests incl. real DPAPI round-trip |
 | 6 — Feature depth & polish | ⏳ next | sidebar panel, streaming, more commands, style-preserving replace |
 | 7 — Distribution | ⏳ next | publish to extensions.libreoffice.org, update feed |
 
-**Verified so far:** 62 offline unit tests pass on bundled Python 3.10.17; Calc + Writer
+**Verified so far:** 65 offline unit tests pass on bundled Python 3.10.17; Calc + Writer
 document edits pass against real headless LibreOffice; the built `.oxt` installs and its
 ProtocolHandler resolves in LibreOffice 25.2.3.2. Not yet exercised: a live end-to-end
 Claude call from inside LibreOffice (needs an `ANTHROPIC_API_KEY`) and the interactive

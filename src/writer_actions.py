@@ -55,6 +55,19 @@ def clean_output(text: str) -> str:
     return text.strip()
 
 
+_TRUNCATION_NOTE = ("\n\n[Claude's reply was cut off — raise max_tokens in "
+                    "Claude ▸ Settings.]")
+
+
+def _finish(result: Any) -> str:
+    """Clean the reply and, if it was truncated, append a visible note so the
+    cut-off is never inserted silently."""
+    text = clean_output(result.text)
+    if getattr(result, "truncated", False):
+        text += _TRUNCATION_NOTE
+    return text
+
+
 # --------------------------------------------------------------------------- #
 # Prompts
 # --------------------------------------------------------------------------- #
@@ -117,7 +130,7 @@ def rewrite_text(
         max_tokens=max_tokens or default_max_tokens(selected_text),
         temperature=temperature,
     )
-    return clean_output(result.text)
+    return _finish(result)
 
 
 def generate_text(
@@ -138,4 +151,4 @@ def generate_text(
         max_tokens=max_tokens,
         temperature=temperature,
     )
-    return clean_output(result.text)
+    return _finish(result)

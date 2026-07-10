@@ -166,13 +166,20 @@ class _EndDialogCallback(unohelper.Base, XCallback):
             pass
 
 
+# Returned when the user dismisses the progress dialog before the work finishes.
+CANCELLED = object()
+
+
 def run_with_progress(ctx, parent_win, title, message,
                       work: Callable[[], Any]) -> Any:
     """Run ``work()`` on a worker thread while a modal progress dialog keeps the
     UI responsive; return ``work()``'s result (or re-raise its exception).
 
-    The document read/write must happen on the caller's (main) thread — only the
-    network call belongs inside ``work``.
+    If the user dismisses the dialog (Escape / close button) before the work
+    completes, returns the :data:`CANCELLED` sentinel — callers MUST check for it
+    before using the result (otherwise a dismissal would feed ``None`` into the
+    document write). The document read/write must happen on the caller's (main)
+    thread — only the network call belongs inside ``work``.
     """
     if parent_win is None:  # headless: just run it synchronously
         return work()
@@ -183,6 +190,7 @@ def run_with_progress(ctx, parent_win, title, message,
     dialog = _show_dialog(ctx, model, parent_win)
 
     holder = {"result": None, "exc": None}
+    done = threading.Event()
     async_cb = ctx.ServiceManager.createInstanceWithContext(
         "com.sun.star.awt.AsyncCallback", ctx)
     ender = _EndDialogCallback(dialog)
@@ -193,6 +201,7 @@ def run_with_progress(ctx, parent_win, title, message,
         except BaseException as exc:          # noqa: BLE001 - propagated below
             holder["exc"] = exc
         finally:
+            done.set()
             try:
                 async_cb.addCallback(ender, None)   # end dialog on main thread
             except Exception:
@@ -206,9 +215,11 @@ def run_with_progress(ctx, parent_win, title, message,
     try:
         dialog.execute()                       # nested loop; returns on endExecute
     finally:
-        thread.join(timeout=1.0)
         dialog.dispose()
 
+    if not done.is_set():
+        # Dialog closed by the user while the call was still running.
+        return CANCELLED
     if holder["exc"] is not None:
         raise holder["exc"]
     return holder["result"]

@@ -231,5 +231,31 @@ class TestErrors(unittest.TestCase):
         self.assertEqual(opener.call_count, 2)  # initial + 1 retry
 
 
+class TestBaseUrlGuard(unittest.TestCase):
+    def test_rejects_remote_http(self):
+        with self.assertRaises(cc.ClaudeConfigError):
+            cc.ClaudeClient(api_key="k",
+                            base_url="http://evil.example.com/v1/messages")
+
+    def test_allows_localhost_http(self):
+        cc.ClaudeClient(api_key="k", base_url="http://localhost:8080/v1/messages")
+        cc.ClaudeClient(api_key="k", base_url="http://127.0.0.1:8080/v1/messages")
+
+    def test_allows_https(self):
+        cc.ClaudeClient(api_key="k",
+                        base_url="https://api.anthropic.com/v1/messages")
+
+
+class TestBackoff(unittest.TestCase):
+    def test_retry_after_capped_at_120(self):
+        client = _client()
+        self.assertEqual(client._backoff_delay(1, 200.0), 120.0)
+        self.assertEqual(client._backoff_delay(1, 45.0), 45.0)
+
+    def test_exponential_capped_at_30(self):
+        client = _client()
+        self.assertEqual(client._backoff_delay(10, None), 30.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

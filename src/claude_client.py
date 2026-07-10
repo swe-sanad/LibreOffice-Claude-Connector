@@ -31,6 +31,7 @@ import socket
 import ssl
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Union
@@ -66,6 +67,10 @@ DEFAULT_MAX_RETRIES = 3
 # HTTP statuses that are worth retrying (transient / rate-limited / overloaded).
 _RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 529})
 _MAX_BACKOFF_SECONDS = 30.0
+# A server-supplied Retry-After is honored up to this; our own exponential
+# backoff stays capped at _MAX_BACKOFF_SECONDS.
+_MAX_RETRY_AFTER = 120.0
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 
 # --------------------------------------------------------------------------- #
@@ -163,6 +168,19 @@ def extract_text(payload: Dict[str, Any]) -> str:
     return "".join(parts)
 
 
+def _require_https(url: str) -> None:
+    """Reject a base URL that would send the API key in cleartext.
+
+    HTTPS is required; plain http is allowed only for a local proxy so the key
+    never leaves the machine unencrypted.
+    """
+    parts = urllib.parse.urlsplit(url)
+    if parts.scheme != "https" and parts.hostname not in _LOCAL_HOSTS:
+        raise ClaudeConfigError(
+            "Refusing to send the API key over a non-HTTPS URL (%s). Use https:// "
+            "(plain http is allowed only for localhost)." % url)
+
+
 def _coerce_retry_after(value: Optional[str]) -> Optional[float]:
     if not value:
         return None
@@ -221,6 +239,7 @@ class ClaudeClient:
         if max_retries < 0:
             raise ClaudeConfigError("max_retries must be >= 0.")
 
+        _require_https(base_url)
         self.api_key = str(api_key).strip()
         self.model = model
         self.base_url = base_url
@@ -299,7 +318,7 @@ class ClaudeClient:
 
     def _backoff_delay(self, attempt: int, retry_after: Optional[float]) -> float:
         if retry_after is not None:
-            return min(retry_after, _MAX_BACKOFF_SECONDS)
+            return min(retry_after, _MAX_RETRY_AFTER)
         return min(2.0 ** attempt, _MAX_BACKOFF_SECONDS)
 
     def _request(self, body: Dict[str, Any]) -> Dict[str, Any]:

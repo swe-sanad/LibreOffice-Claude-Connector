@@ -49,9 +49,39 @@ def config_path(base: Optional[str] = None) -> str:
     return os.path.join(config_dir(base), CONFIG_FILE)
 
 
+def _coerce(key: str, value: Any) -> Any:
+    """Coerce a stored value to the expected type, else fall back to default.
+
+    Prevents a hand-edited config.json (e.g. "timeout": "120") from surfacing a
+    raw TypeError deep in the client.
+    """
+    default = DEFAULTS[key]
+    if key == "timeout":
+        try:
+            number = float(value)
+            return number if number > 0 else default
+        except (TypeError, ValueError):
+            return default
+    if value is None:
+        return None
+    if key == "temperature":
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    if key == "max_tokens":
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    # string-valued keys: model, base_url, anthropic_version, ca_file
+    return value if isinstance(value, str) else default
+
+
 def load_config(base: Optional[str] = None) -> Dict[str, Any]:
     """Load settings merged over :data:`DEFAULTS`. Unknown keys are ignored,
-    missing/corrupt files fall back to defaults (never raises)."""
+    values are type-checked/coerced, and missing/corrupt files fall back to
+    defaults (never raises)."""
     cfg = dict(DEFAULTS)
     try:
         with open(config_path(base), "r", encoding="utf-8") as handle:
@@ -61,7 +91,7 @@ def load_config(base: Optional[str] = None) -> Dict[str, Any]:
     if isinstance(stored, dict):
         for key in DEFAULTS:
             if key in stored:
-                cfg[key] = stored[key]
+                cfg[key] = _coerce(key, stored[key])
     return cfg
 
 

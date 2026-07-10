@@ -13,18 +13,20 @@ import writer_actions as wa  # noqa: E402
 
 
 class _FakeResult:
-    def __init__(self, text):
+    def __init__(self, text, truncated=False):
         self.text = text
+        self.truncated = truncated
 
 
 class _FakeClient:
-    def __init__(self, reply):
+    def __init__(self, reply, truncated=False):
         self.reply = reply
+        self.truncated = truncated
         self.last_kwargs = None
 
     def send(self, **kwargs):
         self.last_kwargs = kwargs
-        return _FakeResult(self.reply)
+        return _FakeResult(self.reply, self.truncated)
 
 
 class TestCleanOutput(unittest.TestCase):
@@ -68,6 +70,16 @@ class TestRewrite(unittest.TestCase):
         client = _FakeClient("x")
         with self.assertRaises(wa.WriterActionError):
             wa.rewrite_text(client, "   ", "do it")
+
+    def test_truncated_response_gets_visible_note(self):
+        client = _FakeClient("partial answer", truncated=True)
+        out = wa.rewrite_text(client, "original", "expand")
+        self.assertIn("partial answer", out)
+        self.assertIn("cut off", out)               # note is appended, not silent
+
+    def test_untruncated_has_no_note(self):
+        client = _FakeClient("full answer", truncated=False)
+        self.assertEqual(wa.rewrite_text(client, "original", "x"), "full answer")
 
 
 class TestGenerate(unittest.TestCase):

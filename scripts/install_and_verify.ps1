@@ -52,6 +52,12 @@ except Exception: pass
     $term | & $py - 2>$null
     Start-Sleep -Milliseconds 800
     Kill-TestOffice
+    # Fallback: a still-running HEADLESS soffice is a leftover test instance
+    # (a real GUI office has a non-zero MainWindowHandle), and the marker-kill
+    # can miss instances whose CommandLine is unreadable via CIM.
+    Get-Process -Name soffice, soffice.bin -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowHandle -eq 0 } |
+        ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue } catch {} }
 }
 
 function Launch-And-Wait {
