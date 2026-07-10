@@ -28,7 +28,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.3.0"
+SERVER_VERSION = "0.4.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -161,6 +161,46 @@ def _hex_color(value):
     if len(s) != 6:
         raise RuntimeError("Colors must be '#RRGGBB', got: %r" % value)
     return int(s, 16)
+
+
+def _mm100(mm):
+    """Millimetres -> 1/100 mm (the unit for most UNO layout properties)."""
+    return int(round(float(mm) * 100))
+
+
+def _pt_to_mm100(pt):
+    """Points -> 1/100 mm (for border/line widths)."""
+    return int(round(float(pt) * 2540.0 / 72.0))
+
+
+def _border_line(width_pt, color):
+    line = _uno_struct("com.sun.star.table.BorderLine2")
+    line.LineWidth = _pt_to_mm100(width_pt)
+    line.Color = _hex_color(color) if color is not None else 0
+    line.LineStyle = 0   # com.sun.star.table.BorderLineStyle.SOLID
+    return line
+
+
+def _full_grid_border(width_pt, color, outline_only=False):
+    tb = _uno_struct("com.sun.star.table.TableBorder2")
+    line = _border_line(width_pt, color)
+    tb.TopLine = line;    tb.IsTopLineValid = True
+    tb.BottomLine = line; tb.IsBottomLineValid = True
+    tb.LeftLine = line;   tb.IsLeftLineValid = True
+    tb.RightLine = line;  tb.IsRightLineValid = True
+    inner = _border_line(0 if outline_only else width_pt, color)
+    tb.HorizontalLine = inner; tb.IsHorizontalLineValid = True
+    tb.VerticalLine = inner;   tb.IsVerticalLineValid = True
+    return tb
+
+
+# Paragraph alignment names -> com.sun.star.style.ParagraphAdjust
+_PARA_ADJUST = {"left": "LEFT", "right": "RIGHT", "center": "CENTER",
+                "justify": "BLOCK", "block": "BLOCK"}
+
+# Common paper sizes in 1/100 mm (portrait width, height)
+_PAPER = {"a4": (21000, 29700), "a5": (14800, 21000), "a3": (29700, 42000),
+          "letter": (21590, 27940), "legal": (21590, 35560)}
 
 
 def _col_letters(index):
@@ -638,6 +678,19 @@ def tool_calc_merge_cells(args):
     return {"range": args["range"], "merged": merge}
 
 
+def tool_calc_set_borders(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    width_pt = float(args.get("width_pt", 0.5))
+    color = args.get("color", "#000000")
+    rng.setPropertyValue("TableBorder2",
+                         _full_grid_border(width_pt, color,
+                                           bool(args.get("outline_only", False))))
+    return {"range": args["range"], "width_pt": width_pt, "color": color,
+            "outline_only": bool(args.get("outline_only", False))}
+
+
 _CHART_DIAGRAMS = {
     "column": ("com.sun.star.chart.BarDiagram", True),
     "bar": ("com.sun.star.chart.BarDiagram", False),
@@ -1047,6 +1100,278 @@ def tool_writer_add_conditional_section(args):
 
 
 # --------------------------------------------------------------------------- #
+# Tools — Writer paragraph / page / table styling
+# --------------------------------------------------------------------------- #
+
+def _apply_para_format(target, args):
+    applied = []
+    if "align" in args:
+        key = str(args["align"]).lower()
+        if key not in _PARA_ADJUST:
+            raise RuntimeError("align must be one of %s" % sorted(_PARA_ADJUST))
+        target.ParaAdjust = _uno_enum("com.sun.star.style.ParagraphAdjust",
+                                      _PARA_ADJUST[key])
+        applied.append("align")
+    if "line_spacing_percent" in args:
+        spacing = _uno_struct("com.sun.star.style.LineSpacing")
+        spacing.Mode = 0   # com.sun.star.style.LineSpacingMode.PROP
+        spacing.Height = int(args["line_spacing_percent"])
+        target.ParaLineSpacing = spacing
+        applied.append("line_spacing_percent")
+    if "space_above_mm" in args:
+        target.ParaTopMargin = _mm100(args["space_above_mm"])
+        applied.append("space_above_mm")
+    if "space_below_mm" in args:
+        target.ParaBottomMargin = _mm100(args["space_below_mm"])
+        applied.append("space_below_mm")
+    if "indent_left_mm" in args:
+        target.ParaLeftMargin = _mm100(args["indent_left_mm"])
+        applied.append("indent_left_mm")
+    if "indent_right_mm" in args:
+        target.ParaRightMargin = _mm100(args["indent_right_mm"])
+        applied.append("indent_right_mm")
+    if "first_line_indent_mm" in args:
+        target.ParaFirstLineIndent = _mm100(args["first_line_indent_mm"])
+        applied.append("first_line_indent_mm")
+    if "style_name" in args:
+        target.ParaStyleName = args["style_name"]
+        applied.append("style_name")
+    return applied
+
+
+def tool_writer_format_paragraph(args):
+    doc = _require_writer()
+    if not any(k in args for k in ("align", "line_spacing_percent",
+                                   "space_above_mm", "space_below_mm",
+                                   "indent_left_mm", "indent_right_mm",
+                                   "first_line_indent_mm", "style_name")):
+        raise RuntimeError("Give at least one paragraph property: align, "
+                           "line_spacing_percent, space_above_mm, space_below_mm, "
+                           "indent_left_mm, indent_right_mm, first_line_indent_mm, "
+                           "style_name.")
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        count = found.getCount()
+        applied = []
+        for i in range(count):
+            applied = _apply_para_format(found.getByIndex(i), args)
+        return {"paragraphs_formatted": count, "applied": applied}
+    # no search: every body paragraph
+    count = 0
+    applied = []
+    enum = doc.getText().createEnumeration()
+    while enum.hasMoreElements():
+        para = enum.nextElement()
+        if para.supportsService("com.sun.star.text.Paragraph"):
+            applied = _apply_para_format(para, args)
+            count += 1
+    return {"paragraphs_formatted": count, "applied": applied}
+
+
+def _page_style(doc, name=None):
+    styles = doc.getStyleFamilies().getByName("PageStyles")
+    if name:
+        if not styles.hasByName(name):
+            raise RuntimeError("No page style named %r." % name)
+        return styles.getByName(name)
+    # the page style actually in use by the first paragraph, else 'Standard'
+    try:
+        cursor = doc.getText().createEnumeration().nextElement()
+        used = cursor.getPropertyValue("PageStyleName")
+        if used and styles.hasByName(used):
+            return styles.getByName(used)
+    except Exception:
+        pass
+    return styles.getByName("Standard")
+
+
+def tool_writer_set_page_style(args):
+    doc = _require_writer()
+    style = _page_style(doc, args.get("style_name"))
+    applied = []
+
+    width = height = None
+    if "paper" in args:
+        key = str(args["paper"]).lower()
+        if key not in _PAPER:
+            raise RuntimeError("paper must be one of %s" % sorted(_PAPER))
+        width, height = _PAPER[key]
+        applied.append("paper")
+    if "width_mm" in args and "height_mm" in args:
+        width, height = _mm100(args["width_mm"]), _mm100(args["height_mm"])
+        applied.append("size")
+
+    landscape = None
+    if "orientation" in args:
+        landscape = str(args["orientation"]).lower() == "landscape"
+        applied.append("orientation")
+
+    if width is not None:
+        if landscape is None:
+            landscape = bool(style.IsLandscape)
+        if landscape and width < height:
+            width, height = height, width
+        elif landscape is False and width > height:
+            width, height = height, width
+        size = _uno_struct("com.sun.star.awt.Size")
+        size.Width, size.Height = width, height
+        style.Size = size
+        style.IsLandscape = bool(landscape)
+    elif landscape is not None:
+        cur = style.Size
+        if (landscape and cur.Width < cur.Height) or \
+           (not landscape and cur.Width > cur.Height):
+            size = _uno_struct("com.sun.star.awt.Size")
+            size.Width, size.Height = cur.Height, cur.Width
+            style.Size = size
+        style.IsLandscape = bool(landscape)
+
+    for arg, prop in (("margin_top_mm", "TopMargin"),
+                      ("margin_bottom_mm", "BottomMargin"),
+                      ("margin_left_mm", "LeftMargin"),
+                      ("margin_right_mm", "RightMargin")):
+        if arg in args:
+            setattr(style, prop, _mm100(args[arg]))
+            applied.append(arg)
+
+    if "columns" in args:
+        cols = doc.createInstance("com.sun.star.text.TextColumns")
+        cols.setColumnCount(int(args["columns"]))
+        style.TextColumns = cols
+        applied.append("columns")
+
+    if not applied:
+        raise RuntimeError("Give at least one page property: paper, width_mm+"
+                           "height_mm, orientation, margin_*_mm, columns.")
+    return {"page_style": style.Name, "applied": applied}
+
+
+def tool_writer_set_header_footer(args):
+    doc = _require_writer()
+    style = _page_style(doc, args.get("style_name"))
+    which = str(args.get("which", "header")).lower()
+    if which not in ("header", "footer"):
+        raise RuntimeError("which must be 'header' or 'footer'.")
+    on_prop = "HeaderIsOn" if which == "header" else "FooterIsOn"
+    text_prop = "HeaderText" if which == "header" else "FooterText"
+
+    enable = bool(args.get("enable", True))
+    setattr(style, on_prop, enable)
+    if not enable:
+        return {"page_style": style.Name, which: "disabled"}
+    if "text" in args:
+        htext = getattr(style, text_prop)
+        htext.setString(args["text"])
+    return {"page_style": style.Name, which: "enabled",
+            "text": args.get("text", "")}
+
+
+def tool_writer_format_table(args):
+    doc = _require_writer()
+    tables = doc.getTextTables()
+    name = args.get("name")
+    if name:
+        if not tables.hasByName(name):
+            raise RuntimeError("No table named %r." % name)
+        table = tables.getByName(name)
+    else:
+        idx = int(args.get("index", 0))
+        if idx >= tables.getCount():
+            raise RuntimeError("Table index %d out of range (%d tables)."
+                               % (idx, tables.getCount()))
+        table = tables.getByIndex(idx)
+    applied = []
+
+    if "border_width_pt" in args or "border_color" in args:
+        table.setPropertyValue(
+            "TableBorder2",
+            _full_grid_border(float(args.get("border_width_pt", 0.5)),
+                              args.get("border_color", "#000000")))
+        applied.append("border")
+
+    header = (bool(args.get("header_bold")) or "header_background" in args
+              or "header_font_color" in args)
+    if header:
+        ncols = len(table.getColumns())
+        for c in range(ncols):
+            cell = table.getCellByPosition(c, 0)
+            if "header_background" in args:
+                cell.BackColor = _hex_color(args["header_background"])
+                cell.BackTransparent = False
+            cur = cell.getText().createTextCursor()
+            cur.gotoEnd(True)
+            if args.get("header_bold"):
+                cur.CharWeight = 150.0
+            if "header_font_color" in args:
+                cur.CharColor = _hex_color(args["header_font_color"])
+        applied.append("header_row")
+
+    if not applied:
+        raise RuntimeError("Give border_width_pt/border_color and/or "
+                           "header_bold/header_background/header_font_color.")
+    return {"table": table.getName(), "applied": applied}
+
+
+# --------------------------------------------------------------------------- #
+# Tools — form controls (buttons and other UI elements)
+# --------------------------------------------------------------------------- #
+
+_FORM_COMPONENTS = {
+    "button": "com.sun.star.form.component.CommandButton",
+    "checkbox": "com.sun.star.form.component.CheckBox",
+    "textfield": "com.sun.star.form.component.TextField",
+    "label": "com.sun.star.form.component.FixedText",
+    "listbox": "com.sun.star.form.component.ListBox",
+}
+
+
+def tool_insert_form_control(args):
+    ub = _bridge()
+    doc = _current_doc()
+    kind = str(args.get("kind", "button")).lower()
+    service = _FORM_COMPONENTS.get(kind)
+    if service is None:
+        raise RuntimeError("kind must be one of %s" % sorted(_FORM_COMPONENTS))
+
+    model = doc.createInstance(service)
+    if kind in ("button", "checkbox", "label") and "label" in args:
+        model.Label = args["label"]
+    if kind == "textfield" and "text" in args:
+        model.DefaultText = args["text"]
+    if kind == "listbox" and args.get("items"):
+        model.StringItemList = tuple(str(x) for x in args["items"])
+        model.Dropdown = True
+    if kind == "button" and args.get("url"):
+        model.ButtonType = _uno_enum("com.sun.star.form.FormButtonType", "URL")
+        model.TargetURL = args["url"]
+    if args.get("name"):
+        model.Name = args["name"]
+
+    shape = doc.createInstance("com.sun.star.drawing.ControlShape")
+    size = _uno_struct("com.sun.star.awt.Size")
+    size.Width = _mm100(args.get("width_mm", 40))
+    size.Height = _mm100(args.get("height_mm", 10))
+    shape.setSize(size)
+    pos = _uno_struct("com.sun.star.awt.Point")
+    pos.X = _mm100(args.get("x_mm", 10))
+    pos.Y = _mm100(args.get("y_mm", 10))
+    shape.setPosition(pos)
+    shape.setControl(model)
+
+    if ub.is_calc(doc):
+        draw_page = doc.getCurrentController().getActiveSheet().getDrawPage()
+    else:
+        draw_page = doc.getDrawPage()
+    draw_page.add(shape)
+    return {"inserted": kind, "name": model.Name,
+            "label": args.get("label", args.get("text", ""))}
+
+
+# --------------------------------------------------------------------------- #
 # Tool registry + JSON schemas
 # --------------------------------------------------------------------------- #
 
@@ -1088,6 +1413,7 @@ TOOLS = {
     "calc_clear_conditional_formats": tool_calc_clear_conditional_formats,
     "calc_add_comment": tool_calc_add_comment,
     "calc_get_comments": tool_calc_get_comments,
+    "calc_set_borders": tool_calc_set_borders,
     # writer
     "writer_get_text": tool_writer_get_text,
     "writer_replace_selection": tool_writer_replace_selection,
@@ -1103,6 +1429,13 @@ TOOLS = {
     "writer_add_comment": tool_writer_add_comment,
     "writer_get_comments": tool_writer_get_comments,
     "writer_add_conditional_section": tool_writer_add_conditional_section,
+    # writer paragraph / page / table styling
+    "writer_format_paragraph": tool_writer_format_paragraph,
+    "writer_set_page_style": tool_writer_set_page_style,
+    "writer_set_header_footer": tool_writer_set_header_footer,
+    "writer_format_table": tool_writer_format_table,
+    # form controls (both Calc and Writer)
+    "insert_form_control": tool_insert_form_control,
 }
 
 _STR = {"type": "string"}
@@ -1259,6 +1592,12 @@ TOOL_DEFS = [
     {"name": "calc_get_comments",
      "description": "List cell comments on one sheet, or across all sheets if 'sheet' is omitted: [{sheet, cell, author, text}].",
      "inputSchema": _schema({"sheet": _SHEET})},
+    {"name": "calc_set_borders",
+     "description": "Draw borders around/through a Calc range (table styling). Full grid by default; outline_only=true draws only the outer border.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "width_pt": dict(_NUM, description="line width in points (default 0.5)"),
+                             "color": dict(_STR, description="'#RRGGBB' (default black)"),
+                             "outline_only": _BOOL}, ["range"])},
     # --- writer ---
     {"name": "writer_get_text",
      "description": "Get the full body text of the active Writer document.",
@@ -1311,6 +1650,53 @@ TOOL_DEFS = [
                              "condition": dict(_STR, description="hide-when-true condition, e.g. '1==1'"),
                              "text": _STR, "visible": _BOOL},
                             ["name", "condition"])},
+    # --- writer paragraph / page / table styling ---
+    {"name": "writer_format_paragraph",
+     "description": "Paragraph formatting for Writer. Targets paragraphs matching 'search', or ALL body paragraphs if 'search' is omitted. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title').",
+     "inputSchema": _schema({"search": dict(_STR, description="format paragraphs containing this text; omit for all"),
+                             "match_case": _BOOL,
+                             "align": dict(_STR, enum=["left", "center", "right", "justify"]),
+                             "line_spacing_percent": dict(_INT, description="e.g. 100, 150, 200"),
+                             "space_above_mm": _NUM, "space_below_mm": _NUM,
+                             "indent_left_mm": _NUM, "indent_right_mm": _NUM,
+                             "first_line_indent_mm": _NUM,
+                             "style_name": dict(_STR, description="named paragraph style to apply")})},
+    {"name": "writer_set_page_style",
+     "description": "Page styling for Writer: paper size (a4/a5/a3/letter/legal, or width_mm+height_mm), orientation (portrait/landscape), page margins (mm), and column count. Applies to the document's page style.",
+     "inputSchema": _schema({"paper": dict(_STR, enum=["a4", "a5", "a3", "letter", "legal"]),
+                             "width_mm": _NUM, "height_mm": _NUM,
+                             "orientation": dict(_STR, enum=["portrait", "landscape"]),
+                             "margin_top_mm": _NUM, "margin_bottom_mm": _NUM,
+                             "margin_left_mm": _NUM, "margin_right_mm": _NUM,
+                             "columns": dict(_INT, description="number of text columns"),
+                             "style_name": dict(_STR, description="page style name (default: the one in use)")})},
+    {"name": "writer_set_header_footer",
+     "description": "Enable/disable and set the text of the Writer page header or footer.",
+     "inputSchema": _schema({"which": dict(_STR, enum=["header", "footer"]),
+                             "enable": dict(_BOOL, description="default true"),
+                             "text": _STR,
+                             "style_name": _STR})},
+    {"name": "writer_format_table",
+     "description": "Format a Writer table (by name or 0-based index): draw a full-grid border (width in pt + color) and/or style the header row (bold, background color, font color).",
+     "inputSchema": _schema({"name": dict(_STR, description="table name; or use index"),
+                             "index": dict(_INT, description="0-based table index (default 0)"),
+                             "border_width_pt": _NUM,
+                             "border_color": dict(_STR, description="'#RRGGBB'"),
+                             "header_bold": _BOOL,
+                             "header_background": dict(_STR, description="'#RRGGBB'"),
+                             "header_font_color": dict(_STR, description="'#RRGGBB'")})},
+    # --- form controls (buttons and other UI elements) ---
+    {"name": "insert_form_control",
+     "description": "Insert a form control (UI element) into the active Calc sheet or Writer document: a push button, checkbox, text field, label, or dropdown list box. Position and size in mm. For a button, 'url' makes it open a URL/dispatch command when clicked. For a listbox, 'items' are the dropdown entries.",
+     "inputSchema": _schema({"kind": dict(_STR, enum=["button", "checkbox", "textfield", "label", "listbox"]),
+                             "label": dict(_STR, description="caption (button/checkbox/label)"),
+                             "text": dict(_STR, description="default text (textfield)"),
+                             "items": {"type": "array", "items": _STR, "description": "dropdown entries (listbox)"},
+                             "url": dict(_STR, description="button target URL / dispatch command"),
+                             "name": dict(_STR, description="control name"),
+                             "x_mm": _NUM, "y_mm": _NUM,
+                             "width_mm": _NUM, "height_mm": _NUM},
+                            ["kind"])},
 ]
 
 

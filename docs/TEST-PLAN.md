@@ -48,7 +48,7 @@ config, and the DPAPI keystore (real encrypt/decrypt round-trip on Windows).
 ```powershell
 & "C:\Program Files\LibreOffice\program\python.exe" mcp\test_mcp_protocol.py
 ```
-PASS = `MCP handshake ok; tools/list has 44 tools (...); ping ok.`
+PASS = `MCP handshake ok; tools/list has 50 tools (...); ping ok.`
 
 ### 1c. Real-LibreOffice integration tests (headless, isolated profile)
 Each spins up its own throwaway headless LibreOffice, runs, and tears down. Run
@@ -64,12 +64,15 @@ powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests
 - `test_calc_uno` — read/select/write a range; None→"" coercion.
 - `test_writer_uno` — read selection, replace, multi-paragraph, insert-at-caret.
 - `test_mcp_tools` — the core MCP tool functions drive Calc (read/write/status).
-- `test_mcp_tools_extended` — the full 44-tool set: document lifecycle
+- `test_mcp_tools_extended` — the full 50-tool set: document lifecycle
   (create/open/save-as xlsx+docx/PDF export/close), Calc formulas, structure
   (insert/delete rows+columns, copy, clear, find&replace, used range), sheets,
-  formatting, merge, charts, selection, **conditional formatting + cell
-  comments**; Writer headings/outline, append, find&replace, format-matches,
-  tables, images, page breaks, **comments + conditional sections**.
+  formatting, merge, charts, selection, conditional formatting, cell comments,
+  **range borders**; Writer headings/outline, append, find&replace,
+  format-matches, tables, images, page breaks, comments, conditional sections,
+  **paragraph styling, page styling (size/orientation/margins/columns),
+  header/footer, table formatting**; and **form controls** (button/checkbox/…)
+  in both Calc and Writer.
 - `demo_mcp_client` — acts as an MCP client and drives LibreOffice via `tools/call`
   (reads A1:A3, writes B1:B3). Prints the JSON-RPC round-trip.
 
