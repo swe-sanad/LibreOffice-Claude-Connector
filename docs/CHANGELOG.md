@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hardening pass following an adversarial multi-agent code review (10 confirmed findings, all fixed and re-verified).**
+  - [src/calc_actions.py](../src/calc_actions.py) `_parse_json_lenient` now parses the
+    whole (fence-stripped) JSON reply first, falling back to bracket-span extraction only
+    if that fails — a valid grid with stray `{}`/`[]` in a cell value or surrounding
+    prose no longer fails to parse.
+  - [src/calc_actions.py](../src/calc_actions.py) `transform_range` caps the selection at
+    `MAX_CELLS` (5000 cells), raising `TransformError` before sending a whole-column
+    selection that would freeze the UI or blow the token budget; also raises a clear
+    `TransformError` when Claude's reply was truncated (`result.truncated`) instead of
+    parsing a partial grid.
+  - [src/uno_ui.py](../src/uno_ui.py) `run_with_progress` returns a `CANCELLED` sentinel
+    when the user dismisses the progress dialog mid-call; [src/connector.py](../src/connector.py)
+    checks for it on both the Calc-transform and Writer-rewrite paths instead of falling
+    through to a misleading "Unexpected error" message box.
+  - [src/uno_bridge.py](../src/uno_bridge.py) `get_calc_selection_range` now raises
+    `SelectionError` on a multi-range (Ctrl-selected) Calc selection instead of silently
+    operating on only the first contained range; added `range_cell_count` so
+    `connector.py` can enforce the selection-size cap before calling Claude.
+  - [src/writer_actions.py](../src/writer_actions.py) now appends a visible note to the
+    inserted text when Claude's reply was truncated (previously inserted silently with no
+    indication it was cut off).
+  - [src/connector.py](../src/connector.py) now passes the user's configured `max_tokens`
+    through to the Writer generate-at-caret path (previously hard-capped at 1024
+    regardless of settings).
+
+### Security
+
+- [src/keystore.py](../src/keystore.py) `_write_private` creates the API-key file with
+  mode `0o600` via `os.open` at creation time (instead of `chmod` after the fact), closing
+  the brief window on POSIX where the key file was world-readable between creation and
+  permission-tightening.
+- [src/config.py](../src/config.py) `load_config` now type-coerces and validates every
+  value read from disk, so a hand-edited config (e.g. `"timeout": "120"` as a string)
+  produces a graceful fallback to the default instead of a raw `TypeError` surfacing later.
+- [src/claude_client.py](../src/claude_client.py) rejects a non-HTTPS `base_url` (except
+  `localhost`, for local dev/testing) at construction time, so the API key can never be
+  sent in cleartext over the network; also honors a server `retry-after` header up to a
+  120s cap on 429 responses.
+- [ext/description.xml](../ext/description.xml) declares
+  `LibreOffice-minimal-version` 7.2 — the first LibreOffice release bundling Python 3.8 —
+  so the extension cannot install onto an older LibreOffice and fail at import time.
+- Found via an adversarial multi-agent code review; all 10 confirmed findings above are
+  fixed and re-verified: the full offline suite is **65 tests, all passing**, and the
+  Calc + Writer UNO integration tests and the installed-extension dispatch test all pass
+  against real LibreOffice 25.2.3.2.
+
 ### Added
 
 - **Phase 4-5: packaged, installable `.oxt` extension with in-app settings and secure

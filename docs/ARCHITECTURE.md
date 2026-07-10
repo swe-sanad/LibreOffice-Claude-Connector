@@ -82,10 +82,24 @@ or a `SheetCellRanges` (multiple disjoint ranges, e.g. a ctrl-click selection).
 
 - `SheetCell` → wrapped into a 1×1 `XCellRange` at that cell's address.
 - `SheetCellRange` → returned as-is.
-- `SheetCellRanges` → the **first** contained range is used (multi-range selections
-  beyond the first range are not yet supported).
+- `SheetCellRanges` (a multi-range/Ctrl-selected selection) → raises `SelectionError`
+  rather than silently transforming only the first contained range, since that would
+  otherwise write the result over the wrong cells with no indication anything was
+  skipped.
 - Anything else selected (a shape, a chart, ...) → `None`, and the caller
   (`transform_selection`) raises a `RuntimeError` asking the user to select cells first.
+
+`range_cell_count(cell_range)` reports the selection's cell count so `connector.py` can
+reject an oversized selection (see "Selection-size cap" below) before ever calling Claude.
+
+### Selection-size cap and truncation
+
+`calc_actions.transform_range` refuses a selection larger than `MAX_CELLS` (5000 cells)
+with an actionable `TransformError` — without this cap, a whole-column selection (~1M
+rows in Calc) would freeze the UI and blow the token budget. It also checks
+`result.truncated` (Claude's reply hit `max_tokens`) and raises rather than parsing a
+partial grid. On the Writer side, `writer_actions` appends a visible note to the inserted
+text when a reply was truncated, instead of inserting a silently-cut-off rewrite.
 
 ## Writer rewrite-selection / generate-at-caret (Phase 3)
 
@@ -237,6 +251,12 @@ If `parent_win` is `None` (headless), `run_with_progress` just calls `work()`
 synchronously — this is what the offline/dev paths and the extension-dispatch
 integration test rely on.
 
+**Cancellation:** if the user dismisses the progress dialog before the worker finishes,
+`run_with_progress` returns a `CANCELLED` sentinel rather than a result or letting an
+exception escape. `connector.py` checks for `uno_ui.CANCELLED` on both the Calc-transform
+and Writer-rewrite/generate paths and returns quietly instead of surfacing a misleading
+"Unexpected error" message box.
+
 ### UI (`src/uno_ui.py`)
 
 Built entirely from `com.sun.star.awt.UnoControlDialogModel` controls (no `.xdl`
@@ -260,6 +280,10 @@ those generic module names colliding with another extension's top-level modules.
 the packaged import (`from claudeconn import ...`) first, falling back to a flat
 import for local/dev runs where the helpers sit next to `connector.py` unpackaged.
 `Addons.xcu` scopes the "Claude" menu entry + toolbar button to Calc and Writer only.
+[ext/description.xml](../ext/description.xml) declares `LibreOffice-minimal-version`
+7.2 (the first LibreOffice release bundling Python 3.8), so the packaging manager
+refuses to install the extension onto an older LibreOffice rather than installing it and
+failing at import time.
 
 ### Configuration and key storage
 
@@ -267,8 +291,15 @@ import for local/dev runs where the helpers sit next to `connector.py` unpackage
 max_tokens, timeout, base_url, anthropic_version, ca_file) as JSON in a per-user
 directory (`%APPDATA%\LibreOffice-Claude-Connector\config.json` on Windows), merged
 over `DEFAULTS`; unknown keys on disk are ignored and a missing/corrupt file silently
-falls back to defaults. `client_kwargs(cfg)` maps that dict onto `ClaudeClient(...)`'s
+falls back to defaults. `load_config` type-coerces and validates every value read from
+disk, so a hand-edited config (e.g. a string `"timeout": "120"` instead of a number)
+falls back to the default for that key instead of surfacing a raw `TypeError` later when
+the value is used. `client_kwargs(cfg)` maps that dict onto `ClaudeClient(...)`'s
 constructor keywords.
+
+`ClaudeClient.__init__` rejects a non-HTTPS `base_url` (`localhost` is exempted, for
+local dev/testing) so the API key can never be sent in cleartext; `send()` honors a
+server `retry-after` header on 429 responses, capped at 120s.
 
 [src/keystore.py](../src/keystore.py) stores the Anthropic API key **separately from
 the JSON config, and never in plaintext in it**. `get_api_key()` resolves in order:
@@ -283,6 +314,10 @@ the JSON config, and never in plaintext in it**. `get_api_key()` resolves in ord
    - **Other OSes** — base64 only, in `apikey.plain` (`0600` where supported) — this
      is a documented, explicit limitation, **not** encryption; the env var is
      recommended there instead.
+
+`_write_private` creates the key file with mode `0o600` at creation time via `os.open`
+(rather than `open()` followed by a separate `chmod`), so there is no window on POSIX
+where the file is briefly world-readable between creation and permission-tightening.
 
 `set_api_key()` always clears the other format's file first, so switching platforms
 (or re-saving) never leaves a stale key file behind in the wrong format.
