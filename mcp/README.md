@@ -12,7 +12,7 @@ way Claude uses the Figma or Chrome MCP servers.
 - Live tool tests: `../tests/integration/test_mcp_tools.py` (core) and
   `../tests/integration/test_mcp_tools_extended.py` (full 37-tool sweep).
 
-## Tools (37)
+## Tools (44)
 
 **Status & selection**
 
@@ -54,6 +54,15 @@ way Claude uses the Figma or Chrome MCP servers.
 | `calc_create_chart` | Embedded chart (column, bar, line, pie, area, scatter) |
 | `calc_select_range` | Highlight a range in the GUI for the user |
 
+**Calc — conditional formatting & comments**
+
+| Tool | What it does |
+|---|---|
+| `calc_add_conditional_format` | Highlight cells meeting a condition (`>`,`<`,`between`,`formula`,…) with a color/bold style |
+| `calc_clear_conditional_formats` | Remove all conditional formats from a range |
+| `calc_add_comment` | Add/replace a cell comment (annotation) |
+| `calc_get_comments` | List cell comments (one sheet or all): `[{sheet, cell, author, text}]` |
+
 **Writer**
 
 | Tool | What it does |
@@ -69,8 +78,17 @@ way Claude uses the Figma or Chrome MCP servers.
 | `writer_insert_page_break` | Page break at the end |
 | `writer_get_outline` | The document's headings as `[{level, text}]` |
 
-Not yet covered: pivot tables (UNO DataPilot), Impress/Draw, conditional
-formatting, comments/track-changes. Ask if you need one of these next.
+**Writer — comments & conditional sections**
+
+| Tool | What it does |
+|---|---|
+| `writer_add_comment` | Add a comment, anchored to a searched string / the selection / the end |
+| `writer_get_comments` | List comments: `[{author, text, anchor, resolved}]` |
+| `writer_add_conditional_section` | Writer's analog of conditional formatting: a named text section hidden by a condition (evaluated by Writer's layout) or by `visible=false` |
+
+Not yet covered: pivot tables (UNO DataPilot), Impress/Draw, track-changes,
+Calc data-bar/color-scale/icon-set conditional formats (only value/formula
+conditions are supported). Ask if you need one of these next.
 
 ## Use it from Claude Code
 

@@ -28,7 +28,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.2.0"
+SERVER_VERSION = "0.3.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -207,6 +207,53 @@ def _append_paragraph(doc, style=None):
         cursor.collapseToEnd()
     cursor.ParaStyleName = style if style else "Standard"
     return text, cursor
+
+
+# Calc conditional-format operators -> com.sun.star.sheet.ConditionOperator names
+_COND_OPERATORS = {
+    "==": "EQUAL", "=": "EQUAL",
+    "!=": "NOT_EQUAL", "<>": "NOT_EQUAL",
+    ">": "GREATER", ">=": "GREATER_EQUAL",
+    "<": "LESS", "<=": "LESS_EQUAL",
+    "between": "BETWEEN", "not_between": "NOT_BETWEEN",
+    "formula": "FORMULA",
+}
+
+
+def _ensure_cell_style(doc, name, fmt):
+    """Create or update a Calc cell style with the given formatting (used as the
+    'apply this when true' target of a conditional format)."""
+    cell_styles = doc.getStyleFamilies().getByName("CellStyles")
+    if cell_styles.hasByName(name):
+        style = cell_styles.getByName(name)
+    else:
+        style = doc.createInstance("com.sun.star.style.CellStyle")
+        cell_styles.insertByName(name, style)
+    if "bold" in fmt:
+        style.CharWeight = 150.0 if fmt["bold"] else 100.0
+    if "italic" in fmt:
+        style.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
+                                      "ITALIC" if fmt["italic"] else "NONE")
+    if "font_color" in fmt:
+        style.CharColor = _hex_color(fmt["font_color"])
+    if "background_color" in fmt:
+        style.CellBackColor = _hex_color(fmt["background_color"])
+    return name
+
+
+def _cond_style_name(fmt):
+    """A deterministic style name so identical formatting reuses one style and
+    distinct formatting gets distinct styles."""
+    parts = ["ClaudeCF"]
+    if fmt.get("bold"):
+        parts.append("b")
+    if fmt.get("italic"):
+        parts.append("i")
+    if "background_color" in fmt:
+        parts.append("bg" + str(fmt["background_color"]).lstrip("#"))
+    if "font_color" in fmt:
+        parts.append("fg" + str(fmt["font_color"]).lstrip("#"))
+    return "_".join(parts)
 
 
 # --------------------------------------------------------------------------- #
@@ -651,8 +698,111 @@ def tool_calc_select_range(args):
 
 
 # --------------------------------------------------------------------------- #
+# Tools — Calc conditional formatting & comments
+# --------------------------------------------------------------------------- #
+
+def tool_calc_add_conditional_format(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+
+    op_key = str(args.get("operator", ">")).lower()
+    if op_key not in _COND_OPERATORS:
+        raise RuntimeError("operator must be one of %s" % sorted(_COND_OPERATORS))
+
+    fmt = {k: args[k] for k in ("bold", "italic", "font_color", "background_color")
+           if k in args}
+    if not fmt:
+        raise RuntimeError("Give at least one format to apply when the condition "
+                           "is true: background_color, font_color, bold, italic.")
+    style_name = args.get("style_name") or _cond_style_name(fmt)
+    _ensure_cell_style(doc, style_name, fmt)
+
+    conditions = rng.getPropertyValue("ConditionalFormat")
+    if args.get("replace_existing"):
+        conditions.clear()
+    op = _uno_enum("com.sun.star.sheet.ConditionOperator", _COND_OPERATORS[op_key])
+    entry = (
+        _pv("Operator", op),
+        _pv("Formula1", str(args.get("value", args.get("formula1", "")))),
+        _pv("Formula2", str(args.get("value2", args.get("formula2", "")))),
+        _pv("StyleName", style_name),
+    )
+    conditions.addNew(entry)
+    rng.setPropertyValue("ConditionalFormat", conditions)
+    return {"range": args["range"], "operator": op_key, "style": style_name,
+            "conditions": conditions.getCount()}
+
+
+def tool_calc_clear_conditional_formats(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    conditions = rng.getPropertyValue("ConditionalFormat")
+    removed = conditions.getCount()
+    conditions.clear()
+    rng.setPropertyValue("ConditionalFormat", conditions)
+    return {"range": args["range"], "cleared": removed}
+
+
+def _cell_addr_struct(sheet_index, col, row):
+    addr = _uno_struct("com.sun.star.table.CellAddress")
+    addr.Sheet = sheet_index
+    addr.Column = col
+    addr.Row = row
+    return addr
+
+
+def tool_calc_add_comment(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    cell = sheet.getCellRangeByName(args["cell"]).getRangeAddress()
+    annotations = sheet.getAnnotations()
+    # upsert: drop any existing comment on the same cell first
+    for i in range(annotations.getCount() - 1, -1, -1):
+        pos = annotations.getByIndex(i).getPosition()
+        if pos.Column == cell.StartColumn and pos.Row == cell.StartRow:
+            annotations.removeByIndex(i)
+    annotations.insertNew(_cell_addr_struct(cell.Sheet, cell.StartColumn,
+                                            cell.StartRow), args["text"])
+    return {"cell": args["cell"], "comment": args["text"]}
+
+
+def tool_calc_get_comments(args):
+    doc = _require_calc()
+    sheets = ([_resolve_sheet(doc, args["sheet"])]
+              if args.get("sheet") not in (None, "")
+              else [doc.getSheets().getByIndex(i)
+                    for i in range(doc.getSheets().getCount())])
+    out = []
+    for sheet in sheets:
+        annotations = sheet.getAnnotations()
+        for i in range(annotations.getCount()):
+            ann = annotations.getByIndex(i)
+            pos = ann.getPosition()
+            try:
+                text = ann.getString()
+            except Exception:
+                text = ""
+            out.append({"sheet": sheet.getName(),
+                        "cell": "%s%d" % (_col_letters(pos.Column), pos.Row + 1),
+                        "author": ann.getAuthor(), "text": text})
+    return {"comments": out}
+
+
+# --------------------------------------------------------------------------- #
 # Tools — Writer
 # --------------------------------------------------------------------------- #
+
+def tool_writer_get_text(_args):
+    doc = _require_writer()
+    return {"text": doc.getText().getString()}
+
+
+def tool_writer_replace_selection(args):
+    ub = _bridge()
+    doc = _require_writer()
+    text = args["text"]
 
 def tool_writer_get_text(_args):
     doc = _require_writer()
@@ -810,6 +960,92 @@ def tool_writer_get_outline(_args):
     return {"outline": outline}
 
 
+_ANNOTATION = "com.sun.star.text.TextField.Annotation"
+
+
+def tool_writer_add_comment(args):
+    ub = _bridge()
+    doc = _require_writer()
+    field = doc.createInstance(_ANNOTATION)
+    field.Author = args.get("author", "Claude")
+    field.Content = args["text"]
+
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findFirst(desc)
+        if found is None:
+            raise RuntimeError("search text not found: %r" % args["search"])
+        found.getText().insertTextContent(found, field, True)
+        return {"action": "comment_added", "anchored_to": args["search"]}
+
+    # else: anchor to the current selection, or at the end of the document
+    _t, has_selection = ub.get_writer_selection(doc)
+    if has_selection:
+        cursor = doc.getCurrentController().getViewCursor()
+        cursor.getText().insertTextContent(cursor, field, True)
+        return {"action": "comment_added", "anchored_to": "selection"}
+    text, cursor = _writer_end_cursor(doc)
+    text.insertTextContent(cursor, field, False)
+    return {"action": "comment_added", "anchored_to": "document_end"}
+
+
+def tool_writer_get_comments(_args):
+    doc = _require_writer()
+    out = []
+    enum = doc.getTextFields().createEnumeration()
+    while enum.hasMoreElements():
+        field = enum.nextElement()
+        if not field.supportsService(_ANNOTATION):
+            continue
+        entry = {"author": field.Author, "text": field.Content}
+        try:
+            entry["anchor"] = field.getAnchor().getString()
+        except Exception:
+            pass
+        try:
+            entry["resolved"] = bool(field.getPropertyValue("Resolved"))
+        except Exception:
+            pass
+        out.append(entry)
+    return {"comments": out}
+
+
+def tool_writer_add_conditional_section(args):
+    """Writer has no cell-style conditional formatting; its genuine analog is a
+    CONDITIONAL SECTION — a named block of text hidden/shown by a formula. The
+    section is hidden when `condition` evaluates TRUE (LibreOffice semantics)."""
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    doc = _require_writer()
+    name = args["name"]
+    if doc.getTextSections().hasByName(name):
+        raise RuntimeError("A section named %r already exists." % name)
+
+    text = doc.getText()
+    end = text.createTextCursorByRange(text.getEnd())
+    if text.getString() != "":
+        text.insertControlCharacter(end, PARAGRAPH_BREAK, False)
+        end.collapseToEnd()
+    anchor_start = text.createTextCursorByRange(end.getStart())
+    text.insertString(end, args.get("text", ""), False)
+
+    span = text.createTextCursorByRange(anchor_start)
+    span.gotoEndOfParagraph(True)
+
+    section = doc.createInstance("com.sun.star.text.TextSection")
+    section.setName(name)
+    section.Condition = args["condition"]
+    if "visible" in args:
+        section.IsVisible = bool(args["visible"])
+    text.insertTextContent(span, section, True)
+
+    applied = doc.getTextSections().getByName(name)
+    return {"section": name, "condition": args["condition"],
+            "currently_visible": bool(applied.IsCurrentlyVisible)}
+
+
 # --------------------------------------------------------------------------- #
 # Tool registry + JSON schemas
 # --------------------------------------------------------------------------- #
@@ -847,6 +1083,11 @@ TOOLS = {
     "calc_merge_cells": tool_calc_merge_cells,
     "calc_create_chart": tool_calc_create_chart,
     "calc_select_range": tool_calc_select_range,
+    # calc conditional formatting & comments
+    "calc_add_conditional_format": tool_calc_add_conditional_format,
+    "calc_clear_conditional_formats": tool_calc_clear_conditional_formats,
+    "calc_add_comment": tool_calc_add_comment,
+    "calc_get_comments": tool_calc_get_comments,
     # writer
     "writer_get_text": tool_writer_get_text,
     "writer_replace_selection": tool_writer_replace_selection,
@@ -858,6 +1099,10 @@ TOOLS = {
     "writer_insert_image": tool_writer_insert_image,
     "writer_insert_page_break": tool_writer_insert_page_break,
     "writer_get_outline": tool_writer_get_outline,
+    # writer comments & conditional sections
+    "writer_add_comment": tool_writer_add_comment,
+    "writer_get_comments": tool_writer_get_comments,
+    "writer_add_conditional_section": tool_writer_add_conditional_section,
 }
 
 _STR = {"type": "string"}
@@ -991,6 +1236,29 @@ TOOL_DEFS = [
     {"name": "calc_select_range",
      "description": "Select a range in the LibreOffice window (activates the sheet and highlights the range for the user).",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET}, ["range"])},
+    # --- calc conditional formatting & comments ---
+    {"name": "calc_add_conditional_format",
+     "description": "Add a conditional format to a range: when a cell meets the condition, a style with the given formatting is applied. Operators: '>', '>=', '<', '<=', '==', '!=', 'between' (value+value2), 'not_between', 'formula' (value is a formula that must be non-zero). Give at least one of background_color/font_color/bold/italic. Stacks with existing conditions unless replace_existing=true.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "operator": dict(_STR, enum=[">", ">=", "<", "<=", "==", "!=", "between", "not_between", "formula"]),
+                             "value": dict(description="threshold / Formula1 (number, or a formula for operator 'formula')"),
+                             "value2": dict(description="upper bound for 'between'/'not_between'"),
+                             "background_color": dict(_STR, description="'#RRGGBB' applied when true"),
+                             "font_color": dict(_STR, description="'#RRGGBB' applied when true"),
+                             "bold": _BOOL, "italic": _BOOL,
+                             "style_name": dict(_STR, description="reuse/name the applied cell style (optional)"),
+                             "replace_existing": dict(_BOOL, description="clear existing conditions on the range first")},
+                            ["range", "value"])},
+    {"name": "calc_clear_conditional_formats",
+     "description": "Remove all conditional formats from a Calc range.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET}, ["range"])},
+    {"name": "calc_add_comment",
+     "description": "Add (or replace) a cell comment/annotation on a single cell.",
+     "inputSchema": _schema({"cell": dict(_STR, description="a single cell, e.g. 'B2'"),
+                             "text": _STR, "sheet": _SHEET}, ["cell", "text"])},
+    {"name": "calc_get_comments",
+     "description": "List cell comments on one sheet, or across all sheets if 'sheet' is omitted: [{sheet, cell, author, text}].",
+     "inputSchema": _schema({"sheet": _SHEET})},
     # --- writer ---
     {"name": "writer_get_text",
      "description": "Get the full body text of the active Writer document.",
@@ -1026,6 +1294,23 @@ TOOL_DEFS = [
     {"name": "writer_get_outline",
      "description": "List the document's headings as an outline: [{level, text}, ...].",
      "inputSchema": _schema()},
+    # --- writer comments & conditional sections ---
+    {"name": "writer_add_comment",
+     "description": "Add a comment/annotation. Anchors to the first match of 'search' if given, else to the current selection, else at the document end.",
+     "inputSchema": _schema({"text": _STR,
+                             "search": dict(_STR, description="anchor the comment to the first occurrence of this text"),
+                             "match_case": _BOOL,
+                             "author": dict(_STR, description="comment author (default 'Claude')")},
+                            ["text"])},
+    {"name": "writer_get_comments",
+     "description": "List the document's comments: [{author, text, anchor, resolved}].",
+     "inputSchema": _schema()},
+    {"name": "writer_add_conditional_section",
+     "description": "Writer's analog of conditional formatting: append text wrapped in a named CONDITIONAL SECTION that is HIDDEN when 'condition' evaluates true (LibreOffice field syntax, e.g. '1==1', 'user_field==\"x\"'). The condition is evaluated by Writer's layout when the document is viewed/printed. Set visible=false to hide the section immediately regardless of condition.",
+     "inputSchema": _schema({"name": dict(_STR, description="unique section name"),
+                             "condition": dict(_STR, description="hide-when-true condition, e.g. '1==1'"),
+                             "text": _STR, "visible": _BOOL},
+                            ["name", "condition"])},
 ]
 
 

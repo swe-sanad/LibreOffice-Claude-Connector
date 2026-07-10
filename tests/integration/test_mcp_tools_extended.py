@@ -124,6 +124,32 @@ def check_calc(tmpdir):
     _assert(got["range"]["startColumn"] == 1 and got["range"]["endRow"] == 2, got)
     print("PASS: calc_select_range + get_current_selection agree")
 
+    # conditional formatting: highlight qty > 7 (nails=10 qualifies, screws=5 no)
+    cf = server.tool_calc_add_conditional_format(
+        {"range": "B2:B3", "operator": ">", "value": 7,
+         "background_color": "#FF0000", "bold": True})
+    _assert(cf["conditions"] >= 1, cf)
+    b2 = doc.getSheets().getByIndex(0).getCellRangeByName("B2:B3")
+    _assert(b2.getPropertyValue("ConditionalFormat").getCount() == 1,
+            "conditional format not attached")
+    _assert(doc.getStyleFamilies().getByName("CellStyles").hasByName(cf["style"]),
+            "conditional cell style not created")
+    print("PASS: calc_add_conditional_format (attached + style created)")
+    cleared = server.tool_calc_clear_conditional_formats({"range": "B2:B3"})
+    _assert(b2.getPropertyValue("ConditionalFormat").getCount() == 0, cleared)
+    print("PASS: calc_clear_conditional_formats")
+
+    # comments / annotations
+    server.tool_calc_add_comment({"cell": "A1", "text": "header row"})
+    server.tool_calc_add_comment({"cell": "A1", "text": "revised note"})  # upsert
+    anns = doc.getSheets().getByIndex(0).getAnnotations()
+    _assert(anns.getCount() == 1, "expected 1 annotation (upsert), got %d" % anns.getCount())
+    got_comments = server.tool_calc_get_comments({})
+    _assert(got_comments["comments"] == [{"sheet": doc.getSheets().getByIndex(0).getName(),
+                                          "cell": "A1", "author": got_comments["comments"][0]["author"],
+                                          "text": "revised note"}], got_comments)
+    print("PASS: calc_add_comment (upsert) + calc_get_comments")
+
     # lifecycle: save as xlsx, export pdf, close
     xlsx = os.path.join(tmpdir, "mcp_test.xlsx")
     pdf = os.path.join(tmpdir, "mcp_test.pdf")
@@ -194,6 +220,35 @@ def check_writer(tmpdir):
     server.tool_writer_append_text({"text": "Page two."})
     print("PASS: writer_insert_page_break")
 
+    # comments anchored to a search string
+    server.tool_writer_add_comment({"text": "check this figure",
+                                    "search": "gamma", "author": "QA"})
+    fields = doc.getTextFields().createEnumeration()
+    ann_count = 0
+    while fields.hasMoreElements():
+        f = fields.nextElement()
+        if f.supportsService("com.sun.star.text.TextField.Annotation"):
+            ann_count += 1
+    _assert(ann_count == 1, "expected 1 Writer annotation, got %d" % ann_count)
+    got_c = server.tool_writer_get_comments({})
+    _assert(len(got_c["comments"]) == 1 and got_c["comments"][0]["text"] == "check this figure"
+            and got_c["comments"][0]["author"] == "QA", got_c)
+    print("PASS: writer_add_comment (anchored) + writer_get_comments")
+
+    # conditional section: the Condition is stored on the section; Writer's
+    # layout evaluates it when the doc is viewed/printed (not observable headless).
+    sec = server.tool_writer_add_conditional_section(
+        {"name": "DraftOnly", "condition": "1==1", "text": "conditional note"})
+    applied = doc.getTextSections().getByName("DraftOnly")
+    _assert(applied.Condition == "1==1", "condition not stored: %r" % applied.Condition)
+    print("PASS: writer_add_conditional_section (condition stored)")
+    # explicit visible=false hides immediately (observable headless)
+    sec2 = server.tool_writer_add_conditional_section(
+        {"name": "HiddenNote", "condition": "", "text": "hidden note",
+         "visible": False})
+    _assert(sec2["currently_visible"] is False, "explicit hide should hide: %r" % sec2)
+    print("PASS: writer_add_conditional_section (visible=false hides)")
+
     docx = os.path.join(tmpdir, "mcp_test.docx")
     pdf = os.path.join(tmpdir, "mcp_writer.pdf")
     server.tool_save_document({"path": docx})
@@ -212,7 +267,7 @@ def main():
     check_calc(tmpdir)
     print()
     check_writer(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (37-tool server drives real "
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (44-tool server drives real "
           "LibreOffice)")
     return 0
 
