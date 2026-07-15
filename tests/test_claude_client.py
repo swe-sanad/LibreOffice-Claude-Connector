@@ -183,24 +183,27 @@ class TestSendSuccess(unittest.TestCase):
 # --------------------------------------------------------------------------- #
 
 class TestErrors(unittest.TestCase):
-    def test_401_maps_to_auth_error_no_retry(self):
+    # Behavior, not exception taxonomy: assert the retry count + the surfaced
+    # message. All failures raise ClaudeError with a status-specific message.
+    def test_401_not_retried(self):
         client = _client(max_retries=3)
         opener = mock.Mock(side_effect=_http_error(401, "authentication_error", "bad key"))
         with mock.patch.object(cc.urllib.request, "urlopen", opener):
-            with self.assertRaises(cc.ClaudeAuthError):
+            with self.assertRaises(cc.ClaudeError) as ctx:
                 client.send(prompt="hi")
         self.assertEqual(opener.call_count, 1)  # auth errors are not retried
+        self.assertIn("Authentication failed (HTTP 401)", str(ctx.exception))
 
-    def test_429_retries_then_raises_rate_limit(self):
+    def test_429_retries_then_raises(self):
         sleep = _SleepSpy()
         client = _client(max_retries=2, sleep=sleep)
         opener = mock.Mock(side_effect=_http_error(429, "rate_limit_error", "slow", retry_after=0))
         with mock.patch.object(cc.urllib.request, "urlopen", opener):
-            with self.assertRaises(cc.ClaudeRateLimitError) as ctx:
+            with self.assertRaises(cc.ClaudeError) as ctx:
                 client.send(prompt="hi")
         self.assertEqual(opener.call_count, 3)      # initial + 2 retries
         self.assertEqual(len(sleep.calls), 2)       # slept between retries
-        self.assertEqual(ctx.exception.retry_after, 0.0)
+        self.assertIn("Rate limited (HTTP 429)", str(ctx.exception))
 
     def test_500_retries_then_succeeds(self):
         client = _client(max_retries=2)
@@ -213,20 +216,20 @@ class TestErrors(unittest.TestCase):
         self.assertEqual(result.text, "Hello world")
         self.assertEqual(opener.call_count, 2)
 
-    def test_400_maps_to_api_error(self):
+    def test_400_surfaces_status_in_message(self):
         client = _client()
         opener = mock.Mock(side_effect=_http_error(400, "invalid_request_error", "nope"))
         with mock.patch.object(cc.urllib.request, "urlopen", opener):
-            with self.assertRaises(cc.ClaudeAPIError) as ctx:
+            with self.assertRaises(cc.ClaudeError) as ctx:
                 client.send(prompt="hi")
-        self.assertEqual(ctx.exception.status, 400)
-        self.assertEqual(ctx.exception.error_type, "invalid_request_error")
+        self.assertIn("HTTP 400", str(ctx.exception))
+        self.assertIn("nope", str(ctx.exception))
 
     def test_network_error_retries_then_raises(self):
         client = _client(max_retries=1)
         opener = mock.Mock(side_effect=urllib.error.URLError("no route"))
         with mock.patch.object(cc.urllib.request, "urlopen", opener):
-            with self.assertRaises(cc.ClaudeNetworkError):
+            with self.assertRaises(cc.ClaudeError):
                 client.send(prompt="hi")
         self.assertEqual(opener.call_count, 2)  # initial + 1 retry
 
