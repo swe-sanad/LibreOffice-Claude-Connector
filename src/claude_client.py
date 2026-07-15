@@ -42,13 +42,8 @@ __all__ = [
     "DEFAULT_MODEL",
     "ClaudeError",
     "ClaudeConfigError",
-    "ClaudeAuthError",
-    "ClaudeRateLimitError",
-    "ClaudeAPIError",
-    "ClaudeNetworkError",
     "ClaudeResult",
     "ClaudeClient",
-    "extract_text",
 ]
 
 # --------------------------------------------------------------------------- #
@@ -77,48 +72,16 @@ _LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 # Errors
 # --------------------------------------------------------------------------- #
 
+# ponytail: one error type + a config-error subclass the caller catches distinctly.
+# Auth/rate-limit/api/network all raise ClaudeError with a specific message (the
+# only thing any caller reads). Add typed subclasses back when a caller actually
+# branches on the error kind — nothing does today.
 class ClaudeError(Exception):
     """Base class for every error raised by this module."""
 
 
 class ClaudeConfigError(ClaudeError):
     """The client was called with invalid/missing configuration (e.g. no key)."""
-
-
-class ClaudeAuthError(ClaudeError):
-    """Authentication/permission failure (HTTP 401 / 403)."""
-
-
-class ClaudeRateLimitError(ClaudeError):
-    """Rate limited (HTTP 429) and retries were exhausted.
-
-    ``retry_after`` is the server-suggested wait in seconds, if provided.
-    """
-
-    def __init__(self, message: str, retry_after: Optional[float] = None) -> None:
-        super().__init__(message)
-        self.retry_after = retry_after
-
-
-class ClaudeAPIError(ClaudeError):
-    """A non-success HTTP response that is not auth/rate-limit.
-
-    Carries the HTTP ``status`` and the Anthropic ``error_type`` when available.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        status: Optional[int] = None,
-        error_type: Optional[str] = None,
-    ) -> None:
-        super().__init__(message)
-        self.status = status
-        self.error_type = error_type
-
-
-class ClaudeNetworkError(ClaudeError):
-    """DNS / connection / TLS / timeout failure — no HTTP response was received."""
 
 
 # --------------------------------------------------------------------------- #
@@ -212,10 +175,6 @@ class ClaudeClient:
         timeout would hang LibreOffice forever).
     max_retries:
         Number of *additional* attempts on transient failures.
-    ca_file:
-        Optional path to a CA bundle (e.g. a vendored ``certifi`` ``cacert.pem``)
-        for environments whose Python cannot see the OS trust store or that sit
-        behind a TLS-inspecting proxy. ``None`` uses the system trust store.
     sleep:
         Injected sleep function (defaults to :func:`time.sleep`); overridden in
         tests so retries do not actually block.
@@ -229,7 +188,6 @@ class ClaudeClient:
         anthropic_version: str = DEFAULT_ANTHROPIC_VERSION,
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
-        ca_file: Optional[str] = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not api_key or not str(api_key).strip():
@@ -247,12 +205,11 @@ class ClaudeClient:
         self.timeout = float(timeout)
         self.max_retries = int(max_retries)
         self._sleep = sleep
-        # Build the TLS context once. On Windows this loads the OS trust store;
-        # api.anthropic.com chains to a public root, so this "just works".
-        if ca_file:
-            self._ssl_context = ssl.create_default_context(cafile=ca_file)
-        else:
-            self._ssl_context = ssl.create_default_context()
+        # Build the TLS context once from the OS trust store; api.anthropic.com
+        # chains to a public root, so this "just works".
+        # ponytail: system CA store only; add a ca_file arg if a TLS-inspecting
+        # proxy ever needs a custom bundle.
+        self._ssl_context = ssl.create_default_context()
 
     # -- public API -------------------------------------------------------- #
 
@@ -265,7 +222,6 @@ class ClaudeClient:
         model: Optional[str] = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         temperature: Optional[float] = None,
-        stop_sequences: Optional[Sequence[str]] = None,
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> ClaudeResult:
         """Send a single (multi-turn capable) request and return a result.
@@ -291,8 +247,6 @@ class ClaudeClient:
             body["system"] = system
         if temperature is not None:
             body["temperature"] = temperature
-        if stop_sequences:
-            body["stop_sequences"] = list(stop_sequences)
         if extra_body:
             body.update(extra_body)
 
@@ -337,7 +291,7 @@ class ClaudeClient:
 
             except urllib.error.HTTPError as exc:
                 status = exc.code
-                error_type, message = _read_http_error(exc)
+                message = _read_http_error(exc)
                 retry_after = _coerce_retry_after(exc.headers.get("retry-after"))
 
                 if status in _RETRYABLE_STATUS and attempt < self.max_retries:
@@ -346,17 +300,15 @@ class ClaudeClient:
                     continue
 
                 if status in (401, 403):
-                    raise ClaudeAuthError(
+                    raise ClaudeError(
                         "Authentication failed (HTTP %s): %s" % (status, message)
                     ) from exc
                 if status == 429:
-                    raise ClaudeRateLimitError(
-                        "Rate limited (HTTP 429): %s" % message, retry_after
+                    raise ClaudeError(
+                        "Rate limited (HTTP 429): %s" % message
                     ) from exc
-                raise ClaudeAPIError(
-                    "Claude API error (HTTP %s): %s" % (status, message),
-                    status=status,
-                    error_type=error_type,
+                raise ClaudeError(
+                    "Claude API error (HTTP %s): %s" % (status, message)
                 ) from exc
 
             except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
@@ -365,20 +317,19 @@ class ClaudeClient:
                     attempt += 1
                     continue
                 reason = getattr(exc, "reason", exc)
-                raise ClaudeNetworkError(
+                raise ClaudeError(
                     "Network/TLS error contacting Claude API: %s" % (reason,)
                 ) from exc
 
 
-def _read_http_error(exc: urllib.error.HTTPError) -> "tuple[Optional[str], str]":
-    """Best-effort parse of an Anthropic error body -> (error_type, message)."""
+def _read_http_error(exc: urllib.error.HTTPError) -> str:
+    """Best-effort parse of an Anthropic error body -> a human message."""
     try:
         body = exc.read().decode("utf-8", "replace")
     except Exception:  # noqa: BLE001 - defensive; never mask the original error
-        return None, str(exc)
+        return str(exc)
     try:
         parsed = json.loads(body)
-        err = parsed.get("error") or {}
-        return err.get("type"), err.get("message") or body
+        return (parsed.get("error") or {}).get("message") or body
     except (ValueError, AttributeError):
-        return None, body or str(exc)
+        return body or str(exc)

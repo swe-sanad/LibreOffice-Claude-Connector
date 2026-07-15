@@ -23,8 +23,6 @@ DEFAULTS: Dict[str, Any] = {
     "max_tokens": None,                  # None -> per-action default
     "timeout": 120.0,                    # seconds; never None (would hang the UI)
     "base_url": "https://api.anthropic.com/v1/messages",
-    "anthropic_version": "2023-06-01",
-    "ca_file": None,                     # optional CA bundle path (proxies)
 }
 
 # A small, curated model menu for the settings UI (the field stays free-text).
@@ -74,7 +72,7 @@ def _coerce(key: str, value: Any) -> Any:
             return int(value)
         except (TypeError, ValueError):
             return None
-    # string-valued keys: model, base_url, anthropic_version, ca_file
+    # string-valued keys: model, base_url
     return value if isinstance(value, str) else default
 
 
@@ -111,7 +109,5 @@ def client_kwargs(cfg: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "model": cfg.get("model") or DEFAULTS["model"],
         "base_url": cfg.get("base_url") or DEFAULTS["base_url"],
-        "anthropic_version": cfg.get("anthropic_version") or DEFAULTS["anthropic_version"],
         "timeout": cfg.get("timeout") or DEFAULTS["timeout"],
-        "ca_file": cfg.get("ca_file"),
     }
