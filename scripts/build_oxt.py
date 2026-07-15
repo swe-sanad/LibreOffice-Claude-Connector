@@ -30,7 +30,7 @@ ROOT_COMPONENTS = ["connector", "sidebar_panel"]
 
 # Helper modules bundled as the `claudeconn` package (imported by connector.py).
 PACKAGE_MODULES = [
-    "claude_client", "calc_actions", "writer_actions",
+    "claude_client", "providers", "calc_actions", "writer_actions",
     "uno_bridge", "config", "keystore", "uno_ui",
 ]
 

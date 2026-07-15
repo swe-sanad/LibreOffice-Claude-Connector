@@ -106,47 +106,66 @@ def prompt_instruction(ctx, parent_win, title, label,
 
 
 def settings_dialog(ctx, parent_win, cfg, has_key,
-                    model_choices=("claude-haiku-4-5", "claude-sonnet-5", "claude-opus-4-8")
-                    ) -> Optional[Tuple[Optional[str], str]]:
-    """Model + API-key settings. Returns ``(new_key_or_None, model_str)`` on
-    Save, else ``None``. A blank key field means "keep the existing key"."""
+                    model_choices=("claude-haiku-4-5", "claude-sonnet-5", "claude-opus-4-8"),
+                    provider_choices=("anthropic", "openai_compatible")
+                    ) -> Optional[Tuple[Optional[str], str, str, str]]:
+    """Provider + model + endpoint + API-key settings. Returns
+    ``(new_key_or_None, model, provider, endpoint)`` on Save, else ``None``.
+    A blank key means "keep the existing key"."""
     current_model = cfg.get("model", "claude-sonnet-5")
+    current_provider = cfg.get("provider", "anthropic")
+    current_endpoint = cfg.get("base_url", "")
     key_hint = "•••• stored" if has_key else "(none set)"
 
-    model = _new_dialog_model(ctx, 260, 150, "Claude Connector — Settings")
-    _add(model, "FixedText", "l1", PositionX=8, PositionY=8, Width=90, Height=12,
+    model = _new_dialog_model(ctx, 264, 188, "Claude Connector — Settings")
+    _add(model, "FixedText", "l0", PositionX=8, PositionY=10, Width=88, Height=12,
+         Label="Provider:")
+    prov = _add(model, "ComboBox", "provider", PositionX=100, PositionY=8,
+                Width=156, Height=14, Dropdown=True, Text=current_provider)
+    prov.StringItemList = tuple(provider_choices)
+
+    _add(model, "FixedText", "l1", PositionX=8, PositionY=32, Width=88, Height=12,
          Label="Model:")
-    combo = _add(model, "ComboBox", "model", PositionX=100, PositionY=6,
-                 Width=152, Height=14, Dropdown=True, Text=current_model)
+    combo = _add(model, "ComboBox", "model", PositionX=100, PositionY=30,
+                 Width=156, Height=14, Dropdown=True, Text=current_model)
     combo.StringItemList = tuple(model_choices)
 
-    _add(model, "FixedText", "l2", PositionX=8, PositionY=32, Width=90, Height=12,
-         Label="Anthropic API key:")
-    _add(model, "FixedText", "hint", PositionX=100, PositionY=32, Width=152,
-         Height=12, Label="current: %s" % key_hint)
-    _add(model, "Edit", "key", PositionX=100, PositionY=48, Width=152, Height=14,
-         EchoChar=ord("*"))
-    _add(model, "FixedText", "l3", PositionX=8, PositionY=70, Width=244, Height=40,
-         MultiLine=True,
-         Label=("Leave the key blank to keep the stored one. The key is stored "
-                "encrypted per-user (Windows DPAPI); it is never written to the "
-                "config file."))
+    _add(model, "FixedText", "l2", PositionX=8, PositionY=56, Width=88, Height=12,
+         Label="Endpoint (base URL):")
+    _add(model, "Edit", "endpoint", PositionX=100, PositionY=54, Width=156,
+         Height=14, Text=current_endpoint)
 
-    _add(model, "Button", "save", PositionX=148, PositionY=128, Width=50,
+    _add(model, "FixedText", "l3", PositionX=8, PositionY=80, Width=88, Height=12,
+         Label="API key:")
+    _add(model, "FixedText", "hint", PositionX=100, PositionY=80, Width=156,
+         Height=12, Label="current: %s" % key_hint)
+    _add(model, "Edit", "key", PositionX=100, PositionY=94, Width=156, Height=14,
+         EchoChar=ord("*"))
+    _add(model, "FixedText", "l4", PositionX=8, PositionY=116, Width=248, Height=44,
+         MultiLine=True,
+         Label=("Leave the key blank to keep the stored one (encrypted per-user via "
+                "Windows DPAPI; never in the config file). Local providers "
+                "(Ollama/LM Studio) need no key — set the endpoint to e.g. "
+                "http://localhost:11434/v1."))
+
+    _add(model, "Button", "save", PositionX=150, PositionY=166, Width=50,
          Height=16, Label="Save", PushButtonType=1, DefaultButton=True)
-    _add(model, "Button", "cancel", PositionX=202, PositionY=128, Width=50,
+    _add(model, "Button", "cancel", PositionX=206, PositionY=166, Width=50,
          Height=16, Label="Cancel", PushButtonType=2)
 
     dialog = _show_dialog(ctx, model, parent_win)
     try:
         pressed = dialog.execute()
         chosen_model = dialog.getControl("model").getModel().Text.strip()
+        chosen_provider = dialog.getControl("provider").getModel().Text.strip()
+        endpoint = dialog.getControl("endpoint").getModel().Text.strip()
         key_value = dialog.getControl("key").getModel().Text.strip()
     finally:
         dialog.dispose()
     if pressed != 1:
         return None
-    return (key_value or None), (chosen_model or current_model)
+    return ((key_value or None), (chosen_model or current_model),
+            (chosen_provider or current_provider), endpoint)
 
 
 # --------------------------------------------------------------------------- #

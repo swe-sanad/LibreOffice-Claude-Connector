@@ -32,16 +32,21 @@ class TestConfig(unittest.TestCase):
         cfg = cfgmod.load_config(self.base)
         self.assertEqual(cfg["model"], cfgmod.DEFAULTS["model"])
         self.assertEqual(cfg["timeout"], 120.0)
+        self.assertEqual(cfg["provider"], "anthropic")   # default provider
 
     def test_save_then_load_roundtrip(self):
         cfg = cfgmod.load_config(self.base)
         cfg["model"] = "claude-opus-4-8"
         cfg["temperature"] = 0.3
+        cfg["provider"] = "openai_compatible"
+        cfg["base_url"] = "http://localhost:11434/v1"
         path = cfgmod.save_config(cfg, self.base)
         self.assertTrue(os.path.exists(path))
         again = cfgmod.load_config(self.base)
         self.assertEqual(again["model"], "claude-opus-4-8")
         self.assertEqual(again["temperature"], 0.3)
+        self.assertEqual(again["provider"], "openai_compatible")
+        self.assertEqual(again["base_url"], "http://localhost:11434/v1")
 
     def test_unknown_keys_ignored(self):
         cfgmod.save_config({"model": "claude-sonnet-5", "evil": "x"}, self.base)
