@@ -153,6 +153,51 @@ def _coerce_retry_after(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _backoff_delay(attempt: int, retry_after: Optional[float]) -> float:
+    if retry_after is not None:
+        return min(retry_after, _MAX_RETRY_AFTER)
+    return min(2.0 ** attempt, _MAX_BACKOFF_SECONDS)
+
+
+def _post_json(url, headers, body, *, ssl_context, timeout, max_retries, sleep):
+    """POST a JSON body with retries; return the parsed response dict.
+
+    Shared transport for every provider client (Anthropic + OpenAI-compatible):
+    same stdlib urllib call, retry policy, and error->ClaudeError mapping. Messages
+    are provider-neutral so both clients reuse them verbatim.
+    """
+    data = json.dumps(body).encode("utf-8")
+    attempt = 0
+    while True:
+        request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=timeout, context=ssl_context) as response:
+                charset = response.headers.get_content_charset() or "utf-8"
+                return json.loads(response.read().decode(charset))
+
+        except urllib.error.HTTPError as exc:
+            status = exc.code
+            message = _read_http_error(exc)
+            retry_after = _coerce_retry_after(exc.headers.get("retry-after"))
+            if status in _RETRYABLE_STATUS and attempt < max_retries:
+                sleep(_backoff_delay(attempt + 1, retry_after))
+                attempt += 1
+                continue
+            if status in (401, 403):
+                raise ClaudeError("Authentication failed (HTTP %s): %s" % (status, message)) from exc
+            if status == 429:
+                raise ClaudeError("Rate limited (HTTP 429): %s" % message) from exc
+            raise ClaudeError("API error (HTTP %s): %s" % (status, message)) from exc
+
+        except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+            if attempt < max_retries:
+                sleep(_backoff_delay(attempt + 1, None))
+                attempt += 1
+                continue
+            reason = getattr(exc, "reason", exc)
+            raise ClaudeError("Network/TLS error: %s" % (reason,)) from exc
+
+
 # --------------------------------------------------------------------------- #
 # Client
 # --------------------------------------------------------------------------- #
@@ -270,56 +315,11 @@ class ClaudeClient:
             "anthropic-version": self.anthropic_version,
         }
 
-    def _backoff_delay(self, attempt: int, retry_after: Optional[float]) -> float:
-        if retry_after is not None:
-            return min(retry_after, _MAX_RETRY_AFTER)
-        return min(2.0 ** attempt, _MAX_BACKOFF_SECONDS)
-
     def _request(self, body: Dict[str, Any]) -> Dict[str, Any]:
-        data = json.dumps(body).encode("utf-8")
-        attempt = 0
-        while True:
-            request = urllib.request.Request(
-                self.base_url, data=data, headers=self._headers(), method="POST"
-            )
-            try:
-                with urllib.request.urlopen(
-                    request, timeout=self.timeout, context=self._ssl_context
-                ) as response:
-                    charset = response.headers.get_content_charset() or "utf-8"
-                    return json.loads(response.read().decode(charset))
-
-            except urllib.error.HTTPError as exc:
-                status = exc.code
-                message = _read_http_error(exc)
-                retry_after = _coerce_retry_after(exc.headers.get("retry-after"))
-
-                if status in _RETRYABLE_STATUS and attempt < self.max_retries:
-                    self._sleep(self._backoff_delay(attempt + 1, retry_after))
-                    attempt += 1
-                    continue
-
-                if status in (401, 403):
-                    raise ClaudeError(
-                        "Authentication failed (HTTP %s): %s" % (status, message)
-                    ) from exc
-                if status == 429:
-                    raise ClaudeError(
-                        "Rate limited (HTTP 429): %s" % message
-                    ) from exc
-                raise ClaudeError(
-                    "Claude API error (HTTP %s): %s" % (status, message)
-                ) from exc
-
-            except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
-                if attempt < self.max_retries:
-                    self._sleep(self._backoff_delay(attempt + 1, None))
-                    attempt += 1
-                    continue
-                reason = getattr(exc, "reason", exc)
-                raise ClaudeError(
-                    "Network/TLS error contacting Claude API: %s" % (reason,)
-                ) from exc
+        return _post_json(
+            self.base_url, self._headers(), body,
+            ssl_context=self._ssl_context, timeout=self.timeout,
+            max_retries=self.max_retries, sleep=self._sleep)
 
 
 def _read_http_error(exc: urllib.error.HTTPError) -> str:

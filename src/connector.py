@@ -31,9 +31,11 @@ try:                                   # packaged layout: pythonpath/claudeconn/
     from claudeconn import (config, keystore, uno_bridge,
                             calc_actions, writer_actions, uno_ui)
     from claudeconn.claude_client import ClaudeClient, ClaudeError, ClaudeConfigError
+    from claudeconn.providers import OpenAICompatibleClient
 except ImportError:                    # flat layout (dev / a plain scripts dir)
     import config, keystore, uno_bridge, calc_actions, writer_actions, uno_ui
     from claude_client import ClaudeClient, ClaudeError, ClaudeConfigError
+    from providers import OpenAICompatibleClient
 
 
 IMPL_NAME = "com.swepioneers.claudeconnector.Handler"
@@ -111,12 +113,17 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
         return self.frame.getController().getModel() if self.frame else None
 
     def _make_client(self):
+        cfg = config.load_config()
         key = keystore.get_api_key()
+        if cfg.get("provider") == "openai_compatible":
+            # Local servers (Ollama/LM Studio) need no key; cloud ones use it as a
+            # bearer token. Either way, don't demand an Anthropic key.
+            client = OpenAICompatibleClient(api_key=key or "", **config.client_kwargs(cfg))
+            return client, cfg
         if not key:
             raise ClaudeConfigError(
                 "No Anthropic API key is set. Open 'Claude > Settings...' and "
                 "paste your API key (it is stored encrypted on this machine).")
-        cfg = config.load_config()
         client = ClaudeClient(api_key=key, **config.client_kwargs(cfg))
         return client, cfg
 
@@ -203,8 +210,15 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
             self.ctx, win, cfg, keystore.has_stored_key())
         if result is None:
             return
-        new_key, new_model = result
+        new_key, new_model, new_provider, endpoint = result
         cfg["model"] = new_model or cfg.get("model")
+        cfg["provider"] = new_provider if new_provider in config.PROVIDERS else "anthropic"
+        # If they switched to a local/OpenAI provider but left the Anthropic
+        # endpoint, give them a working Ollama default instead of a dead URL.
+        if cfg["provider"] == "openai_compatible" and (
+                not endpoint or endpoint == config.DEFAULTS["base_url"]):
+            endpoint = config.DEFAULT_OPENAI_BASE_URL
+        cfg["base_url"] = endpoint or config.DEFAULTS["base_url"]
         config.save_config(cfg)
         if new_key:
             keystore.set_api_key(new_key)

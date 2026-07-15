@@ -251,13 +251,11 @@ class TestBaseUrlGuard(unittest.TestCase):
 
 class TestBackoff(unittest.TestCase):
     def test_retry_after_capped_at_120(self):
-        client = _client()
-        self.assertEqual(client._backoff_delay(1, 200.0), 120.0)
-        self.assertEqual(client._backoff_delay(1, 45.0), 45.0)
+        self.assertEqual(cc._backoff_delay(1, 200.0), 120.0)
+        self.assertEqual(cc._backoff_delay(1, 45.0), 45.0)
 
     def test_exponential_capped_at_30(self):
-        client = _client()
-        self.assertEqual(client._backoff_delay(10, None), 30.0)
+        self.assertEqual(cc._backoff_delay(10, None), 30.0)
 
 
 if __name__ == "__main__":

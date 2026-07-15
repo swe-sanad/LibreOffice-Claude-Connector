@@ -18,12 +18,17 @@ CONFIG_FILE = "config.json"
 
 # Only keys present here are persisted / accepted from disk.
 DEFAULTS: Dict[str, Any] = {
+    "provider": "anthropic",             # "anthropic" | "openai_compatible" (Ollama/LM Studio/…)
     "model": "claude-sonnet-5",          # dateless pinned snapshot; user-editable
     "temperature": None,                 # None -> omit (API default)
     "max_tokens": None,                  # None -> per-action default
     "timeout": 120.0,                    # seconds; never None (would hang the UI)
     "base_url": "https://api.anthropic.com/v1/messages",
 }
+
+PROVIDERS = ("anthropic", "openai_compatible")
+# Endpoint prefilled in Settings when the user first switches to a local provider.
+DEFAULT_OPENAI_BASE_URL = "http://localhost:11434/v1"   # Ollama
 
 # A small, curated model menu for the settings UI (the field stays free-text).
 MODEL_CHOICES = (
@@ -72,7 +77,7 @@ def _coerce(key: str, value: Any) -> Any:
             return int(value)
         except (TypeError, ValueError):
             return None
-    # string-valued keys: model, base_url
+    # string-valued keys: provider, model, base_url
     return value if isinstance(value, str) else default
 
 
