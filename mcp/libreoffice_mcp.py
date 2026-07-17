@@ -63,6 +63,44 @@ def _connect():
     return _state
 
 
+def _reset_connection():
+    """Drop the cached UNO connection so the next call reconnects fresh."""
+    _state.update(ctx=None, smgr=None, desktop=None)
+
+
+# Substrings (lower-cased) that mark a lost/disposed UNO bridge — i.e. the office
+# was restarted since we cached the connection. Kept tight so a normal tool error
+# that merely mentions one of these words doesn't trigger a spurious reconnect.
+_CONN_ERROR_MARKERS = (
+    "urp bridge",          # "Binary URP bridge already disposed / disposed during call"
+    "disposedexception",   # com.sun.star.lang.DisposedException
+    "noconnectexception",  # office not up yet while we reconnect
+    "connection refused", "wsaeconnrefused",
+    "broken pipe", "connection closed", "connection was aborted",
+)
+
+
+def _is_connection_error(exc):
+    """True when `exc` looks like a lost/disposed UNO bridge, not a tool bug."""
+    blob = (type(exc).__name__ + " " + str(exc)).lower()
+    return any(marker in blob for marker in _CONN_ERROR_MARKERS)
+
+
+def _call_with_reconnect(func, args):
+    """Run a tool; if the UNO bridge was lost since we cached the connection
+    (LibreOffice restarted), drop the stale connection and retry ONCE. This is
+    what makes the server survive an office restart instead of returning
+    'Binary URP bridge already disposed' forever."""
+    try:
+        return func(args)
+    except Exception as exc:
+        if not _is_connection_error(exc):
+            raise
+        _log("UNO bridge lost (%s) - reconnecting and retrying once" % exc)
+        _reset_connection()
+        return func(args)
+
+
 def _desktop():
     return _connect()["desktop"]
 
@@ -1738,7 +1776,7 @@ def handle(message):
         if func is None:
             return _error(mid, -32602, "Unknown tool: %s" % name)
         try:
-            payload = func(args)
+            payload = _call_with_reconnect(func, args)
             text = json.dumps(payload, ensure_ascii=False)
             return _result(mid, {"content": [{"type": "text", "text": text}]})
         except Exception as exc:  # tool errors are reported in-band, not as JSON-RPC errors
