@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`lo_screenshot` MCP tool** — saves a PNG of the LibreOffice *window* itself
+  via Win32 `PrintWindow` (auto-restores a minimized window, DPI-aware physical
+  pixels, works while the window is behind others; pure ctypes + zlib PNG, no
+  Pillow). This is the only reliable way to see what the GUI **actually
+  renders**: PDF export can differ from the screen — discovered when form
+  controls on RTL sheets rendered in PDF but were silently dropped from the
+  screen/file. Params: `path` (default temp dir), `window_title` (substring,
+  default "LibreOffice"). Windows-only.
+
 ### Fixed
 
 - **Hardening pass following an adversarial multi-agent code review (10 confirmed findings, all fixed and re-verified).**

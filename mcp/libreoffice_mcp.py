@@ -347,6 +347,126 @@ def tool_list_documents(_args):
     return tool_lo_status(_args)
 
 
+def tool_lo_screenshot(args):
+    """Capture the LibreOffice WINDOW itself via PrintWindow — the only
+    reliable way to see what the GUI actually renders (PDF export can lie:
+    e.g. form controls on RTL sheets render in print but not on screen, or
+    vice versa). Captures even when the window is behind others. Windows-only.
+    """
+    import sys as _sys
+    if not _sys.platform.startswith("win"):
+        raise RuntimeError("lo_screenshot is currently Windows-only.")
+    import ctypes
+    import ctypes.wintypes as wt
+    import os
+    import struct
+    import tempfile
+    import zlib
+
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    try:                                   # physical pixels from GetWindowRect
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        try:
+            user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+    want = str(args.get("window_title") or "LibreOffice").lower()
+    hits = []
+
+    @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
+    def _enum(hwnd, _lp):
+        if user32.IsWindowVisible(hwnd):
+            n = user32.GetWindowTextLengthW(hwnd)
+            if n:
+                buf = ctypes.create_unicode_buffer(n + 1)
+                user32.GetWindowTextW(hwnd, buf, n + 1)
+                if want in buf.value.lower():
+                    hits.append((hwnd, buf.value))
+        return True
+
+    user32.EnumWindows(_enum, 0)
+    if not hits:
+        raise RuntimeError("No visible window whose title contains %r. "
+                           "Is LibreOffice running with a GUI (not --headless)?"
+                           % args.get("window_title", "LibreOffice"))
+    hwnd, title = hits[0]
+
+    if user32.IsIconic(hwnd):                      # minimized -> restore first
+        import time as _time
+        user32.ShowWindow(hwnd, 9)                 # SW_RESTORE
+        _time.sleep(1.0)
+
+    rect = wt.RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    w, h = rect.right - rect.left, rect.bottom - rect.top
+    if w <= 100 or h <= 100:
+        raise RuntimeError("Window %r has no usable area (%dx%d) — restore or "
+                           "resize the LibreOffice window." % (title, w, h))
+
+    wdc = user32.GetWindowDC(hwnd)
+    mdc = gdi32.CreateCompatibleDC(wdc)
+    bmp = gdi32.CreateCompatibleBitmap(wdc, w, h)
+    old = gdi32.SelectObject(mdc, bmp)
+    try:
+        user32.PrintWindow(hwnd, mdc, 2)          # 2 = PW_RENDERFULLCONTENT
+
+        class _BIH(ctypes.Structure):
+            _fields_ = [("biSize", wt.DWORD), ("biWidth", wt.LONG),
+                        ("biHeight", wt.LONG), ("biPlanes", wt.WORD),
+                        ("biBitCount", wt.WORD), ("biCompression", wt.DWORD),
+                        ("biSizeImage", wt.DWORD), ("biXPelsPerMeter", wt.LONG),
+                        ("biYPelsPerMeter", wt.LONG), ("biClrUsed", wt.DWORD),
+                        ("biClrImportant", wt.DWORD)]
+
+        bih = _BIH()
+        bih.biSize = ctypes.sizeof(_BIH)
+        bih.biWidth = w
+        bih.biHeight = -h                          # top-down
+        bih.biPlanes = 1
+        bih.biBitCount = 32
+        bih.biCompression = 0                      # BI_RGB
+        raw = ctypes.create_string_buffer(w * h * 4)
+        got = gdi32.GetDIBits(mdc, bmp, 0, h, raw, ctypes.byref(bih), 0)
+        if got != h:
+            raise RuntimeError("GetDIBits returned %d of %d rows." % (got, h))
+        data = raw.raw
+    finally:
+        gdi32.SelectObject(mdc, old)
+        gdi32.DeleteObject(bmp)
+        gdi32.DeleteDC(mdc)
+        user32.ReleaseDC(hwnd, wdc)
+
+    # BGRA -> minimal RGB PNG (bundled python has no PIL; zlib is enough)
+    stride = w * 4
+    rows = []
+    for y in range(h):
+        bgra = data[y * stride:(y + 1) * stride]
+        rgb = bytearray(w * 3)
+        rgb[0::3] = bgra[2::4]
+        rgb[1::3] = bgra[1::4]
+        rgb[2::3] = bgra[0::4]
+        rows.append(b"\x00" + bytes(rgb))          # filter type 0 per scanline
+
+    def _chunk(tag, payload):
+        return (struct.pack(">I", len(payload)) + tag + payload
+                + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    png = (b"\x89PNG\r\n\x1a\n"
+           + _chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + _chunk(b"IDAT", zlib.compress(b"".join(rows), 6))
+           + _chunk(b"IEND", b""))
+
+    path = args.get("path") or os.path.join(tempfile.gettempdir(),
+                                            "lo_screenshot.png")
+    path = os.path.abspath(path)
+    with open(path, "wb") as f:
+        f.write(png)
+    return {"saved": path, "width": w, "height": h, "window": title}
+
+
 def tool_get_current_selection(_args):
     ub = _bridge()
     doc = _current_doc()
@@ -1417,6 +1537,7 @@ TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
     "list_documents": tool_list_documents,
+    "lo_screenshot": tool_lo_screenshot,
     "get_current_selection": tool_get_current_selection,
     # document lifecycle
     "create_document": tool_create_document,
@@ -1501,6 +1622,16 @@ TOOL_DEFS = [
     {"name": "list_documents",
      "description": "List the documents currently open in LibreOffice.",
      "inputSchema": _schema()},
+    {"name": "lo_screenshot",
+     "description": "Save a PNG screenshot of the LibreOffice WINDOW itself "
+                    "(PrintWindow — captures the real GUI rendering even when "
+                    "the window is behind others; PDF export can differ from "
+                    "the screen, e.g. form controls on RTL sheets). "
+                    "Windows-only. Returns the saved file path.",
+     "inputSchema": _schema(
+         {"path": dict(_STR, description="output .png path (default: temp dir)"),
+          "window_title": dict(_STR, description="window-title substring to "
+                               "match (default 'LibreOffice')")})},
     {"name": "get_current_selection",
      "description": "Get the user's current selection: a Calc cell range (with data) or the selected Writer text.",
      "inputSchema": _schema()},
