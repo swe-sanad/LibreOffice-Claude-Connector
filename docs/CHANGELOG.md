@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.6.3 — fix the Claude Desktop transport crash.** The launcher now pipes
+  stdio explicitly (`stdio: ["pipe","pipe","pipe"]` + manual `.pipe()`) instead
+  of `stdio: "inherit"`: inherited raw handles don't survive the Electron ->
+  Node -> Python grandchild chain on Windows, so the server saw a closed stdin
+  and exited right after `initialize` ("Server transport closed unexpectedly").
+  Also: `python -u` (no block buffering on piped stdout), `windowsHide`, and
+  launcher diagnostics on stderr (launch line + exit code) so future failures
+  are visible in Claude Desktop's MCP log.
+
 - **v0.6.2 — install-polish for the desktop bundle.** The configure dialog no
   longer demands anything: `libreoffice_python` is optional (the Node launcher
   auto-detects the interpreter; set it only for unusual install paths) and the

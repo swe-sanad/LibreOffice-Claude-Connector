@@ -55,9 +55,30 @@ if (!server) {
   console.error("[libreoffice-connector] server script not found next to launcher");
   process.exit(1);
 }
-const child = spawn(py, [server], { stdio: "inherit", env: process.env });
+
+console.error("[libreoffice-connector] launching: " + py + " " + server);
+
+// EXPLICIT piping, not stdio:"inherit" — inherited raw handles do not survive
+// the Electron -> Node -> Python grandchild chain on Windows (the Python server
+// sees a closed stdin and exits immediately; Claude Desktop logs a transport
+// close right after `initialize`). Piping through this process is the reliable
+// path, and -u disables Python's block buffering on the piped stdout.
+const child = spawn(py, ["-u", server], {
+  stdio: ["pipe", "pipe", "pipe"],
+  env: process.env,
+  windowsHide: true,
+});
+process.stdin.pipe(child.stdin);
+child.stdout.pipe(process.stdout);
+child.stderr.pipe(process.stderr);
 child.on("error", (err) => {
   console.error("[libreoffice-connector] failed to start server: " + err.message);
   process.exit(1);
 });
-child.on("exit", (code, signal) => process.exit(signal ? 1 : code == null ? 1 : code));
+child.on("exit", (code, signal) => {
+  console.error(
+    "[libreoffice-connector] server exited code=" + code + " signal=" + signal
+  );
+  process.exit(signal ? 1 : code == null ? 1 : code);
+});
+process.stdin.on("end", () => child.stdin.end());
