@@ -30,7 +30,7 @@ def main():
         (os.path.join(ROOT, "mcpb", "index.js"), "index.js"),
         (os.path.join(ROOT, "mcp", "libreoffice_mcp.py"), "mcp/libreoffice_mcp.py"),
         (os.path.join(ROOT, "src", "uno_bridge.py"), "src/uno_bridge.py"),
-        (os.path.join(ROOT, "ext", "icons", "icon.png"), "icon.png"),
+        (os.path.join(ROOT, "mcpb", "icon.png"), "icon.png"),
         (os.path.join(ROOT, "LICENSE"), "LICENSE"),
         (os.path.join(ROOT, "docs", "MCP-TOOLS.md"), "docs/MCP-TOOLS.md"),
     ]
