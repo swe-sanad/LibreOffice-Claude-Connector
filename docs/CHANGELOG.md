@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.6.4 — bundle completeness + a real launch-simulation test.** New
+  `scripts/test_mcpb_bundle.py` extracts the built `.mcpb` to a temp dir and
+  drives it exactly like Claude Desktop does (`node index.js` from the
+  extracted bundle, empty `LIBREOFFICE_PYTHON`): initialize,
+  notifications/initialized, tools/list, and `--live` lo_status. Its first run
+  immediately caught that the bundle was missing `src/calc_actions.py` /
+  `src/writer_actions.py` (imported by `uno_bridge`) — the first live tool call
+  in Desktop would have failed with ModuleNotFoundError. Both are now bundled;
+  the live test passes end to end. Run this test before every release.
+
 - **v0.6.3 — fix the Claude Desktop transport crash.** The launcher now pipes
   stdio explicitly (`stdio: ["pipe","pipe","pipe"]` + manual `.pipe()`) instead
   of `stdio: "inherit"`: inherited raw handles don't survive the Electron ->
