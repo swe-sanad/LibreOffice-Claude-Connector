@@ -82,6 +82,12 @@ use a negative-x mirrored shape coordinate space.
 
 ### Tools that would have made this session dramatically faster
 
+**UPDATE: all shipped in v0.5.0** (`reload_document`, `run_macro`,
+`calc_list_shapes`/`calc_delete_shape`, `calc_set_active_sheet`,
+`calc_sheet_properties`, `calc_set_validation`, `basic_module`, `inspect_ods`,
+`uno_exec`), together with the three session-1 P1 bug fixes (bilingual/int
+sheet resolution, blank error messages, UTF-8 stdio). Table kept for history:
+
 | Wanted tool | Pain it removes |
 |---|---|
 | `run_macro(name, args?)` | invoke embedded Basic (RefreshView, Save_person, Ping compile-probe) — today needs a side-script through LO python |

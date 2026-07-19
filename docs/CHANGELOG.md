@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.5.0 — the Kahatayn-session wishlist, implemented (10 new tools + 3 bug fixes).**
+  New tools: `reload_document` (store→close→reload — the serialization ground-truth
+  check), `run_macro` (invoke document Basic by name/URI), `calc_list_shapes` /
+  `calc_delete_shape` (DrawPage inspection incl. OnClick scripts), `calc_set_active_sheet`
+  (activate + select + scroll), `calc_sheet_properties` (RTL/visible/freeze),
+  `calc_set_validation` (dropdown lists + hints), `basic_module` (list/get/set embedded
+  Basic), `inspect_ods` (regex over the saved zip's XML), `uno_exec` (Python escape
+  hatch with the live bridge in scope). Fixes: `_resolve_sheet` now accepts int/float/
+  numeric-string indexes AND matches bilingual `english | عربي` tab names by English
+  token, and raises listing the actual sheets; tool errors always name the exception
+  type (UNO exceptions often have an empty message); stdio forced to UTF-8 on Windows
+  (Arabic arguments were mangled by the cp1252 default). All tools exercised live
+  against the Kahatayn workbook, including a full reload round-trip.
+
 - **`lo_screenshot` MCP tool** — saves a PNG of the LibreOffice *window* itself
   via Win32 `PrintWindow` (auto-restores a minimized window, DPI-aware physical
   pixels, works while the window is behind others; pure ctypes + zlib PNG, no

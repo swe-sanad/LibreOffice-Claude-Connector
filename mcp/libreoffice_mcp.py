@@ -28,7 +28,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.4.0"
+SERVER_VERSION = "0.5.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -158,12 +158,25 @@ def _require_writer():
 
 
 def _resolve_sheet(doc, sheet):
+    """Resolve by 0-based index (int, float or numeric string), exact name, or
+    the English token of a bilingual 'english | عربي' tab name. Raises with the
+    actual sheet list instead of a blank UNO NoSuchElementException."""
     sheets = doc.getSheets()
     if sheet is None or sheet == "":
         return doc.getCurrentController().getActiveSheet()
-    if isinstance(sheet, int):
-        return sheets.getByIndex(sheet)
-    return sheets.getByName(str(sheet))
+    if isinstance(sheet, (int, float)) and not isinstance(sheet, bool):
+        return sheets.getByIndex(int(sheet))
+    name = str(sheet).strip()
+    if name.isdigit():
+        return sheets.getByIndex(int(name))
+    if sheets.hasByName(name):
+        return sheets.getByName(name)
+    want = name.split("|")[0].strip().lower()
+    for nm in sheets.getElementNames():
+        if nm.lower() == name.lower() or nm.split("|")[0].strip().lower() == want:
+            return sheets.getByName(nm)
+    raise RuntimeError("No sheet matches %r. Sheets: %s"
+                       % (name, " ; ".join(sheets.getElementNames())))
 
 
 # --------------------------------------------------------------------------- #
@@ -1533,6 +1546,301 @@ def tool_insert_form_control(args):
 # Tool registry + JSON schemas
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Tools — automation & inspection (the Kahatayn-session wishlist)
+# --------------------------------------------------------------------------- #
+
+def tool_reload_document(args):
+    """store -> close -> load from disk. THE verification step for anything
+    that touches shapes/macros: the in-memory model can lie (e.g. form-control
+    shapes silently dropped by the ODS writer on RTL sheets); only a reload
+    shows what actually serialized."""
+    import time
+    doc = _current_doc()
+    url = doc.getURL()
+    if not url:
+        raise RuntimeError("The active document has no file URL — save it first.")
+    if args.get("save", True):
+        doc.store()
+    doc.close(False)
+    time.sleep(1.0)
+    # 4 = MacroExecMode.ALWAYS_EXECUTE_NO_WARN (trusted-location workflows)
+    newdoc = _desktop().loadComponentFromURL(url, "_blank", 0,
+                                             (_pv("MacroExecutionMode", 4),))
+    if newdoc is None:
+        raise RuntimeError("Reload failed: loadComponentFromURL returned None for %s" % url)
+    time.sleep(1.0)
+    return {"reloaded": _doc_info(newdoc)}
+
+
+def tool_run_macro(args):
+    """Invoke a macro in the active document. 'name' is 'Library.Module.Sub'
+    (document Basic), 'Module.Sub' (library defaults to Standard), or a full
+    vnd.sun.star.script: URI. Returns the macro's return value."""
+    doc = _current_doc()
+    name = str(args["name"])
+    if name.startswith("vnd.sun.star.script:"):
+        uri = name
+    else:
+        parts = name.split(".")
+        if len(parts) == 2:
+            name = "Standard." + name
+        elif len(parts) != 3:
+            raise RuntimeError("Give 'Library.Module.Sub', 'Module.Sub', or a "
+                               "full vnd.sun.star.script: URI — got %r" % name)
+        uri = ("vnd.sun.star.script:%s?language=Basic&location=document" % name)
+    script = doc.getScriptProvider().getScript(uri)
+    invoked = script.invoke(tuple(args.get("args") or ()), (), ())
+    ret = invoked[0] if isinstance(invoked, tuple) and invoked else None
+    try:
+        json.dumps(ret)
+    except Exception:
+        ret = str(ret)
+    return {"invoked": uri, "returned": ret}
+
+
+def tool_calc_list_shapes(args):
+    """Everything actually on a sheet's DrawPage — names, positions (mm), text,
+    OnClick script, control-or-drawing. The tool that would have caught the
+    RTL dropped-buttons bug in one call."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    dp = sheet.DrawPage
+    shapes = []
+    for i in range(dp.Count):
+        shp = dp.getByIndex(i)
+        info = {"index": i, "name": getattr(shp, "Name", "")}
+        try:
+            info["type"] = shp.ShapeType
+        except Exception:
+            pass
+        try:
+            info["position_mm"] = [round(shp.Position.X / 100.0, 1),
+                                   round(shp.Position.Y / 100.0, 1)]
+            info["size_mm"] = [round(shp.Size.Width / 100.0, 1),
+                               round(shp.Size.Height / 100.0, 1)]
+        except Exception:
+            pass
+        try:
+            txt = shp.getString()
+            if txt:
+                info["text"] = txt[:80]
+        except Exception:
+            pass
+        try:
+            for p in shp.Events.getByName("OnClick"):
+                if p.Name == "Script" and p.Value:
+                    info["on_click"] = p.Value
+        except Exception:
+            pass
+        try:
+            info["is_form_control"] = bool(
+                shp.supportsService("com.sun.star.drawing.ControlShape"))
+        except Exception:
+            pass
+        shapes.append(info)
+    return {"sheet": sheet.Name, "count": dp.Count, "shapes": shapes}
+
+
+def tool_calc_delete_shape(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    dp = sheet.DrawPage
+    name = args["name"]
+    removed = 0
+    for i in range(dp.Count - 1, -1, -1):
+        shp = dp.getByIndex(i)
+        if getattr(shp, "Name", "") == name:
+            dp.remove(shp)
+            removed += 1
+    if not removed:
+        raise RuntimeError("No shape named %r on sheet %s." % (name, sheet.Name))
+    return {"removed": removed, "sheet": sheet.Name}
+
+
+def tool_calc_set_active_sheet(args):
+    """Activate a sheet in the UI and optionally select/scroll to a cell —
+    select() alone does not scroll the viewport."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    ctrl = doc.getCurrentController()
+    ctrl.setActiveSheet(sheet)
+    cell = args.get("cell")
+    if cell:
+        rng = sheet.getCellRangeByName(cell)
+        ctrl.select(rng)
+        try:
+            addr = rng.getRangeAddress()
+            ctrl.setFirstVisibleColumn(max(0, addr.StartColumn))
+            ctrl.setFirstVisibleRow(max(0, addr.StartRow))
+        except Exception:
+            pass
+    return {"active": sheet.Name, "selected": cell}
+
+
+def tool_calc_sheet_properties(args):
+    """Read (and optionally set) per-sheet properties: rtl (TableLayout — set
+    BEFORE placing shapes!), visible, freeze rows/cols."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    changed = {}
+    if args.get("rtl") is not None:
+        sheet.TableLayout = 1 if args["rtl"] else 0
+        changed["rtl"] = bool(args["rtl"])
+    if args.get("visible") is not None:
+        sheet.IsVisible = bool(args["visible"])
+        changed["visible"] = bool(args["visible"])
+    if args.get("freeze_rows") is not None or args.get("freeze_cols") is not None:
+        ctrl = doc.getCurrentController()
+        prev = ctrl.getActiveSheet()
+        ctrl.setActiveSheet(sheet)
+        ctrl.freezeAtPosition(int(args.get("freeze_cols") or 0),
+                              int(args.get("freeze_rows") or 0))
+        ctrl.setActiveSheet(prev)
+        changed["freeze"] = [int(args.get("freeze_cols") or 0),
+                             int(args.get("freeze_rows") or 0)]
+    return {"sheet": sheet.Name, "rtl": sheet.TableLayout == 1,
+            "visible": bool(sheet.IsVisible), "changed": changed}
+
+
+def tool_calc_set_validation(args):
+    """Cell validity on a range: a dropdown 'list' (blocking by default) and/or
+    an on-select 'hint' message; 'clear' removes validation."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    val = rng.Validation
+    lst = args.get("list")
+    if args.get("clear"):
+        val.Type = _uno_enum("com.sun.star.sheet.ValidationType", "ANY")
+        val.ShowInputMessage = False
+        val.ShowErrorMessage = False
+    if lst:
+        val.Type = _uno_enum("com.sun.star.sheet.ValidationType", "LIST")
+        val.ShowList = 1
+        val.setFormula1(";".join('"%s"' % str(o) for o in lst))
+        blocking = args.get("blocking", True)
+        val.ShowErrorMessage = bool(blocking)
+        if blocking:
+            val.ErrorTitle = str(args.get("error_title") or "Invalid value")
+            val.ErrorMessage = str(args.get("error_message")
+                                   or "Choose one of: " + " / ".join(map(str, lst)))
+    hint = args.get("hint")
+    if hint:
+        val.ShowInputMessage = True
+        val.InputTitle = str(args.get("hint_title") or "")
+        val.InputMessage = str(hint)
+    rng.Validation = val
+    return {"sheet": sheet.Name, "range": args["range"], "list": lst,
+            "hint": hint, "cleared": bool(args.get("clear"))}
+
+
+def tool_basic_module(args):
+    """Manage the document's embedded Basic: list libraries/modules, get a
+    module's source, or set it (create/replace). After 'set', invoke a no-op
+    Sub via run_macro as a compile check — one syntax error silently kills the
+    WHOLE module at runtime."""
+    doc = _current_doc()
+    libs = doc.BasicLibraries
+    action = args.get("action") or "list"
+    if action == "list":
+        out = {}
+        for ln in libs.getElementNames():
+            try:
+                libs.loadLibrary(ln)
+                lib = libs.getByName(ln)
+                out[ln] = {m: len(lib.getByName(m)) for m in lib.getElementNames()}
+            except Exception as exc:
+                out[ln] = "unreadable: %s" % exc
+        return {"libraries": out}
+    library, module = args.get("library"), args.get("module")
+    if not library or not module:
+        raise RuntimeError("'library' and 'module' are required for %s." % action)
+    if action == "get":
+        libs.loadLibrary(library)
+        return {"library": library, "module": module,
+                "source": libs.getByName(library).getByName(module)}
+    if action == "set":
+        source = args.get("source")
+        if source is None:
+            raise RuntimeError("'source' is required for set.")
+        if not libs.hasByName(library):
+            libs.createLibrary(library)
+        else:
+            libs.loadLibrary(library)
+        lib = libs.getByName(library)
+        if lib.hasByName(module):
+            lib.replaceByName(module, source)
+        else:
+            lib.insertByName(module, source)
+        return {"library": library, "module": module, "chars": len(source)}
+    raise RuntimeError("Unknown action %r — use list, get or set." % action)
+
+
+def tool_inspect_ods(args):
+    """Grep inside the SAVED file's zip entries (content.xml by default) — the
+    ground truth of what serialized, independent of the in-memory model. This
+    is how the RTL dropped-form-controls root cause was found."""
+    import re
+    import zipfile
+    path = args.get("path")
+    if not path:
+        url = _current_doc().getURL()
+        if not url:
+            raise RuntimeError("No 'path' given and the active document has no file URL.")
+        import unohelper
+        path = unohelper.fileUrlToSystemPath(url)
+    pattern = args["pattern"]
+    entry = args.get("entry") or "content.xml"
+    ctx_chars = int(args.get("context") or 120)
+    limit = int(args.get("max_matches") or 10)
+    with zipfile.ZipFile(path) as z:
+        names = z.namelist()
+        if entry not in names:
+            raise RuntimeError("No entry %r in %s. Entries: %s"
+                               % (entry, path, ", ".join(names[:25])))
+        text = z.read(entry).decode("utf-8", "replace")
+    excerpts = []
+    total = 0
+    for m in re.finditer(pattern, text):
+        total += 1
+        if len(excerpts) < limit:
+            start = max(0, m.start() - ctx_chars)
+            excerpts.append(text[start:m.end() + ctx_chars])
+    return {"path": path, "entry": entry, "pattern": pattern,
+            "match_count": total, "excerpts": excerpts}
+
+
+def tool_uno_exec(args):
+    """Escape hatch: run a short Python snippet against the live UNO bridge.
+    In scope: ctx, smgr, desktop, doc (active document or None), uno.
+    Captured stdout is returned; set a variable named `result` for a value."""
+    import contextlib
+    import io as _io
+    code = args["code"]
+    state = _connect()
+    doc = None
+    try:
+        doc = _current_doc()
+    except Exception:
+        pass
+    import uno as _uno
+    scope = {"ctx": state["ctx"], "smgr": state["smgr"],
+             "desktop": state["desktop"], "doc": doc, "uno": _uno,
+             "result": None}
+    buf = _io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        exec(compile(code, "<uno_exec>", "exec"), scope)
+    out = {"stdout": buf.getvalue()[-8000:]}
+    if scope.get("result") is not None:
+        try:
+            json.dumps(scope["result"])
+            out["result"] = scope["result"]
+        except Exception:
+            out["result"] = str(scope["result"])
+    return out
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -1595,6 +1903,17 @@ TOOLS = {
     "writer_format_table": tool_writer_format_table,
     # form controls (both Calc and Writer)
     "insert_form_control": tool_insert_form_control,
+    # automation & inspection
+    "reload_document": tool_reload_document,
+    "run_macro": tool_run_macro,
+    "calc_list_shapes": tool_calc_list_shapes,
+    "calc_delete_shape": tool_calc_delete_shape,
+    "calc_set_active_sheet": tool_calc_set_active_sheet,
+    "calc_sheet_properties": tool_calc_sheet_properties,
+    "calc_set_validation": tool_calc_set_validation,
+    "basic_module": tool_basic_module,
+    "inspect_ods": tool_inspect_ods,
+    "uno_exec": tool_uno_exec,
 }
 
 _STR = {"type": "string"}
@@ -1866,6 +2185,54 @@ TOOL_DEFS = [
                              "x_mm": _NUM, "y_mm": _NUM,
                              "width_mm": _NUM, "height_mm": _NUM},
                             ["kind"])},
+    # --- automation & inspection ---
+    {"name": "reload_document",
+     "description": "Store, close and reload the active document from disk. THE verification step after shape/macro work: the in-memory model can lie (e.g. form-control shapes are silently dropped by the ODS writer on RTL sheets) — only a reload shows what actually serialized. Reloads with macros enabled.",
+     "inputSchema": _schema({"save": dict(_BOOL, description="store before closing (default true)")})},
+    {"name": "run_macro",
+     "description": "Invoke a macro in the active document and return its result. 'name' is 'Library.Module.Sub' (document Basic), 'Module.Sub' (Standard library), or a full vnd.sun.star.script: URI.",
+     "inputSchema": _schema({"name": dict(_STR, description="e.g. 'KahataynForms.Engine.RefreshView'"),
+                             "args": {"type": "array", "description": "positional arguments"}},
+                            ["name"])},
+    {"name": "calc_list_shapes",
+     "description": "List everything on a sheet's DrawPage: shape names, types, positions/sizes (mm), text, OnClick script, and whether each is a form control. Use to verify buttons/shapes really exist where you think they do.",
+     "inputSchema": _schema({"sheet": _SHEET})},
+    {"name": "calc_delete_shape",
+     "description": "Delete shape(s) with the given name from a sheet's DrawPage.",
+     "inputSchema": _schema({"name": dict(_STR, description="shape name"), "sheet": _SHEET}, ["name"])},
+    {"name": "calc_set_active_sheet",
+     "description": "Activate a sheet in the LibreOffice window and optionally select AND scroll to a cell (plain select() does not scroll the viewport).",
+     "inputSchema": _schema({"sheet": _SHEET,
+                             "cell": dict(_STR, description="cell to select+scroll to, e.g. 'A15'")})},
+    {"name": "calc_sheet_properties",
+     "description": "Read and optionally set per-sheet properties: rtl (right-to-left layout — set BEFORE placing shapes, coordinates mirror), visible (hide/show), freeze_rows/freeze_cols (frozen panes). Omitted properties are left unchanged; the reply reports the current state.",
+     "inputSchema": _schema({"sheet": _SHEET, "rtl": _BOOL, "visible": _BOOL,
+                             "freeze_rows": _INT, "freeze_cols": _INT})},
+    {"name": "calc_set_validation",
+     "description": "Cell validity for a range: 'list' shows a dropdown (blocking wrong entries unless blocking=false), 'hint' shows an on-select help message, 'clear' removes validation. List and hint can combine.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "list": {"type": "array", "items": _STR, "description": "dropdown entries"},
+                             "blocking": dict(_BOOL, description="reject entries outside the list (default true)"),
+                             "hint": dict(_STR, description="on-select help message"),
+                             "hint_title": _STR, "error_title": _STR, "error_message": _STR,
+                             "clear": dict(_BOOL, description="remove existing validation first")},
+                            ["range"])},
+    {"name": "basic_module",
+     "description": "Manage the active document's embedded Basic: action 'list' (libraries + modules with sizes), 'get' (module source), 'set' (create/replace module source). After 'set', invoke a no-op Sub via run_macro as a compile check — one syntax error silently disables the whole module.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["list", "get", "set"]),
+                             "library": _STR, "module": _STR,
+                             "source": dict(_STR, description="full module source (for set)")})},
+    {"name": "inspect_ods",
+     "description": "Regex-search inside the SAVED file's zip entries (content.xml by default) — the ground truth of what serialized, independent of the in-memory model. Defaults to the active document's file.",
+     "inputSchema": _schema({"pattern": dict(_STR, description="regular expression"),
+                             "path": dict(_STR, description="ods/odt path (default: active document)"),
+                             "entry": dict(_STR, description="zip entry (default content.xml)"),
+                             "context": dict(_INT, description="chars of context per excerpt (default 120)"),
+                             "max_matches": dict(_INT, description="max excerpts returned (default 10)")},
+                            ["pattern"])},
+    {"name": "uno_exec",
+     "description": "Escape hatch: run a short Python snippet against the live UNO bridge. In scope: ctx, smgr, desktop, doc (active document), uno. Printed output is returned as 'stdout'; assign to a variable named `result` to return a JSON value. Use when no dedicated tool fits.",
+     "inputSchema": _schema({"code": dict(_STR, description="Python source to exec")}, ["code"])},
 ]
 
 
@@ -1911,7 +2278,10 @@ def handle(message):
             text = json.dumps(payload, ensure_ascii=False)
             return _result(mid, {"content": [{"type": "text", "text": text}]})
         except Exception as exc:  # tool errors are reported in-band, not as JSON-RPC errors
-            return _result(mid, {"content": [{"type": "text", "text": "Error: %s" % exc}],
+            # UNO exceptions often have an EMPTY str() — always name the type
+            msg = str(exc).strip() or "(no message)"
+            return _result(mid, {"content": [{"type": "text",
+                                              "text": "Error [%s]: %s" % (type(exc).__name__, msg)}],
                                  "isError": True})
 
     if mid is not None:
@@ -1920,6 +2290,14 @@ def handle(message):
 
 
 def main():
+    # Windows bundled Python defaults stdio to the locale codepage (cp1252),
+    # which mangles Arabic/Unicode arguments on the way IN (bilingual sheet
+    # names failed getByName). Force UTF-8 both ways.
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
     _log("LibreOffice MCP server ready (stdio, %d tools). LO_UNO_PORT=%s"
          % (len(TOOLS), os.environ.get("LO_UNO_PORT", "2002")))
     for line in sys.stdin:
