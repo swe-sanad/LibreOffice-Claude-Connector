@@ -1,6 +1,5 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Sanad Arousi
 """Assemble dist/libreoffice-connector-<version>.mcpb (a Claude Desktop MCP
 Bundle — a zip with manifest.json at the root). Stdlib only:
 
@@ -28,6 +27,7 @@ def main():
 
     files = [
         (manifest_path, "manifest.json"),
+        (os.path.join(ROOT, "mcpb", "index.js"), "index.js"),
         (os.path.join(ROOT, "mcp", "libreoffice_mcp.py"), "mcp/libreoffice_mcp.py"),
         (os.path.join(ROOT, "src", "uno_bridge.py"), "src/uno_bridge.py"),
         (os.path.join(ROOT, "ext", "icons", "icon.png"), "icon.png"),

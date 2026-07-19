@@ -2,30 +2,31 @@
   "manifest_version": "0.2",
   "name": "libreoffice-connector",
   "display_name": "LibreOffice Connector",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 61 tools. Auto-launches LibreOffice.",
-  "long_description": "Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. Requires a local LibreOffice installation — the server runs under LibreOffice's own bundled Python, so there are no other dependencies.",
+  "long_description": "Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. A Node.js launcher (index.js) hands stdio to the server process, which runs under LibreOffice's own bundled Python — the only interpreter that ships the required 'uno' module. Requires a local LibreOffice installation; no other dependencies, no telemetry.",
   "author": {
     "name": "Sanad Arousi",
-    "url": "https://github.com/swe-sanad/LibreOffice-Claude-Connector"
+    "url": "https://github.com/swe-sanad"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/swe-sanad/LibreOffice-Claude-Connector"
   },
   "homepage": "https://github.com/swe-sanad/LibreOffice-Claude-Connector",
-  "license": "MPL-2.0",
+  "license": "MIT",
   "privacy_policies": [
     "https://github.com/swe-sanad/LibreOffice-Claude-Connector/blob/master/docs/PRIVACY.md"
   ],
   "icon": "icon.png",
   "server": {
-    "type": "python",
-    "entry_point": "mcp/libreoffice_mcp.py",
+    "type": "node",
+    "entry_point": "index.js",
     "mcp_config": {
-      "command": "${user_config.libreoffice_python}",
-      "args": ["${__dirname}/mcp/libreoffice_mcp.py"],
+      "command": "node",
+      "args": ["${__dirname}/index.js"],
       "env": {
+        "LIBREOFFICE_PYTHON": "${user_config.libreoffice_python}",
         "LO_UNO_PORT": "${user_config.uno_port}"
       }
     }

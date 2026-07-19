@@ -1,6 +1,5 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Sanad Arousi
 """Protocol smoke test for the LibreOffice MCP server — no LibreOffice needed.
 
 Spawns the server, performs the MCP handshake, lists tools, and pings. Run with

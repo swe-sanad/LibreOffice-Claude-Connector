@@ -1,6 +1,5 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Sanad Arousi
 """Offline unit tests for the OpenAI-compatible provider client (Ollama / LM
 Studio / OpenRouter / ...). Mocks urllib — no network, no key, runs on 3.8+."""
 

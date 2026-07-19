@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.6.1 — Anthropic desktop-directory compliance.** Relicensed the whole
+  project **MPL-2.0 → MIT** (sole copyright holder; SPDX headers on all 34
+  source files). The `.mcpb` bundle now uses a **Node.js launcher** (`index.js`,
+  `server.type: "node"`): the directory's preferred runtime hosts a thin shim
+  that locates LibreOffice's bundled Python (the only interpreter with `uno`)
+  and hands it the server with stdio passed straight through — verified
+  end-to-end (initialize + tools/list through node). `author.url` now points at
+  the GitHub profile per the submission requirements.
+
 - **v0.6.0 — zero-setup connect + distribution packaging.**
   - The MCP server now **auto-launches LibreOffice** when nothing is listening on
     the UNO port: finds `soffice` (next to its interpreter, `LO_SOFFICE`, or the

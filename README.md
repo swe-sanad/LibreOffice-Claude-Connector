@@ -244,4 +244,4 @@ LibreOffice-Claude-Connector/
 
 ## License
 
-[MPL-2.0](LICENSE) — Mozilla Public License, Version 2.0.
+[MIT](LICENSE) — MIT License.

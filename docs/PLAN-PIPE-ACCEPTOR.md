@@ -41,7 +41,7 @@ startup, plus a pipe-first connect path in the MCP server.
 | # | Task | Notes |
 |---|------|-------|
 | D1 | Bump `.oxt` to 0.2.0; release artifact | existing build script |
-| D2 | **extensions.libreoffice.org** listing: create account, submit `.oxt` with description, icon, screenshots, MPL-2.0; expect a light human review | this is the "one-click for everyone" moment |
+| D2 | **extensions.libreoffice.org** listing: create account, submit `.oxt` with description, icon, screenshots, MIT; expect a light human review | this is the "one-click for everyone" moment |
 | D3 | README + UPSTREAMING update: connect ladder becomes pipe → socket → auto-launch | |
 
 **Risks:** (1) Python-in-extension acceptor thread stability across LO versions —

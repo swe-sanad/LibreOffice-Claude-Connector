@@ -1,6 +1,5 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Sanad Arousi
 #
 # Launch an ISOLATED headless LibreOffice (its own user profile, so it never
 # disturbs any LibreOffice you have open), run a UNO integration test against it,

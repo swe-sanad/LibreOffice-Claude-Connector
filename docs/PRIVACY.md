@@ -37,7 +37,7 @@ no telemetry, no analytics, and no data collection of any kind**.
 ## Open source
 
 The complete source is available at
-https://github.com/swe-sanad/LibreOffice-Claude-Connector (MPL-2.0) — every claim
+https://github.com/swe-sanad/LibreOffice-Claude-Connector (MIT) — every claim
 above is verifiable in code.
 
 ## Changes

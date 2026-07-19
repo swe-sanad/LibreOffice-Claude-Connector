@@ -1,6 +1,5 @@
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Sanad Arousi
 """A Model Context Protocol (MCP) server for LibreOffice.
 
 This is the INVERSE of the .oxt extension: instead of embedding Claude inside
@@ -28,7 +27,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.6.0"
+SERVER_VERSION = "0.6.1"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")

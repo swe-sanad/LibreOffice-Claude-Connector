@@ -9,17 +9,26 @@ human (you) can do.
 | Field | Answer |
 |---|---|
 | Extension name | LibreOffice Connector |
-| Bundle | `libreoffice-connector-<version>.mcpb` from the latest release: https://github.com/swe-sanad/LibreOffice-Claude-Connector/releases/latest |
+| Bundle (the file the form asks you to UPLOAD) | local: `E:\SWE-Pioneers\LibreOffice-Claude-Connector\dist\libreoffice-connector-0.6.1.mcpb` — also on the release: https://github.com/swe-sanad/LibreOffice-Claude-Connector/releases/latest |
 | One-line description | Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 61 tools, auto-launches LibreOffice. |
 | Long description | Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. Requires a local LibreOffice installation — the server runs under LibreOffice's own bundled Python, so there are no other dependencies and no telemetry. |
 | Category | Productivity |
 | Platforms | Windows (full), macOS/Linux (all tools except `lo_screenshot`) |
 | Author / contact | Sanad Arousi · sanad.arousi@gmail.com |
 | Homepage / repository | https://github.com/swe-sanad/LibreOffice-Claude-Connector |
-| License | MPL-2.0 (open source) |
+| License | MIT (open source) — relicensed from MPL-2.0 for directory compliance |
 | Privacy policy URL | https://github.com/swe-sanad/LibreOffice-Claude-Connector/blob/master/docs/PRIVACY.md |
 | Icon | `icon.png` (bundled in the .mcpb) |
 | Test credentials | None needed — no accounts, no API keys. Reviewer needs a local LibreOffice install (free, libreoffice.org). |
+
+## Form-requirement compliance (the form's stated criteria)
+
+| Requirement | Status |
+|---|---|
+| Publicly available on GitHub | ✓ swe-sanad/LibreOffice-Claude-Connector |
+| MIT licensed | ✓ (relicensed in v0.6.1, SPDX headers throughout) |
+| Built with Node.js | ✓* the bundle's entry point is a Node launcher (`index.js`, `server.type: node`); it hands stdio to the actual server, which must run under LibreOffice's bundled Python because only that interpreter ships the `uno` API module. Disclose this honestly in the form — it is an architectural necessity of driving LibreOffice, not an attempt to dodge the criterion. |
+| Valid manifest.json, author → GitHub profile | ✓ `author.url: https://github.com/swe-sanad` |
 
 ## Reviewer test instructions (paste into the form)
 

@@ -7,7 +7,7 @@ Keep this lean; deep detail lives in `docs/`.
 ## What this project is
 
 Two complementary connectors between **Anthropic's Claude** and **LibreOffice**
-(Calc + Writer), built for Windows, MPL-2.0, targeting a public release:
+(Calc + Writer), built for Windows, MIT, targeting a public release:
 
 1. **The `.oxt` extension** (`src/` + `ext/`) — embeds Claude *inside* LibreOffice.
    The user selects cells/text and runs **Claude ▸ Transform Selection with Claude…**
