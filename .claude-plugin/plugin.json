@@ -1,7 +1,7 @@
 {
   "name": "libreoffice-connector",
   "displayName": "LibreOffice Connector",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "Drive LibreOffice from Claude: 61 MCP tools for Calc/Writer data, formatting, charts, embedded Basic macros, shapes, window screenshots and a raw UNO escape hatch. Auto-launches LibreOffice — no socket setup needed.",
   "author": {
     "name": "Sanad Arousi",

@@ -9,7 +9,7 @@ human (you) can do.
 | Field | Answer |
 |---|---|
 | Extension name | LibreOffice Connector |
-| Bundle (the file the form asks you to UPLOAD) | local: `E:\SWE-Pioneers\LibreOffice-Claude-Connector\dist\libreoffice-connector-0.6.4.mcpb` — also on the release: https://github.com/swe-sanad/LibreOffice-Claude-Connector/releases/latest |
+| Bundle (the file the form asks you to UPLOAD) | local: `E:\SWE-Pioneers\LibreOffice-Claude-Connector\dist\libreoffice-connector-0.6.5.mcpb` — also on the release: https://github.com/swe-sanad/LibreOffice-Claude-Connector/releases/latest |
 | One-line description | Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 61 tools, auto-launches LibreOffice. |
 | Long description | Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. Requires a local LibreOffice installation — the server runs under LibreOffice's own bundled Python, so there are no other dependencies and no telemetry. |
 | Category | Productivity |
@@ -33,9 +33,9 @@ human (you) can do.
 ## Reviewer test instructions (paste into the form)
 
 1. Install LibreOffice (any 24.8+; default path is fine).
-2. Install the `.mcpb`; when prompted, confirm the **LibreOffice bundled Python**
-   path (Windows default `C:\Program Files\LibreOffice\program\python.exe`,
-   macOS `/Applications/LibreOffice.app/Contents/Resources/python`).
+2. Install the `.mcpb` — the configure dialog needs **no input** for a default
+   LibreOffice installation (the launcher auto-detects the bundled Python; the
+   optional path field exists for unusual install locations).
 3. No other setup: the server **auto-launches LibreOffice** on first tool use.
 4. Smoke test: ask Claude — "create a new spreadsheet, write a 3×3 multiplication
    table into A1:C3, bold the first row, then take a screenshot of the window."

@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.6.5 — `lo_screenshot` matches by process, not title.** The default
+  title-substring match could capture a *browser tab* titled "LibreOffice -
+  Google Chrome" instead of the office window (hit during the live smoke test
+  through the installed Desktop extension). The tool now only considers
+  windows owned by `soffice.bin`/`soffice.exe` (QueryFullProcessImageName),
+  with `window_title` as an optional narrower filter within those.
+
 - **v0.6.4 — bundle completeness + a real launch-simulation test.** New
   `scripts/test_mcpb_bundle.py` extracts the built `.mcpb` to a temp dir and
   drives it exactly like Claude Desktop does (`node index.js` from the

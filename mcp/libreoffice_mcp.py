@@ -27,7 +27,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.6.4"
+SERVER_VERSION = "0.6.5"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -445,7 +445,24 @@ def tool_lo_screenshot(args):
         except Exception:
             pass
 
-    want = str(args.get("window_title") or "LibreOffice").lower()
+    kernel32 = ctypes.windll.kernel32
+
+    def _proc_name(hwnd):
+        pid = wt.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        h = kernel32.OpenProcess(0x1000, False, pid.value)  # QUERY_LIMITED_INFORMATION
+        if not h:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            size = wt.DWORD(1024)
+            if kernel32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return os.path.basename(buf.value).lower()
+            return ""
+        finally:
+            kernel32.CloseHandle(h)
+
+    want = str(args.get("window_title") or "").lower()
     hits = []
 
     @ctypes.WINFUNCTYPE(wt.BOOL, wt.HWND, wt.LPARAM)
@@ -455,15 +472,21 @@ def tool_lo_screenshot(args):
             if n:
                 buf = ctypes.create_unicode_buffer(n + 1)
                 user32.GetWindowTextW(hwnd, buf, n + 1)
-                if want in buf.value.lower():
-                    hits.append((hwnd, buf.value))
+                title = buf.value
+                if want and want not in title.lower():
+                    return True
+                # only real LibreOffice windows — a browser tab titled
+                # "LibreOffice - Google Chrome" must never match
+                if _proc_name(hwnd) in ("soffice.bin", "soffice.exe"):
+                    hits.append((hwnd, title))
         return True
 
     user32.EnumWindows(_enum, 0)
     if not hits:
-        raise RuntimeError("No visible window whose title contains %r. "
+        raise RuntimeError("No visible LibreOffice window%s found. "
                            "Is LibreOffice running with a GUI (not --headless)?"
-                           % args.get("window_title", "LibreOffice"))
+                           % ((" with title containing %r" % args["window_title"])
+                              if args.get("window_title") else ""))
     hwnd, title = hits[0]
 
     if user32.IsIconic(hwnd):                      # minimized -> restore first
