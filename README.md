@@ -45,15 +45,23 @@ hand — standard library only, runs under LibreOffice's bundled Python so the `
 module just works. It connects lazily to a LibreOffice listening on a UNO socket and
 survives office restarts (automatic bridge reconnect).
 
-**Setup**
+**Setup — zero ceremony as of v0.6.0**: if no LibreOffice is listening, the server
+**launches it for you** (set `LO_AUTOSTART=0` to disable, `LO_HEADLESS=1` for
+headless, `LO_SOFFICE` to pin the executable). You only need to register the server:
 
-1. Start LibreOffice with a UNO socket (GUI or `--headless`):
+- **Claude Code — one command, via the plugin marketplace:**
 
-   ```powershell
-   & "C:\Program Files\LibreOffice\program\soffice.exe" --norestore "--accept=socket,host=localhost,port=2002;urp;" mybook.ods
-   ```
+  ```
+  /plugin marketplace add swe-sanad/LibreOffice-Claude-Connector
+  /plugin install libreoffice-connector@libreoffice-connector-marketplace
+  ```
 
-2. Register the server with your MCP client. For Claude Code:
+- **Claude Desktop — the `.mcpb` bundle:** download
+  `libreoffice-connector-<version>.mcpb` from the latest GitHub release (or build it:
+  `python scripts/build_mcpb.py`), double-click / drag it into Claude Desktop's
+  Settings ▸ Extensions, and point the prompt at your LibreOffice bundled Python.
+
+- **Manual registration** (any MCP client). For Claude Code:
 
    ```powershell
    claude mcp add libreoffice -e LO_UNO_PORT=2002 -- "C:\Program Files\LibreOffice\program\python.exe" "<repo>\mcp\libreoffice_mcp.py"
@@ -90,6 +98,8 @@ survives office restarts (automatic bridge reconnect).
 
 Battle-tested by building a complete bilingual RTL data-entry workbook
 ([docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) documents the field reports that shaped v0.5.0).
+[docs/UPSTREAMING.md](docs/UPSTREAMING.md) maps the road to **native agent support in
+LibreOffice core** (pipe-acceptor extension → TDF RFC → Options toggle in core).
 
 ## Requirements
 

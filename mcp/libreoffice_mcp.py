@@ -28,7 +28,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.5.0"
+SERVER_VERSION = "0.6.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -53,12 +53,72 @@ def _bridge():
     return uno_bridge
 
 
+def _find_soffice():
+    """Locate the soffice executable: LO_SOFFICE env var, next to the running
+    interpreter (the bundled python lives in LibreOffice/program), then the
+    standard install locations per platform."""
+    cand = os.environ.get("LO_SOFFICE")
+    if cand and os.path.exists(cand):
+        return cand
+    exedir = os.path.dirname(sys.executable)
+    guesses = [os.path.join(exedir, "soffice.exe"),
+               os.path.join(exedir, "soffice"),
+               r"C:\Program Files\LibreOffice\program\soffice.exe",
+               r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+               "/usr/bin/soffice", "/usr/local/bin/soffice",
+               "/Applications/LibreOffice.app/Contents/MacOS/soffice"]
+    for g in guesses:
+        if os.path.exists(g):
+            return g
+    return None
+
+
+def _autostart_office(port):
+    """Zero-setup path: if no LibreOffice is listening, launch one with the UNO
+    socket ourselves. Disable with LO_AUTOSTART=0; LO_HEADLESS=1 for headless.
+    Caveat: if a LibreOffice instance is ALREADY running without a listener,
+    the new launch is swallowed by it (single-instance) and the accept arg is
+    ignored — the retry then fails with a clear message."""
+    if os.environ.get("LO_AUTOSTART", "1").strip().lower() in ("0", "false", "no"):
+        return False
+    exe = _find_soffice()
+    if not exe:
+        return False
+    import subprocess
+    args = [exe, "--norestore", "--nologo",
+            "--accept=socket,host=localhost,port=%d;urp;" % port]
+    if os.environ.get("LO_HEADLESS", "").strip().lower() in ("1", "true", "yes"):
+        args.insert(1, "--headless")
+    kwargs = {"close_fds": True}
+    if os.name == "nt":
+        # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP — outlive this server
+        kwargs["creationflags"] = 0x00000008 | 0x00000200
+    _log("auto-starting LibreOffice: %s" % " ".join(args))
+    subprocess.Popen(args, **kwargs)
+    return True
+
+
 def _connect():
     if _state["desktop"] is None:
         ub = _bridge()
         port = int(os.environ.get("LO_UNO_PORT", "2002"))
         _log("connecting to LibreOffice on port %d ..." % port)
-        ctx, smgr, desktop = ub.connect(port=port, retries=8, delay=0.5)
+        try:
+            ctx, smgr, desktop = ub.connect(port=port, retries=3, delay=0.5)
+        except Exception as exc:
+            if not _is_connection_error(exc) or not _autostart_office(port):
+                raise
+            _log("no listener on port %d — launched LibreOffice, waiting ..." % port)
+            try:
+                ctx, smgr, desktop = ub.connect(port=port, retries=30, delay=1.0)
+            except Exception:
+                raise RuntimeError(
+                    "Launched LibreOffice but still no UNO listener on port %d. "
+                    "Most likely another LibreOffice instance was already running "
+                    "WITHOUT a listener (single-instance swallows the new launch). "
+                    "Close all LibreOffice windows and retry, or start it yourself: "
+                    'soffice --norestore "--accept=socket,host=localhost,port=%d;urp;"'
+                    % (port, port))
         _state.update(ctx=ctx, smgr=smgr, desktop=desktop)
     return _state
 

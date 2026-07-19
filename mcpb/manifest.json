@@ -1,0 +1,50 @@
+{
+  "manifest_version": "0.2",
+  "name": "libreoffice-connector",
+  "display_name": "LibreOffice Connector",
+  "version": "0.6.0",
+  "description": "Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 61 tools. Auto-launches LibreOffice.",
+  "long_description": "Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. Requires a local LibreOffice installation — the server runs under LibreOffice's own bundled Python, so there are no other dependencies.",
+  "author": {
+    "name": "Sanad Arousi",
+    "url": "https://github.com/swe-sanad/LibreOffice-Claude-Connector"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/swe-sanad/LibreOffice-Claude-Connector"
+  },
+  "homepage": "https://github.com/swe-sanad/LibreOffice-Claude-Connector",
+  "license": "MPL-2.0",
+  "icon": "icon.png",
+  "server": {
+    "type": "python",
+    "entry_point": "mcp/libreoffice_mcp.py",
+    "mcp_config": {
+      "command": "${user_config.libreoffice_python}",
+      "args": ["${__dirname}/mcp/libreoffice_mcp.py"],
+      "env": {
+        "LO_UNO_PORT": "${user_config.uno_port}"
+      }
+    }
+  },
+  "user_config": {
+    "libreoffice_python": {
+      "type": "file",
+      "title": "LibreOffice bundled Python",
+      "description": "Path to LibreOffice's own python executable (it ships the required 'uno' module). Windows default: C:\\Program Files\\LibreOffice\\program\\python.exe — macOS: /Applications/LibreOffice.app/Contents/Resources/python — Linux: /usr/bin/python3 only if python3-uno is installed.",
+      "default": "C:\\Program Files\\LibreOffice\\program\\python.exe",
+      "required": true
+    },
+    "uno_port": {
+      "type": "string",
+      "title": "UNO socket port",
+      "description": "Localhost port the server uses to reach LibreOffice (it auto-launches LibreOffice with this port when none is listening).",
+      "default": "2002",
+      "required": false
+    }
+  },
+  "keywords": ["libreoffice", "calc", "writer", "spreadsheet", "office", "uno", "macros"],
+  "compatibility": {
+    "platforms": ["win32", "darwin", "linux"]
+  }
+}

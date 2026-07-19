@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.6.0 — zero-setup connect + distribution packaging.**
+  - The MCP server now **auto-launches LibreOffice** when nothing is listening on
+    the UNO port: finds `soffice` (next to its interpreter, `LO_SOFFICE`, or the
+    standard install paths), starts it with the accept argument, and retries.
+    `LO_AUTOSTART=0` disables; `LO_HEADLESS=1` launches headless. Clear error when
+    an already-running listenerless instance swallows the launch (single-instance).
+  - **Claude Code plugin packaging**: `.claude-plugin/plugin.json` +
+    `marketplace.json` + root `.mcp.json` — install with
+    `/plugin marketplace add swe-sanad/LibreOffice-Claude-Connector` then
+    `/plugin install libreoffice-connector@libreoffice-connector-marketplace`.
+  - **Claude Desktop bundle**: `mcpb/manifest.json` + `scripts/build_mcpb.py`
+    produce `dist/libreoffice-connector-<version>.mcpb` (user_config points at the
+    local LibreOffice bundled Python — the `uno` module cannot be vendored).
+  - `docs/UPSTREAMING.md` — the roadmap from auto-launch → pipe-acceptor
+    extension → TDF core contribution for native agent support in LibreOffice.
+
 - **v0.5.0 — the Kahatayn-session wishlist, implemented (10 new tools + 3 bug fixes).**
   New tools: `reload_document` (store→close→reload — the serialization ground-truth
   check), `run_macro` (invoke document Basic by name/URI), `calc_list_shapes` /

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "libreoffice": {
+      "type": "stdio",
+      "command": "C:/Program Files/LibreOffice/program/python.exe",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/mcp/libreoffice_mcp.py"],
+      "env": {
+        "LO_UNO_PORT": "2002"
+      }
+    }
+  }
+}
