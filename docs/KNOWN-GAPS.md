@@ -69,3 +69,27 @@ Observed while driving `main.ods` of the Kahatayn project (33 sheets, bilingual
 Windows 11, LibreOffice 25.x bundled Python, server launched via
 `C:/Program Files/LibreOffice/program/python.exe`, `LO_UNO_PORT=2002`,
 workbook `E:\Volunteer\Kahatayn\...\main.ods` (bilingual tabs, embedded Basic).
+
+
+## Session 2 additions (2026-07-19, Kahatayn RTL/dashboards work)
+
+New bugs learned (LibreOffice-level, documented in the Kahatayn project memory,
+not connector fixes): form-control shapes are silently dropped by the ODS
+writer on RTL sheets (use draw shapes + OnClick scripts instead); RTL sheets
+use a negative-x mirrored shape coordinate space.
+
+`lo_screenshot` shipped (commit b0ea964) — remove it from the wishlist.
+
+### Tools that would have made this session dramatically faster
+
+| Wanted tool | Pain it removes |
+|---|---|
+| `run_macro(name, args?)` | invoke embedded Basic (RefreshView, Save_person, Ping compile-probe) — today needs a side-script through LO python |
+| `reload_document` (store -> close -> load) | THE missing verification: in-memory state lies; only a reload reveals what actually serialized (lost buttons bug) |
+| `list_shapes(sheet)` / `delete_shape` | instantly shows what's really on a DrawPage (found the dropped-controls bug by hand-scripting exactly this) |
+| `set_active_sheet` + `scroll_to(cell)` | every GUI verification needed controller scripting; select() alone doesn't scroll |
+| `sheet_properties(get/set)` | TableLayout (RTL), IsVisible, freeze rows/cols — all hand-scripted this session |
+| `calc_set_validation(range, list/hint)` | cell validity dropdowns + input help — built via side-script |
+| `basic_modules(list/get/set)` + compile check | manage embedded Basic libraries; a syntax error silently kills every macro |
+| `inspect_ods(path, xpath/grep)` | grep content.xml inside the saved zip — how the root cause was actually found |
+| `uno_exec(snippet)` | escape hatch that subsumes all of the above until dedicated tools exist |
