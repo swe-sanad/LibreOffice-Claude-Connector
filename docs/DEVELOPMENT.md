@@ -200,3 +200,15 @@ is a LibreOffice extension that gives you a Python console and script runner ins
 LibreOffice itself. It is not part of this repository, but installing it via
 LibreOffice's Extension Manager makes iterating on macros substantially faster during
 development — see the Phase 0 note in [BUILD-PLAN.md](BUILD-PLAN.md).
+
+
+## Regenerating docs/MCP-TOOLS.md
+
+The MCP tool reference is generated from `TOOL_DEFS` in `mcp/libreoffice_mcp.py`
+(section comments become headings). After adding or changing tools, re-run:
+
+```powershell
+python scripts/gen_mcp_tools_doc.py
+```
+
+and commit the refreshed `docs/MCP-TOOLS.md` together with the server change.

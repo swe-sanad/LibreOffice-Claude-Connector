@@ -1,10 +1,17 @@
 # LibreOffice ↔ Claude Connector
 
-An open-source LibreOffice extension that embeds Anthropic's **Claude** directly into
-**Calc** (first) and **Writer**, via the UNO API and LibreOffice's own bundled Python
-interpreter — no external runtime, no third-party Python packages. Select a range or
-some text, give Claude an instruction, and get the transformed result written straight
-back into your document.
+Two complementary open-source integrations between **LibreOffice** and Anthropic's
+**Claude**, both built on the UNO API and LibreOffice's own bundled Python interpreter —
+no external runtime, no third-party Python packages:
+
+1. **The `.oxt` extension** — embeds Claude *inside* LibreOffice: select a range in
+   Calc or text in Writer, give Claude an instruction, get the transformed result
+   written straight back into your document.
+2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the inverse: lets Claude Code /
+   Claude Desktop (or any MCP client) reach **in** and drive LibreOffice as a tool,
+   with **61 tools** covering documents, Calc data/formulas/formatting/charts, Writer
+   text/tables, embedded Basic macros, drawing shapes, window screenshots, and a raw
+   UNO escape hatch. See [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md) for the full catalog.
 
 ## Status
 
@@ -30,6 +37,59 @@ LibreOffice's bundled Python, the Claude Messages API, and prior-art review).
 - [x] Network call runs off the UI thread, behind a modal progress dialog
 - [ ] Additional commands (summarize, translate, fix grammar, generate formula, explain range)
 - [ ] Public release on extensions.libreoffice.org
+
+## The MCP server
+
+`mcp/libreoffice_mcp.py` (v0.5.0) implements MCP's JSON-RPC-over-stdio transport by
+hand — standard library only, runs under LibreOffice's bundled Python so the `uno`
+module just works. It connects lazily to a LibreOffice listening on a UNO socket and
+survives office restarts (automatic bridge reconnect).
+
+**Setup**
+
+1. Start LibreOffice with a UNO socket (GUI or `--headless`):
+
+   ```powershell
+   & "C:\Program Files\LibreOffice\program\soffice.exe" --norestore "--accept=socket,host=localhost,port=2002;urp;" mybook.ods
+   ```
+
+2. Register the server with your MCP client. For Claude Code:
+
+   ```powershell
+   claude mcp add libreoffice -e LO_UNO_PORT=2002 -- "C:\Program Files\LibreOffice\program\python.exe" "<repo>\mcp\libreoffice_mcp.py"
+   ```
+
+   or in `.mcp.json` / Claude Desktop config:
+
+   ```json
+   {
+     "mcpServers": {
+       "libreoffice": {
+         "type": "stdio",
+         "command": "C:/Program Files/LibreOffice/program/python.exe",
+         "args": ["<repo>/mcp/libreoffice_mcp.py"],
+         "env": {"LO_UNO_PORT": "2002"}
+       }
+     }
+   }
+   ```
+
+**Highlights** (beyond the usual read/write-range fare — the full list is in
+[docs/MCP-TOOLS.md](docs/MCP-TOOLS.md)):
+
+- `lo_screenshot` — PNG of the real LibreOffice **window** (PrintWindow), because PDF
+  export can differ from what the GUI actually renders.
+- `reload_document` — store → close → reload: the serialization ground-truth check.
+- `run_macro`, `basic_module` — invoke and manage a document's embedded Basic.
+- `calc_list_shapes` / `calc_delete_shape`, `calc_sheet_properties` (RTL, visibility,
+  frozen panes), `calc_set_validation`, `inspect_ods` (regex over the saved file's
+  XML), and `uno_exec` — a Python escape hatch with the live UNO bridge in scope.
+- Sheet arguments accept indexes, exact names, or the English token of bilingual
+  `english | عربي` tab names; errors name the exception type and list real sheets;
+  stdio is UTF-8 (Arabic-safe) on Windows.
+
+Battle-tested by building a complete bilingual RTL data-entry workbook
+([docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) documents the field reports that shaped v0.5.0).
 
 ## Requirements
 
@@ -137,7 +197,9 @@ gotchas (activation-on-next-boot, warm-up boot).
 
 ```
 LibreOffice-Claude-Connector/
-├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md
+├── mcp/             libreoffice_mcp.py (stdio MCP server, 61 tools — see docs/MCP-TOOLS.md)
+├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md,
+│                    MCP-TOOLS.md (generated tool reference), KNOWN-GAPS.md, TEST-PLAN.md
 ├── src/             claude_client.py (Claude Messages API client)
 │                    calc_actions.py (pure Calc transform/prompt/parse logic)
 │                    writer_actions.py (pure Writer rewrite/generate/prompt logic)
@@ -162,6 +224,8 @@ LibreOffice-Claude-Connector/
 
 ## Documentation
 
+- [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md) — the MCP server's full tool reference (generated)
+- [docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) — field reports and the wishlist that became v0.5.0
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — technical design and layering
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) — how to develop and test
 - [docs/RESEARCH.md](docs/RESEARCH.md) — fact-checked research (architecture, UNO API, prior art, risks)
