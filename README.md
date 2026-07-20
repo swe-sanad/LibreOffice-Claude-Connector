@@ -215,13 +215,21 @@ See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for the full development workflow
 including the "LibreOffice caches Python modules" gotcha and the extension-testing
 gotchas (activation-on-next-boot, warm-up boot).
 
+## Contributing
+
+Contributions are welcome — especially new tools. **[CONTRIBUTING.md](CONTRIBUTING.md)**
+has the add-a-tool recipe and how to test it, and **[docs/TOOLS-WANTED.md](docs/TOOLS-WANTED.md)**
+is a ready pick-list of 85 proposed Calc/Writer tools (each mapped to the exact UNO API),
+with 🥇 good-first-tool picks to start from.
+
 ## Project layout
 
 ```
 LibreOffice-Claude-Connector/
 ├── mcp/             libreoffice_mcp.py (stdio MCP server, 61 tools — see docs/MCP-TOOLS.md)
 ├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md,
-│                    MCP-TOOLS.md (generated tool reference), KNOWN-GAPS.md, TEST-PLAN.md
+│                    MCP-TOOLS.md (generated tool reference), TOOLS-WANTED.md (roadmap),
+│                    KNOWN-GAPS.md, TEST-PLAN.md, SECURITY.md, UPSTREAMING.md
 ├── src/             claude_client.py (Claude Messages API client)
 │                    calc_actions.py (pure Calc transform/prompt/parse logic)
 │                    writer_actions.py (pure Writer rewrite/generate/prompt logic)
