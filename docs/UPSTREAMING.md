@@ -16,23 +16,24 @@ Remaining gap: if LibreOffice is **already running without a listener** (the use
 opened it normally), the single-instance mechanism swallows our launch and the
 accept argument is ignored. That gap is exactly what Rung 1 closes.
 
-## Rung 1 — an extension that makes every running LibreOffice reachable
+## Rung 1 — SHIPPED in v0.7.0: the agent-acceptor extension
 
-No core changes needed. A small `.oxt` (natural addition to this repo, since we
-already build one) that:
+A Job (`src/agent_acceptor.py`, bound in `ext/Jobs.xcu` to `OnStartApp` +
+`onFirstVisibleTask`) creates a UNO **Acceptor** on a per-user **named pipe**
+(`lo-claude-<user>`) from *inside* the office process, wired via `BridgeFactory` —
+exactly what `--accept` does, minus the command line. The MCP server connects
+**pipe → socket → auto-launch** (`src/uno_bridge.connect_pipe`, `_connect` in
+`mcp/libreoffice_mcp.py`; `lo_status` reports the transport).
 
-1. Registers a **Job** on the `OnStartApp` event.
-2. On startup, creates a UNO **Acceptor** (`com.sun.star.connection.Acceptor`) on a
-   **named pipe** (`pipe,name=libreoffice-claude-<user>`) and wires it to a
-   `BridgeFactory`, exactly what `--accept` does — but from *inside* the running
-   process, so it works no matter how LibreOffice was started.
-3. The MCP server then connects via `uno:pipe,name=...` first, falling back to the
-   TCP socket, falling back to auto-launch (Rung 0).
+Proven end to end: a flag-less GUI office is reachable over the pipe
+(`scripts/run_acceptor_test.ps1`), the acceptor does **not** keep the office alive
+(3× open/close clean self-exit), and a terminate listener stops it on shutdown.
+Local-only (named pipe, never TCP), per-user, `CLAUDE_AGENT_ACCEPTOR=0` opt-out.
+See [SECURITY.md](SECURITY.md).
 
-With this extension installed, **every** LibreOffice instance is agent-reachable
-the moment it starts. A settings toggle (default on, per-user pipe name, no
-network exposure — named pipes are local-only) addresses the security posture.
-Distribute via extensions.libreoffice.org for one-click install.
+**Remaining Rung-1 work:** a GUI toggle (Options / a Claude menu check-item)
+instead of the env var, and the extensions.libreoffice.org listing (with
+screenshots) for one-click install.
 
 ## Rung 2 — the actual core contribution
 
@@ -62,15 +63,15 @@ endpoint** — essentially Rung 1 living in core with a real UI:
 3. Native MCP in core is a bigger conversation (new protocol dependency) — expect
    it to become a GSoC-sized project or a TDF tender; the RFC can propose it as
    phase 2 while the acceptor toggle lands as phase 1.
-4. License: LibreOffice core is MPL-2.0/LGPLv3+ — this repo is already MPL-2.0,
-   so code can move upstream without relicensing friction.
+4. License: LibreOffice core is MPL-2.0/LGPLv3+ — this repo is MIT (permissive),
+   so code can be incorporated upstream without relicensing friction.
 
 ## Practical order
 
 | Step | Where | Effort | Unblocks |
 |---|---|---|---|
 | Auto-launch (done, v0.6.0) | this repo | — | cold-start zero ceremony |
-| Pipe-acceptor `.oxt` + pipe-first connect | this repo | days | already-running LibreOffice |
+| Pipe-acceptor `.oxt` + pipe-first connect (**done, v0.7.0**) | this repo | — | already-running LibreOffice |
 | extensions.libreoffice.org listing | TDF site | form + review | one-click install for everyone |
 | RFC + ESC + Bugzilla enhancement | TDF | weeks of discussion | legitimacy, direction |
 | Options toggle + acceptor patch | gerrit, C++ | small patch series | native, no extension |

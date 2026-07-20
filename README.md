@@ -40,14 +40,18 @@ LibreOffice's bundled Python, the Claude Messages API, and prior-art review).
 
 ## The MCP server
 
-`mcp/libreoffice_mcp.py` (v0.5.0) implements MCP's JSON-RPC-over-stdio transport by
+`mcp/libreoffice_mcp.py` implements MCP's JSON-RPC-over-stdio transport by
 hand — standard library only, runs under LibreOffice's bundled Python so the `uno`
-module just works. It connects lazily to a LibreOffice listening on a UNO socket and
-survives office restarts (automatic bridge reconnect).
+module just works. It survives office restarts (automatic bridge reconnect).
 
-**Setup — zero ceremony as of v0.6.0**: if no LibreOffice is listening, the server
-**launches it for you** (set `LO_AUTOSTART=0` to disable, `LO_HEADLESS=1` for
-headless, `LO_SOFFICE` to pin the executable). You only need to register the server:
+**Connecting to LibreOffice — pipe → socket → auto-launch** (as of v0.7.0): the
+server tries, in order, (1) the **agent-acceptor extension's named pipe** — which
+reaches a LibreOffice you simply opened, no flags at all; (2) the classic loopback
+socket on `LO_UNO_PORT`; (3) failing both, it **launches LibreOffice itself** with
+the socket accept argument (`LO_AUTOSTART=0` to disable, `LO_HEADLESS=1` for
+headless, `LO_SOFFICE` to pin the executable). `lo_status` reports which transport
+connected. Install the `.oxt` (below) to get the flag-free pipe path; the socket +
+auto-launch path needs nothing installed. You only need to register the server:
 
 - **Claude Code — one command, via the plugin marketplace:**
 
@@ -98,8 +102,16 @@ headless, `LO_SOFFICE` to pin the executable). You only need to register the ser
 
 Battle-tested by building a complete bilingual RTL data-entry workbook
 ([docs/KNOWN-GAPS.md](docs/KNOWN-GAPS.md) documents the field reports that shaped v0.5.0).
-[docs/UPSTREAMING.md](docs/UPSTREAMING.md) maps the road to **native agent support in
-LibreOffice core** (pipe-acceptor extension → TDF RFC → Options toggle in core).
+
+### The agent-acceptor extension (flag-free connect)
+
+The `.oxt` (build: `python scripts/build_oxt.py`; install via **Tools ▸ Extension
+Manager**, restart) runs a Job at office startup that opens a per-user **named
+pipe** from inside LibreOffice — so any office you open normally is reachable with
+no `--accept` flag and no port. Local-only (named pipe, never TCP), does not keep
+the office alive, and disables with `CLAUDE_AGENT_ACCEPTOR=0`. See
+[docs/SECURITY.md](docs/SECURITY.md). [docs/UPSTREAMING.md](docs/UPSTREAMING.md)
+maps the road from here to **native agent support in LibreOffice core**.
 
 ## Requirements
 

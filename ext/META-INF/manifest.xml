@@ -8,6 +8,13 @@
   <manifest:file-entry
       manifest:media-type="application/vnd.sun.star.uno-component;type=Python"
       manifest:full-path="sidebar_panel.py"/>
+  <!-- The agent-acceptor Job (named-pipe UNO acceptor at office start). -->
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.uno-component;type=Python"
+      manifest:full-path="agent_acceptor.py"/>
+  <manifest:file-entry
+      manifest:media-type="application/vnd.sun.star.configuration-data"
+      manifest:full-path="Jobs.xcu"/>
   <!-- Sidebar deck/panel + the factory registration that maps its URL. -->
   <manifest:file-entry
       manifest:media-type="application/vnd.sun.star.configuration-data"

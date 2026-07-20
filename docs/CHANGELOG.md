@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **v0.7.0 — the agent-acceptor extension: flag-free connect to any running
+  LibreOffice.** A Job (`src/agent_acceptor.py`, `ext/Jobs.xcu`) opens a per-user
+  named-pipe UNO acceptor from inside the office at startup, so a LibreOffice you
+  simply opened is reachable with **no --accept flag and no port** — closing the
+  one gap left by v0.6.0's auto-launch (an already-running listener-less office).
+  The MCP server now connects **pipe -> socket -> auto-launch**
+  (`uno_bridge.connect_pipe`, pipe-first `_connect`), and `lo_status` reports the
+  transport + the office profile path. `.oxt` bumped to 0.2.0.
+  - Local-only (named pipe, never TCP), per-user pipe name,
+    `CLAUDE_AGENT_ACCEPTOR=0` opt-out, `LO_UNO_PIPE`/`CLAUDE_AGENT_PIPE` override.
+  - Does NOT keep the office alive: daemon acceptor thread + terminate listener;
+    proven by a 3x open/close clean-self-exit test.
+  - New: `docs/SECURITY.md`, `scripts/run_acceptor_test.ps1` +
+    `tests/integration/test_agent_acceptor.py` (installs the .oxt into an
+    isolated profile, boots a flag-less GUI office, connects over the pipe).
+  - Hardened after an adversarial multi-agent review: acceptor published before
+    the worker thread (terminate can always stop it), the accepted connection is
+    closed on bridge-creation failure, and the test harness's kill-sweep no
+    longer touches a user's headless office.
+
 - **v0.6.5 — `lo_screenshot` matches by process, not title.** The default
   title-substring match could capture a *browser tab* titled "LibreOffice -
   Google Chrome" instead of the office window (hit during the live smoke test

@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<!-- Binds the agent-acceptor Job to the office's global start events so a
+     LibreOffice started WITHOUT any accept flag still opens the local named
+     pipe for agents. Both events are bound (onFirstVisibleTask never fires
+     headless; OnStartApp covers it) — the Job itself is idempotent. -->
+<oor:component-data xmlns:oor="http://openoffice.org/2001/registry"
+                    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                    oor:name="Jobs"
+                    oor:package="org.openoffice.Office">
+  <node oor:name="Jobs">
+    <node oor:name="ClaudeAgentAcceptor" oor:op="replace">
+      <prop oor:name="Service" oor:type="xs:string">
+        <value>com.swepioneers.claudeconn.AgentAcceptor</value>
+      </prop>
+    </node>
+  </node>
+  <node oor:name="Events">
+    <node oor:name="OnStartApp" oor:op="fuse">
+      <node oor:name="JobList">
+        <node oor:name="ClaudeAgentAcceptor" oor:op="replace"/>
+      </node>
+    </node>
+    <node oor:name="onFirstVisibleTask" oor:op="fuse">
+      <node oor:name="JobList">
+        <node oor:name="ClaudeAgentAcceptor" oor:op="replace"/>
+      </node>
+    </node>
+  </node>
+</oor:component-data>

@@ -25,7 +25,7 @@ EXT = os.path.join(ROOT, "ext")
 DIST = os.path.join(ROOT, "dist")
 
 # Registered UNO components — live at the .oxt root, listed in the manifest.
-ROOT_COMPONENTS = ["connector", "sidebar_panel"]
+ROOT_COMPONENTS = ["connector", "sidebar_panel", "agent_acceptor"]
 
 # Helper modules bundled as the `claudeconn` package (imported by connector.py).
 PACKAGE_MODULES = [

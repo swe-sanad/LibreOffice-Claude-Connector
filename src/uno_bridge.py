@@ -40,20 +40,18 @@ class SelectionError(Exception):
 # Connection (dev / test over a socket)
 # --------------------------------------------------------------------------- #
 
-def connect(host: str = "localhost", port: int = 2002,
-            retries: int = 20, delay: float = 0.5) -> Tuple[Any, Any, Any]:
-    """Resolve a running ``soffice`` that was started with ``--accept=socket,...``.
+def resolve_url(url: str, retries: int = 20,
+                delay: float = 0.5) -> Tuple[Any, Any, Any]:
+    """Resolve any UNO connection URL (socket or pipe).
 
     Returns ``(ctx, service_manager, desktop)``. Retries because the office may
-    still be opening its socket when we first try.
+    still be opening its listener when we first try.
     """
     local_ctx = uno.getComponentContext()
     resolver = local_ctx.ServiceManager.createInstanceWithContext(
         "com.sun.star.bridge.UnoUrlResolver", local_ctx)
-    url = ("uno:socket,host=%s,port=%d;urp;StarOffice.ComponentContext"
-           % (host, port))
     last_err: Optional[Exception] = None
-    for _ in range(retries):
+    for attempt in range(retries):
         try:
             ctx = resolver.resolve(url)
             smgr = ctx.ServiceManager
@@ -61,9 +59,27 @@ def connect(host: str = "localhost", port: int = 2002,
             return ctx, smgr, desktop
         except Exception as exc:  # NoConnectException etc. while office boots
             last_err = exc
-            time.sleep(delay)
-    raise RuntimeError("Could not connect to LibreOffice at %s:%d (%s)"
-                       % (host, port, last_err))
+            if attempt + 1 < retries:
+                time.sleep(delay)
+    raise RuntimeError("Could not connect to LibreOffice at %s (%s)"
+                       % (url, last_err))
+
+
+def connect(host: str = "localhost", port: int = 2002,
+            retries: int = 20, delay: float = 0.5) -> Tuple[Any, Any, Any]:
+    """Resolve a running ``soffice`` that was started with ``--accept=socket,...``."""
+    return resolve_url(
+        "uno:socket,host=%s,port=%d;urp;StarOffice.ComponentContext" % (host, port),
+        retries=retries, delay=delay)
+
+
+def connect_pipe(pipe_name: str, retries: int = 1,
+                 delay: float = 0.3) -> Tuple[Any, Any, Any]:
+    """Resolve over a local named pipe (the agent-acceptor extension's channel,
+    or an office started with ``--accept=pipe,...``)."""
+    return resolve_url(
+        "uno:pipe,name=%s;urp;StarOffice.ComponentContext" % pipe_name,
+        retries=retries, delay=delay)
 
 
 def is_calc(doc: Any) -> bool:

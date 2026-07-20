@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **61 tools** of the `libreoffice` MCP server (v0.6.5), generated from
+All **61 tools** of the `libreoffice` MCP server (v0.7.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -8,7 +8,7 @@ All **61 tools** of the `libreoffice` MCP server (v0.6.5), generated from
 
 | Tool | Description |
 |---|---|
-| `lo_status` | Check the LibreOffice connection and list open documents. |
+| `lo_status` | Check the LibreOffice connection (reports the transport: pipe = agent-acceptor extension, socket = accept flag/auto-launch) and list open documents. |
 | `list_documents` | List the documents currently open in LibreOffice. |
 | `lo_screenshot` | Save a PNG screenshot of the LibreOffice WINDOW itself (PrintWindow — captures the real GUI rendering even when the window is behind others; PDF export can differ from the screen, e.g. form controls on RTL sheets). Windows-only. Returns the saved file path. |
 | `get_current_selection` | Get the user's current selection: a Calc cell range (with data) or the selected Writer text. |

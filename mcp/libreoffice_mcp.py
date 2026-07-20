@@ -27,7 +27,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.6.5"
+SERVER_VERSION = "0.7.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -42,7 +42,7 @@ def _log(message):
 # Lazy LibreOffice connection (reuses src/uno_bridge.py)
 # --------------------------------------------------------------------------- #
 
-_state = {"ctx": None, "smgr": None, "desktop": None}
+_state = {"ctx": None, "smgr": None, "desktop": None, "transport": None}
 
 
 def _bridge():
@@ -97,10 +97,37 @@ def _autostart_office(port):
     return True
 
 
+def _default_pipe_name():
+    # MUST stay identical to default_pipe_name() in src/agent_acceptor.py —
+    # the extension opens the pipe, this side dials it.
+    import getpass
+    import re as _re
+    user = _re.sub(r"[^a-z0-9-]", "-", getpass.getuser().lower()) or "user"
+    return "lo-claude-" + user
+
+
 def _connect():
     if _state["desktop"] is None:
         ub = _bridge()
         port = int(os.environ.get("LO_UNO_PORT", "2002"))
+        # LO_UNO_PIPE and CLAUDE_AGENT_PIPE are both honored (the extension
+        # reads the latter); LO_UNO_PIPE=0/off skips the pipe rung entirely.
+        pipe = (os.environ.get("LO_UNO_PIPE")
+                or os.environ.get("CLAUDE_AGENT_PIPE")
+                or _default_pipe_name())
+
+        # 1) the agent-acceptor extension's named pipe: reaches a LibreOffice
+        #    the user opened normally (no flags). One quick try — it's local.
+        if pipe.strip().lower() not in ("0", "off", "false", "no"):
+            try:
+                ctx, smgr, desktop = ub.connect_pipe(pipe, retries=1, delay=0.2)
+                _state.update(ctx=ctx, smgr=smgr, desktop=desktop, transport="pipe")
+                _log("connected over pipe %r" % pipe)
+                return _state
+            except Exception:
+                pass
+
+        # 2) the classic socket; 3) auto-launch with the socket accept arg.
         _log("connecting to LibreOffice on port %d ..." % port)
         try:
             ctx, smgr, desktop = ub.connect(port=port, retries=3, delay=0.5)
@@ -115,16 +142,18 @@ def _connect():
                     "Launched LibreOffice but still no UNO listener on port %d. "
                     "Most likely another LibreOffice instance was already running "
                     "WITHOUT a listener (single-instance swallows the new launch). "
-                    "Close all LibreOffice windows and retry, or start it yourself: "
+                    "Close all LibreOffice windows and retry — or install the "
+                    "agent-acceptor extension (claude-connector .oxt) so every "
+                    "running LibreOffice is reachable, or start it yourself: "
                     'soffice --norestore "--accept=socket,host=localhost,port=%d;urp;"'
                     % (port, port))
-        _state.update(ctx=ctx, smgr=smgr, desktop=desktop)
+        _state.update(ctx=ctx, smgr=smgr, desktop=desktop, transport="socket")
     return _state
 
 
 def _reset_connection():
     """Drop the cached UNO connection so the next call reconnects fresh."""
-    _state.update(ctx=None, smgr=None, desktop=None)
+    _state.update(ctx=None, smgr=None, desktop=None, transport=None)
 
 
 # Substrings (lower-cased) that mark a lost/disposed UNO bridge — i.e. the office
@@ -411,8 +440,17 @@ def _cond_style_name(fmt):
 # --------------------------------------------------------------------------- #
 
 def tool_lo_status(_args):
-    return {"connected": True,
-            "documents": [_doc_info(doc) for doc in _open_docs()]}
+    _connect()
+    out = {"connected": True,
+           "transport": _state.get("transport"),
+           "documents": [_doc_info(doc) for doc in _open_docs()]}
+    try:      # WHICH office answered (crucial when a pipe reaches a stray one)
+        ps = _state["smgr"].createInstanceWithContext(
+            "com.sun.star.util.PathSettings", _state["ctx"])
+        out["profile"] = ps.UserConfig
+    except Exception:
+        pass
+    return out
 
 
 def tool_list_documents(_args):
@@ -2018,7 +2056,7 @@ def _schema(props=None, required=None):
 TOOL_DEFS = [
     # --- status & selection ---
     {"name": "lo_status",
-     "description": "Check the LibreOffice connection and list open documents.",
+     "description": "Check the LibreOffice connection (reports the transport: pipe = agent-acceptor extension, socket = accept flag/auto-launch) and list open documents.",
      "inputSchema": _schema()},
     {"name": "list_documents",
      "description": "List the documents currently open in LibreOffice.",
