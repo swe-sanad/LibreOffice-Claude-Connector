@@ -99,3 +99,47 @@ sheet resolution, blank error messages, UTF-8 stdio). Table kept for history:
 | `basic_modules(list/get/set)` + compile check | manage embedded Basic libraries; a syntax error silently kills every macro |
 | `inspect_ods(path, xpath/grep)` | grep content.xml inside the saved zip — how the root cause was actually found |
 | `uno_exec(snippet)` | escape hatch that subsumes all of the above until dedicated tools exist |
+
+
+## Session 3 additions (2026-07-23, Nasaq Arabic Writer proposal)
+
+First heavy **Writer** session (prior reports were Calc). Built a multi-section
+Arabic (RTL) technical+financial proposal — ~45 `writer_*` calls, logo image,
+15+ tables. Bugs/gaps below are reproducible; TODO for a future session.
+
+### Bugs / reliability
+
+1. **Focus-stealing breaks every write — no way to target a document.**
+   All `writer_*`/`calc_*` tools act on the *implicit* active document
+   (`desktop.getCurrentComponent()`). Mid-build the source doc closed and an
+   already-open Calc file grabbed focus; the very next `writer_append_text`
+   died with `The active document is not a Writer document.` Had to re-activate
+   the Writer doc by hand via `uno_exec`
+   (`...getCurrentController().getFrame().activate()`). This is the single
+   biggest Writer-session hazard: any user click or background doc event
+   silently redirects writes.
+   - Fix (either/both):
+     - `set_active_document(title | url)` tool — the Writer analogue of the
+       shipped `calc_set_active_sheet`.
+     - Optional `document` (title/url/id) param on every read/write tool that
+       resolves against `desktop.getComponents()` instead of trusting focus.
+
+2. **Transient failure indistinguishable from validation error.**
+   A valid `writer_insert_table` (7×3, 21 cells) failed once with
+   `data is larger than the table (7x3)` and succeeded on identical retry — the
+   real cause was the safety classifier being unavailable
+   (`claude-sonnet-5 ... temporarily unavailable`), surfaced as a domain error.
+   Related to session-1 bug #3 (blank errors): callers can't tell "retry me"
+   from "your input is wrong." Fix: tag transient/infra failures distinctly from
+   argument-validation failures in the message.
+
+### Missing / not-dynamic-enough (Writer)
+
+| Wanted | Pain it removes |
+|---|---|
+| `set_active_document(title\|url)` | see bug 1 — prerequisite for reliable multi-doc Writer sessions |
+| RTL / writing-direction control | **big one for Arabic.** No way to set paragraph `WritingMode = RL_TB` or `ParaAdjust` per-direction. `writer_format_paragraph` exposes `align` but not direction; tables + numbers render LTR. Add `direction: rtl\|ltr` to `writer_format_paragraph`, and a page/table-level RTL toggle (`TableColumnRelativeSum` mirrors, `TextTable` RTL). |
+| batch op (`writer_batch` / render-outline) | a 3-section doc = ~45 sequential round-trips (one per heading/paragraph/table). Accept an array of ops, or a structured outline → paragraphs+tables in one call. |
+| `caption` param on `writer_insert_table` | every table needs a following "جدول N — …" caption as a separate append; couple it to the insert (real Writer caption via `SetReferenceMark`/sequence field). |
+| echo active-doc title in every tool response | drift (bug 1) only surfaces as a *later* failed write; returning the active title each call makes it visible immediately. |
+| cursor positioning / edit-in-place | everything appends to end — can't insert mid-document or edit an existing table cell after the fact. |
