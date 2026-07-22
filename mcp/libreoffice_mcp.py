@@ -1961,6 +1961,2033 @@ def tool_uno_exec(args):
     return out
 
 
+# --------------------------------------------------------------------------- #
+# Tools — "Good first tools" (single-API wrappers, see docs/TOOLS-WANTED.md)
+# --------------------------------------------------------------------------- #
+
+def _calc_axis(sheet, axis):
+    """'columns'|'rows' -> the sheet's column/row collection. Raises on typos."""
+    a = str(axis).lower()
+    if a in ("columns", "column", "col", "cols"):
+        return sheet.getColumns(), "columns"
+    if a in ("rows", "row"):
+        return sheet.getRows(), "rows"
+    raise RuntimeError("axis must be 'columns' or 'rows', got: %r" % axis)
+
+
+def tool_calc_sort_range(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    keys = args.get("keys")
+    if not keys:
+        raise RuntimeError("Provide 'keys': a non-empty list of sort columns.")
+    fields = []
+    for k in keys:
+        f = _uno_struct("com.sun.star.table.TableSortField")
+        f.Field = int(k["column"])          # 0-based offset within the range
+        f.IsAscending = not bool(k.get("descending", False))
+        f.IsCaseSensitive = bool(k.get("case_sensitive", False))
+        fields.append(f)
+    desc = list(rng.createSortDescriptor())
+    for pv in desc:
+        if pv.Name == "SortFields":
+            pv.Value = tuple(fields)
+        elif pv.Name == "ContainsHeader":
+            pv.Value = bool(args.get("has_header", False))
+        elif pv.Name == "BindFormatsToContent":
+            pv.Value = False
+    rng.sort(tuple(desc))
+    return {"sorted": args["range"], "keys": len(fields),
+            "has_header": bool(args.get("has_header", False))}
+
+
+def tool_calc_set_dimensions(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    coll, axis = _calc_axis(sheet, args["axis"])
+    start = int(args["start"])
+    count = int(args.get("count", 1))
+    autofit = bool(args.get("autofit", False))
+    size_mm = args.get("size_mm")
+    if not autofit and size_mm is None:
+        raise RuntimeError("Provide 'size_mm' or set 'autofit': true.")
+    for i in range(start, start + count):
+        item = coll.getByIndex(i)
+        if autofit:
+            if axis == "columns":
+                item.OptimalWidth = True
+            else:
+                item.OptimalHeight = True
+        else:
+            v = _mm100(size_mm)
+            if axis == "columns":
+                item.Width = v
+            else:
+                item.Height = v
+    return {"axis": axis, "start": start, "count": count,
+            "autofit": autofit, "size_mm": None if autofit else size_mm}
+
+
+def tool_calc_set_visibility(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    coll, axis = _calc_axis(sheet, args["axis"])
+    start = int(args["start"])
+    count = int(args.get("count", 1))
+    visible = bool(args["visible"])
+    for i in range(start, start + count):
+        coll.getByIndex(i).IsVisible = visible
+    return {"axis": axis, "start": start, "count": count, "visible": visible}
+
+
+def tool_calc_move_sheet(args):
+    doc = _require_calc()
+    sheets = doc.getSheets()
+    name = args["name"]
+    if not sheets.hasByName(name):
+        raise RuntimeError("No sheet named %r. Sheets: %s"
+                           % (name, ", ".join(sheets.getElementNames())))
+    position = int(args["position"])
+    sheets.moveByName(name, position)
+    return {"moved": name, "to_position": position,
+            "order": list(sheets.getElementNames())}
+
+
+def tool_calc_recalculate(args):
+    doc = _require_calc()
+    hard = bool(args.get("hard", True))
+    if hard:
+        doc.calculateAll()
+    else:
+        doc.calculate()
+    return {"recalculated": "all" if hard else "dirty"}
+
+
+def tool_calc_delete_comment(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    cell = sheet.getCellRangeByName(args["cell"]).getRangeAddress()
+    annotations = sheet.getAnnotations()
+    removed = 0
+    for i in range(annotations.getCount() - 1, -1, -1):
+        pos = annotations.getByIndex(i).getPosition()
+        if pos.Column == cell.StartColumn and pos.Row == cell.StartRow:
+            annotations.removeByIndex(i)
+            removed += 1
+    return {"cell": args["cell"], "removed": removed}
+
+
+def tool_calc_delete_chart(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    charts = sheet.getCharts()
+    name = args["name"]
+    if not charts.hasByName(name):
+        raise RuntimeError("No chart named %r on this sheet. Charts: %s"
+                           % (name, ", ".join(charts.getElementNames())))
+    charts.removeByName(name)
+    return {"deleted_chart": name}
+
+
+def tool_writer_word_count(_args):
+    doc = _require_writer()
+    out = {}
+    for key, prop in (("words", "WordCount"), ("paragraphs", "ParagraphCount"),
+                      ("characters", "CharacterCount")):
+        try:
+            out[key] = int(doc.getPropertyValue(prop))
+        except Exception:
+            out[key] = None
+    if any(out[k] is None for k in ("words", "paragraphs", "characters")):
+        try:
+            stats = {nv.Name: nv.Value
+                     for nv in doc.getDocumentProperties().DocumentStatistics}
+            for key, prop in (("words", "WordCount"),
+                              ("paragraphs", "ParagraphCount"),
+                              ("characters", "CharacterCount")):
+                if out[key] is None and prop in stats:
+                    out[key] = int(stats[prop])
+        except Exception:
+            pass
+    try:
+        out["pages"] = int(doc.getCurrentController().PageCount)
+    except Exception:
+        out["pages"] = None
+    return out
+
+
+def tool_writer_read_table(args):
+    doc = _require_writer()
+    tables = doc.getTextTables()
+    name = args.get("name")
+    if name not in (None, ""):
+        if not tables.hasByName(name):
+            raise RuntimeError("No table named %r. Tables: %s"
+                               % (name, ", ".join(tables.getElementNames())))
+        table = tables.getByName(name)
+    else:
+        if tables.getCount() == 0:
+            raise RuntimeError("The document has no tables.")
+        table = tables.getByIndex(int(args.get("index", 0)))
+    rows = table.getRows().getCount()
+    cols = table.getColumns().getCount()
+    grid = []
+    for r in range(rows):
+        row = []
+        for c in range(cols):
+            cell = table.getCellByName("%s%d" % (_col_letters(c), r + 1))
+            row.append(cell.getString() if cell is not None else None)
+        grid.append(row)
+    return {"name": table.Name, "rows": rows, "columns": cols, "cells": grid}
+
+
+def tool_writer_get_paragraphs(_args):
+    doc = _require_writer()
+    out = []
+    enum = doc.getText().createEnumeration()
+    i = 0
+    while enum.hasMoreElements():
+        para = enum.nextElement()
+        try:
+            if not para.supportsService("com.sun.star.text.Paragraph"):
+                continue
+        except Exception:
+            continue
+        try:
+            level = int(para.getPropertyValue("OutlineLevel"))
+        except Exception:
+            level = 0
+        try:
+            style = para.getPropertyValue("ParaStyleName")
+        except Exception:
+            style = None
+        out.append({"index": i, "text": para.getString(),
+                    "style": style, "is_heading": level > 0})
+        i += 1
+    return {"paragraphs": out}
+
+
+def _jsonable(v):
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    return str(v)
+
+
+def tool_get_document_properties(_args):
+    doc = _current_doc()
+    props = doc.getDocumentProperties()
+
+    def _dt(d):
+        try:
+            if not (d.Year or d.Month or d.Day):
+                return None
+            return ("%04d-%02d-%02dT%02d:%02d:%02d"
+                    % (d.Year, d.Month, d.Day, d.Hours, d.Minutes, d.Seconds))
+        except Exception:
+            return None
+
+    kw = props.Keywords
+    out = {
+        "title": props.Title, "author": props.Author,
+        "subject": props.Subject,
+        "keywords": list(kw) if not isinstance(kw, str) else kw,
+        "description": props.Description,
+        "generator": getattr(props, "Generator", None),
+        "modified_by": props.ModifiedBy,
+        "created": _dt(props.CreationDate),
+        "modified": _dt(props.ModificationDate),
+    }
+    try:
+        out["statistics"] = {nv.Name: nv.Value
+                             for nv in props.DocumentStatistics}
+    except Exception:
+        out["statistics"] = {}
+    try:
+        udp = props.UserDefinedProperties
+        names = [p.Name for p in udp.getPropertySetInfo().getProperties()]
+        out["custom"] = {n: _jsonable(udp.getPropertyValue(n)) for n in names}
+    except Exception:
+        out["custom"] = {}
+    return out
+
+
+def tool_set_document_modified(args):
+    doc = _current_doc()
+    if args.get("modified") is not None:
+        doc.setModified(bool(args["modified"]))
+    return {"modified": bool(doc.isModified())}
+
+
+# --------------------------------------------------------------------------- #
+# Tools — Writer P1 (see docs/TOOLS-WANTED.md)
+# --------------------------------------------------------------------------- #
+
+def _enum_value(v):
+    """pyuno Enum -> its string value (e.g. 'AT_PARAGRAPH'); str() otherwise."""
+    return getattr(v, "value", None) or str(v)
+
+
+def tool_writer_list_objects(_args):
+    doc = _require_writer()
+    out = []
+
+    def _named(kind, getter):
+        try:
+            coll = getter()
+            names = coll.getElementNames()
+        except Exception:
+            return
+        for nm in names:
+            try:
+                obj = coll.getByName(nm)
+            except Exception:
+                continue
+            entry = {"kind": kind, "name": nm}
+            try:
+                entry["anchor"] = _enum_value(obj.AnchorType)
+            except Exception:
+                pass
+            try:
+                entry["size_mm"] = [round(obj.Size.Width / 100.0, 1),
+                                    round(obj.Size.Height / 100.0, 1)]
+            except Exception:
+                pass
+            out.append(entry)
+
+    _named("graphic", doc.getGraphicObjects)
+    _named("frame", doc.getTextFrames)
+    _named("embedded", doc.getEmbeddedObjects)
+    return {"objects": out, "count": len(out)}
+
+
+def _writer_paragraphs(doc):
+    """Yield (index, paragraph) over body paragraphs only — the same index space
+    writer_get_paragraphs reports."""
+    enum = doc.getText().createEnumeration()
+    i = 0
+    while enum.hasMoreElements():
+        para = enum.nextElement()
+        try:
+            if not para.supportsService("com.sun.star.text.Paragraph"):
+                continue
+        except Exception:
+            continue
+        yield i, para
+        i += 1
+
+
+def tool_writer_set_paragraph_text(args):
+    doc = _require_writer()
+    target = int(args["index"])
+    text = doc.getText()
+    for i, para in _writer_paragraphs(doc):
+        if i == target:
+            cursor = text.createTextCursorByRange(para.getStart())
+            cursor.gotoEndOfParagraph(True)
+            cursor.setString(args["text"])   # single paragraph; no break handling
+            return {"index": target, "text": args["text"]}
+    raise RuntimeError("No body paragraph at index %d." % target)
+
+
+_FIELD_SERVICES = {
+    "page_number": "com.sun.star.text.TextField.PageNumber",
+    "page_count": "com.sun.star.text.TextField.PageCount",
+    "date": "com.sun.star.text.TextField.DateTime",
+    "time": "com.sun.star.text.TextField.DateTime",
+    "title": "com.sun.star.text.TextField.DocInfo.Title",
+    "author": "com.sun.star.text.TextField.Author",
+}
+
+
+def tool_writer_insert_field(args):
+    doc = _require_writer()
+    kind = str(args.get("field", "page_number")).lower()
+    if kind not in _FIELD_SERVICES:
+        raise RuntimeError("field must be one of %s" % sorted(_FIELD_SERVICES))
+    field = doc.createInstance(_FIELD_SERVICES[kind])
+    if kind in ("date", "time"):
+        try:
+            field.IsDate = (kind == "date")
+            field.IsFixed = bool(args.get("fixed", False))
+        except Exception:
+            pass
+    if bool(args.get("new_paragraph", False)):
+        text, cursor = _append_paragraph(doc, style="Standard")
+    else:
+        text, cursor = _writer_end_cursor(doc)
+    text.insertTextContent(cursor, field, False)
+    return {"inserted_field": kind}
+
+
+def tool_writer_insert_toc(args):
+    doc = _require_writer()
+    toc = doc.createInstance("com.sun.star.text.ContentIndex")
+    for prop, value in (("CreateFromOutline", True),
+                        ("Title", args.get("title")),
+                        ("Level", args.get("levels"))):
+        if value is None:
+            continue
+        try:
+            setattr(toc, prop, int(value) if prop == "Level" else value)
+        except Exception:
+            pass
+    text = doc.getText()
+    if bool(args.get("at_start", False)):
+        cursor = text.createTextCursorByRange(text.getStart())
+    else:
+        text, cursor = _writer_end_cursor(doc)
+    text.insertTextContent(cursor, toc, False)
+    try:
+        toc.update()
+    except Exception:
+        pass
+    return {"inserted": "table_of_contents"}
+
+
+def tool_writer_update_indexes(_args):
+    doc = _require_writer()
+    indexes = 0
+    try:
+        idxs = doc.getDocumentIndexes()
+        for i in range(idxs.getCount()):
+            idxs.getByIndex(i).update()
+            indexes += 1
+    except Exception:
+        pass
+    try:
+        doc.getTextFields().refresh()
+    except Exception:
+        pass
+    return {"indexes_updated": indexes, "fields_refreshed": True}
+
+
+def tool_writer_apply_list(args):
+    doc = _require_writer()
+    ordered = bool(args.get("ordered", False))
+    style = "List Number" if ordered else "List Bullet"
+    start = int(args.get("start", 0))
+    count = args.get("count")
+    end = start + int(count) - 1 if count is not None else None
+    changed = 0
+    for i, para in _writer_paragraphs(doc):
+        if i >= start and (end is None or i <= end):
+            try:
+                para.ParaStyleName = style
+                changed += 1
+            except Exception:
+                pass
+    return {"style": style, "paragraphs_changed": changed}
+
+
+# --------------------------------------------------------------------------- #
+# Tools — cross-cutting (Calc & Writer) — see docs/TOOLS-WANTED.md
+# --------------------------------------------------------------------------- #
+
+def _dispatch(doc, command, props=()):
+    """Execute a .uno: command against the document's frame."""
+    state = _connect()
+    helper = state["smgr"].createInstanceWithContext(
+        "com.sun.star.frame.DispatchHelper", state["ctx"])
+    frame = doc.getCurrentController().getFrame()
+    return helper.executeDispatch(frame, command, "", 0, tuple(props))
+
+
+# friendly family token -> UNO StyleFamilies name
+_STYLE_FAMILIES = {
+    "paragraph": "ParagraphStyles", "character": "CharacterStyles",
+    "cell": "CellStyles", "page": "PageStyles", "frame": "FrameStyles",
+    "numbering": "NumberingStyles", "graphic": "GraphicStyles",
+    "table": "TableStyles",
+}
+
+
+def _resolve_style_family(available, fam):
+    if fam in available:
+        return fam
+    key = str(fam).strip().lower().rstrip("s")
+    if key in _STYLE_FAMILIES and _STYLE_FAMILIES[key] in available:
+        return _STYLE_FAMILIES[key]
+    for nm in available:
+        if nm.lower() == str(fam).lower():
+            return nm
+    return None
+
+
+def _apply_style_props(style, fmt):
+    if "bold" in fmt:
+        style.CharWeight = 150.0 if fmt["bold"] else 100.0
+    if "italic" in fmt:
+        style.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
+                                      "ITALIC" if fmt["italic"] else "NONE")
+    if "font_name" in fmt:
+        style.CharFontName = fmt["font_name"]
+    if "font_size" in fmt:
+        style.CharHeight = float(fmt["font_size"])
+    if "font_color" in fmt:
+        style.CharColor = _hex_color(fmt["font_color"])
+    if "background_color" in fmt:
+        for prop in ("CellBackColor", "ParaBackColor", "BackColor"):
+            try:
+                setattr(style, prop, _hex_color(fmt["background_color"]))
+                break
+            except Exception:
+                continue
+
+
+def tool_set_hyperlink(args):
+    doc = _current_doc()
+    url = args["url"]
+    kind = _doc_kind(doc)
+    if kind == "calc":
+        sheet = _resolve_sheet(doc, args.get("sheet"))
+        cell = sheet.getCellRangeByName(args["cell"])
+        display = args.get("text") or cell.getString() or url
+        cell.setString("")
+        ctext = cell.getText()
+        cursor = ctext.createTextCursor()
+        field = doc.createInstance("com.sun.star.text.TextField.URL")
+        field.URL = url
+        field.Representation = display
+        ctext.insertTextContent(cursor, field, False)
+        return {"cell": args["cell"], "url": url}
+    if kind == "writer":
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        n = 0
+        for i in range(found.getCount()):
+            rng = found.getByIndex(i)
+            rng.HyperLinkURL = url
+            if args.get("target"):
+                rng.HyperLinkTarget = args["target"]
+            n += 1
+        return {"matches_linked": n, "url": url}
+    raise RuntimeError("set_hyperlink needs a Calc ('cell') or Writer ('search') document.")
+
+
+def tool_export_document(args):
+    import uno
+    doc = _current_doc()
+    path = args["path"]
+    fmt = str(args.get("format")
+              or os.path.splitext(path)[1].lstrip(".")).lower()
+    url = _to_url(path)
+    if fmt == "pdf":
+        fd = []
+        if args.get("page_range"):
+            fd.append(_pv("PageRange", str(args["page_range"])))
+        if args.get("pdfa"):
+            fd.append(_pv("SelectPdfVersion", 1))   # PDF/A-1
+        if args.get("quality") is not None:
+            fd.append(_pv("Quality", int(args["quality"])))
+        if args.get("password"):
+            fd.append(_pv("EncryptFile", True))
+            fd.append(_pv("DocumentOpenPassword", str(args["password"])))
+        filter_name = ("writer_pdf_Export" if _doc_kind(doc) == "writer"
+                       else "calc_pdf_Export")
+        props = [_pv("FilterName", filter_name)]
+        if fd:
+            props.append(_pv("FilterData",
+                             uno.Any("[]com.sun.star.beans.PropertyValue",
+                                     tuple(fd))))
+        doc.storeToURL(url, tuple(props))
+        return {"exported": path, "format": "pdf"}
+    if fmt == "csv":
+        delim = args.get("delimiter", ",")
+        sep = ord(delim[0]) if delim else 44
+        encoding = 76  # UTF-8 token in the CSV filter's charset table
+        opts = "%d,%d,%d,1" % (sep, ord(args.get("quote", '"')[0]), encoding)
+        props = [_pv("FilterName", "Text - txt - csv (StarCalc)"),
+                 _pv("FilterOptions", opts)]
+        doc.storeToURL(url, tuple(props))
+        return {"exported": path, "format": "csv", "filter_options": opts}
+    raise RuntimeError("export_document supports format 'pdf' or 'csv', got %r." % fmt)
+
+
+def tool_set_document_properties(args):
+    doc = _current_doc()
+    props = doc.getDocumentProperties()
+    changed = []
+    for key, prop in (("title", "Title"), ("author", "Author"),
+                      ("subject", "Subject"), ("description", "Description")):
+        if args.get(key) is not None:
+            setattr(props, prop, args[key])
+            changed.append(prop)
+    if args.get("keywords") is not None:
+        kw = args["keywords"]
+        props.Keywords = tuple(kw) if isinstance(kw, (list, tuple)) else (str(kw),)
+        changed.append("Keywords")
+    custom = args.get("custom")
+    if custom:
+        udp = props.UserDefinedProperties
+        info = udp.getPropertySetInfo()
+        for k, v in custom.items():
+            try:
+                if info.hasPropertyByName(k):
+                    if v is None:
+                        udp.removeProperty(k)
+                    else:
+                        udp.setPropertyValue(k, v)
+                elif v is not None:
+                    from com.sun.star.beans.PropertyAttribute import REMOVEABLE
+                    udp.addProperty(k, REMOVEABLE, v)
+            except Exception:
+                pass
+        changed.append("custom")
+    return {"updated": changed}
+
+
+def tool_list_styles(args):
+    doc = _current_doc()
+    families = doc.getStyleFamilies()
+    available = list(families.getElementNames())
+    fam = args.get("family")
+    if fam:
+        resolved = _resolve_style_family(available, fam)
+        if resolved is None:
+            raise RuntimeError("No style family %r. Families: %s"
+                               % (fam, ", ".join(available)))
+        wanted = [resolved]
+    else:
+        wanted = available
+    used_only = bool(args.get("in_use_only", False))
+    out = {}
+    for f in wanted:
+        coll = families.getByName(f)
+        names = []
+        for nm in coll.getElementNames():
+            if used_only:
+                try:
+                    if not coll.getByName(nm).isInUse():
+                        continue
+                except Exception:
+                    pass
+            names.append(nm)
+        out[f] = names
+    return {"styles": out}
+
+
+_STYLE_SERVICES = {
+    "ParagraphStyles": "com.sun.star.style.ParagraphStyle",
+    "CharacterStyles": "com.sun.star.style.CharacterStyle",
+    "CellStyles": "com.sun.star.style.CellStyle",
+    "PageStyles": "com.sun.star.style.PageStyle",
+    "FrameStyles": "com.sun.star.style.FrameStyle",
+}
+
+
+def tool_set_style(args):
+    doc = _current_doc()
+    families = doc.getStyleFamilies()
+    fam = _resolve_style_family(list(families.getElementNames()), args["family"])
+    if fam is None:
+        raise RuntimeError("No style family %r." % args["family"])
+    coll = families.getByName(fam)
+    name = args["name"]
+    if coll.hasByName(name):
+        style = coll.getByName(name)
+        created = False
+    else:
+        service = _STYLE_SERVICES.get(fam)
+        if not service:
+            raise RuntimeError("Cannot create styles in family %r." % fam)
+        style = doc.createInstance(service)
+        coll.insertByName(name, style)
+        created = True
+    if args.get("parent"):
+        try:
+            style.ParentStyle = args["parent"]
+        except Exception:
+            pass
+    _apply_style_props(style, args)
+    return {"style": name, "family": fam, "created": created}
+
+
+def tool_protect_document(args):
+    doc = _current_doc()
+    kind = _doc_kind(doc)
+    protect = bool(args.get("protect", True))
+    pwd = args.get("password", "") or ""
+    out = {"protect": protect}
+    if kind == "calc":
+        if args.get("sheet") not in (None, ""):
+            target = _resolve_sheet(doc, args["sheet"])
+            out["scope"] = "sheet"
+        else:
+            target = doc
+            out["scope"] = "workbook"
+        if protect:
+            target.protect(pwd)
+        else:
+            target.unprotect(pwd)
+        out["is_protected"] = bool(target.isProtected())
+        return out
+    if kind == "writer":
+        sections = doc.getTextSections()
+        n = 0
+        for nm in sections.getElementNames():
+            sections.getByName(nm).IsProtected = protect
+            n += 1
+        out["sections_affected"] = n
+        return out
+    raise RuntimeError("protect_document needs a Calc or Writer document.")
+
+
+def tool_dispatch_uno(args):
+    doc = _current_doc()
+    command = args["command"]
+    props = tuple(_pv(k, v) for k, v in (args.get("args") or {}).items())
+    self_res = _dispatch(doc, command, props)
+    return {"dispatched": command, "handled": self_res is not None}
+
+
+def tool_document_undo(args):
+    doc = _current_doc()
+    mgr = doc.getUndoManager()
+    action = str(args.get("action", "status")).lower()
+    if action == "undo":
+        if mgr.isUndoPossible():
+            mgr.undo()
+    elif action == "redo":
+        if mgr.isRedoPossible():
+            mgr.redo()
+    elif action == "clear":
+        mgr.clear()
+    elif action != "status":
+        raise RuntimeError("action must be undo|redo|clear|status.")
+    out = {"undo_possible": bool(mgr.isUndoPossible()),
+           "redo_possible": bool(mgr.isRedoPossible())}
+    try:
+        out["undo_title"] = (mgr.getCurrentUndoActionTitle()
+                             if mgr.isUndoPossible() else None)
+    except Exception:
+        out["undo_title"] = None
+    return out
+
+
+def tool_bind_document_event(args):
+    doc = _current_doc()
+    events = doc.getEvents()
+    name = args["event"]
+    script = args.get("script")
+    if script:
+        events.replaceByName(name, (_pv("EventType", "Script"),
+                                    _pv("Script", script)))
+    else:
+        events.replaceByName(name, ())
+    return {"event": name, "bound": bool(script)}
+
+
+def tool_set_view_zoom(args):
+    doc = _current_doc()
+    ctrl = doc.getCurrentController()
+    zoom_types = {"optimal": 0, "page_width": 1, "whole_page": 2,
+                  "percent": 3, "page_width_exact": 4}
+    ztype = args.get("type")
+    if ztype:
+        key = str(ztype).lower()
+        if key not in zoom_types:
+            raise RuntimeError("type must be one of %s." % sorted(zoom_types))
+        try:
+            ctrl.ZoomType = zoom_types[key]
+        except Exception:
+            pass
+    if args.get("percent") is not None:
+        try:
+            ctrl.ZoomType = 3
+        except Exception:
+            pass
+        ctrl.ZoomValue = int(args["percent"])
+    return {"zoom_value": getattr(ctrl, "ZoomValue", None),
+            "zoom_type": getattr(ctrl, "ZoomType", None)}
+
+
+def tool_get_signatures(_args):
+    doc = _current_doc()
+    out = {"signed": False, "valid": None, "signer": None, "date": None}
+    url = doc.getURL()
+    if not url:
+        out["note"] = "Document has no file yet — nothing to verify."
+        return out
+    state = _connect()
+    try:
+        dds = state["smgr"].createInstanceWithContext(
+            "com.sun.star.security.DocumentDigitalSignatures", state["ctx"])
+        infos = dds.verifyDocumentContentSignatures(url, None)
+    except Exception as exc:
+        out["note"] = "Could not read signatures (%s)." % type(exc).__name__
+        return out
+    out["signed"] = bool(infos)
+    if infos:
+        first = infos[0]
+        try:
+            out["valid"] = (int(getattr(first, "SignatureIsValid", 0)) == 1
+                            or bool(getattr(first, "SignatureIsValid", False)))
+        except Exception:
+            pass
+        try:
+            out["signer"] = first.Signer.SubjectName
+        except Exception:
+            pass
+        try:
+            d = first.SignatureDate
+            out["date"] = "%04d-%02d-%02d" % (d.Year, d.Month, d.Day)
+        except Exception:
+            pass
+    return out
+
+
+def tool_list_embedded_objects(_args):
+    doc = _current_doc()
+    kind = _doc_kind(doc)
+    out = []
+    if kind == "writer":
+        for tag, getter in (("graphic", doc.getGraphicObjects),
+                            ("embedded", doc.getEmbeddedObjects)):
+            try:
+                coll = getter()
+                for nm in coll.getElementNames():
+                    obj = coll.getByName(nm)
+                    e = {"kind": tag, "name": nm}
+                    try:
+                        e["size_mm"] = [round(obj.Size.Width / 100.0, 1),
+                                        round(obj.Size.Height / 100.0, 1)]
+                    except Exception:
+                        pass
+                    out.append(e)
+            except Exception:
+                pass
+    elif kind == "calc":
+        sheets = doc.getSheets()
+        for si in range(sheets.getCount()):
+            sheet = sheets.getByIndex(si)
+            dp = sheet.DrawPage
+            for i in range(dp.getCount()):
+                shp = dp.getByIndex(i)
+                st = getattr(shp, "ShapeType", "") or ""
+                if "Graphic" in st or "OLE" in st:
+                    out.append({"kind": st, "name": getattr(shp, "Name", ""),
+                                "sheet": sheet.getName()})
+    else:
+        raise RuntimeError("list_embedded_objects needs a Calc or Writer document.")
+    return {"objects": out, "count": len(out)}
+
+
+def tool_insert_ole_object(args):
+    doc = _current_doc()
+    kind = _doc_kind(doc)
+    clsid = args.get("clsid")
+    obj_kind = str(args.get("object", "math")).lower()
+    # Well-known CLSIDs (LibreOffice component GUIDs).
+    clsids = {
+        "math": "078B7ABA-54FC-457F-8551-6147E776A997",
+        "calc": "47BBB4CB-CE4C-4E80-A591-42D9AE74950F",
+        "chart": "12DCAE26-281F-416F-A234-C3086127382E",
+    }
+    if not clsid:
+        clsid = clsids.get(obj_kind)
+        if not clsid:
+            raise RuntimeError("Provide 'clsid' or object in %s." % sorted(clsids))
+    if kind == "writer":
+        obj = doc.createInstance("com.sun.star.text.TextEmbeddedObject")
+        obj.CLSID = clsid
+        text, cursor = _writer_end_cursor(doc)
+        text.insertTextContent(cursor, obj, False)
+        return {"inserted": obj_kind, "clsid": clsid}
+    if kind == "calc":
+        sheet = _resolve_sheet(doc, args.get("sheet"))
+        shape = doc.createInstance("com.sun.star.drawing.OLE2Shape")
+        shape.CLSID = clsid
+        sheet.DrawPage.add(shape)
+        pos = _uno_struct("com.sun.star.awt.Size")
+        pos.Width = _mm100(args.get("width_mm", 60))
+        pos.Height = _mm100(args.get("height_mm", 40))
+        shape.setSize(pos)
+        return {"inserted": obj_kind, "clsid": clsid}
+    raise RuntimeError("insert_ole_object needs a Calc or Writer document.")
+
+
+# --------------------------------------------------------------------------- #
+# Tools — Writer P2/P3 — see docs/TOOLS-WANTED.md
+# --------------------------------------------------------------------------- #
+
+def _writer_find_first(doc, search, match_case=False):
+    desc = doc.createSearchDescriptor()
+    desc.SearchString = search
+    desc.setPropertyValue("SearchCaseSensitive", bool(match_case))
+    return doc.findFirst(desc)
+
+
+_DRAW_SHAPES = {"rectangle": "com.sun.star.drawing.RectangleShape",
+                "ellipse": "com.sun.star.drawing.EllipseShape",
+                "line": "com.sun.star.drawing.LineShape",
+                "text": "com.sun.star.drawing.TextShape"}
+
+_ANCHOR_TYPES = {"as_char": "AS_CHARACTER", "char": "AT_CHARACTER",
+                 "paragraph": "AT_PARAGRAPH", "page": "AT_PAGE",
+                 "frame": "AT_FRAME"}
+
+_WRAP_MODES = {"none": "NONE", "through": "THROUGH", "parallel": "PARALLEL",
+               "dynamic": "DYNAMIC", "left": "LEFT", "right": "RIGHT"}
+
+
+def tool_writer_delete_object(args):
+    doc = _require_writer()
+    name = args["name"]
+    for getter in (doc.getGraphicObjects, doc.getTextFrames,
+                   doc.getEmbeddedObjects):
+        try:
+            coll = getter()
+        except Exception:
+            continue
+        if coll.hasByName(name):
+            obj = coll.getByName(name)
+            try:
+                doc.getText().removeTextContent(obj)
+            except Exception:
+                obj.dispose()
+            return {"deleted": name}
+    try:
+        dp = doc.getDrawPage()
+        for i in range(dp.getCount()):
+            shp = dp.getByIndex(i)
+            if getattr(shp, "Name", None) == name:
+                dp.remove(shp)
+                return {"deleted": name, "kind": "shape"}
+    except Exception:
+        pass
+    sections = doc.getTextSections()
+    if sections.hasByName(name):
+        doc.getText().removeTextContent(sections.getByName(name))
+        return {"deleted": name, "kind": "section"}
+    raise RuntimeError("No object named %r found." % name)
+
+
+def tool_writer_edit_table(args):
+    doc = _require_writer()
+    tables = doc.getTextTables()
+    name = args.get("name")
+    if name not in (None, ""):
+        if not tables.hasByName(name):
+            raise RuntimeError("No table named %r. Tables: %s"
+                               % (name, ", ".join(tables.getElementNames())))
+        table = tables.getByName(name)
+    else:
+        if tables.getCount() == 0:
+            raise RuntimeError("The document has no tables.")
+        table = tables.getByIndex(int(args.get("index", 0)))
+    actions = []
+    if args.get("insert_rows"):
+        table.getRows().insertByIndex(int(args.get("at_row", 0)),
+                                      int(args["insert_rows"]))
+        actions.append("insert_rows")
+    if args.get("delete_rows"):
+        table.getRows().removeByIndex(int(args.get("at_row", 0)),
+                                      int(args["delete_rows"]))
+        actions.append("delete_rows")
+    if args.get("insert_columns"):
+        table.getColumns().insertByIndex(int(args.get("at_column", 0)),
+                                         int(args["insert_columns"]))
+        actions.append("insert_columns")
+    if args.get("delete_columns"):
+        table.getColumns().removeByIndex(int(args.get("at_column", 0)),
+                                         int(args["delete_columns"]))
+        actions.append("delete_columns")
+    if args.get("merge"):
+        start, _, end = str(args["merge"]).partition(":")
+        cur = table.createCursorByCellName(start)
+        cur.gotoCellByName(end or start, True)
+        cur.mergeRange()
+        actions.append("merge")
+    if args.get("cell") and args.get("background_color") is not None:
+        table.getCellByName(args["cell"]).BackColor = _hex_color(
+            args["background_color"])
+        actions.append("background")
+    return {"table": table.Name, "actions": actions}
+
+
+def tool_writer_set_image_layout(args):
+    doc = _require_writer()
+    name = args["name"]
+    obj = None
+    for getter in (doc.getGraphicObjects, doc.getTextFrames):
+        coll = getter()
+        if coll.hasByName(name):
+            obj = coll.getByName(name)
+            break
+    if obj is None:
+        raise RuntimeError("No image or frame named %r." % name)
+    if args.get("anchor"):
+        a = _ANCHOR_TYPES.get(str(args["anchor"]).lower())
+        if not a:
+            raise RuntimeError("anchor must be one of %s." % sorted(_ANCHOR_TYPES))
+        obj.AnchorType = _uno_enum("com.sun.star.text.TextContentAnchorType", a)
+    if args.get("wrap"):
+        w = _WRAP_MODES.get(str(args["wrap"]).lower())
+        if not w:
+            raise RuntimeError("wrap must be one of %s." % sorted(_WRAP_MODES))
+        obj.TextWrap = _uno_enum("com.sun.star.text.WrapTextMode", w)
+    if args.get("x_mm") is not None:
+        obj.HoriOrient = 0
+        obj.HoriOrientPosition = _mm100(args["x_mm"])
+    if args.get("y_mm") is not None:
+        obj.VertOrient = 0
+        obj.VertOrientPosition = _mm100(args["y_mm"])
+    return {"name": name, "anchor": _enum_value(obj.AnchorType)}
+
+
+def tool_writer_add_section(args):
+    doc = _require_writer()
+    section = doc.createInstance("com.sun.star.text.TextSection")
+    if args.get("columns"):
+        cols = doc.createInstance("com.sun.star.text.TextColumns")
+        cols.setColumnCount(int(args["columns"]))
+        section.TextColumns = cols
+    if args.get("protected"):
+        section.IsProtected = True
+    text = doc.getText()
+    cursor = text.createTextCursorByRange(text.getEnd())
+    if args.get("text"):
+        text.insertString(cursor, args["text"], False)
+        cursor.goLeft(len(args["text"]), True)
+    text.insertTextContent(cursor, section, bool(args.get("text")))
+    try:
+        section.Name = args["name"]
+    except Exception:
+        pass
+    return {"section": getattr(section, "Name", args["name"])}
+
+
+def tool_writer_bookmarks(args):
+    doc = _require_writer()
+    action = str(args.get("action", "list")).lower()
+    marks = doc.getBookmarks()
+    if action == "list":
+        out = []
+        for nm in marks.getElementNames():
+            try:
+                txt = marks.getByName(nm).getAnchor().getString()
+            except Exception:
+                txt = ""
+            out.append({"name": nm, "text": txt})
+        return {"bookmarks": out}
+    name = args["name"]
+    if action == "insert":
+        bm = doc.createInstance("com.sun.star.text.Bookmark")
+        bm.Name = name
+        text = doc.getText()
+        if args.get("search"):
+            rng = _writer_find_first(doc, args["search"],
+                                     args.get("match_case", False))
+            if rng is None:
+                raise RuntimeError("Search text %r not found." % args["search"])
+            cursor = text.createTextCursorByRange(rng)
+        else:
+            cursor = text.createTextCursorByRange(text.getEnd())
+        text.insertTextContent(cursor, bm, bool(args.get("search")))
+        return {"inserted_bookmark": name}
+    if not marks.hasByName(name):
+        raise RuntimeError("No bookmark named %r." % name)
+    if action == "delete":
+        doc.getText().removeTextContent(marks.getByName(name))
+        return {"deleted": name}
+    if action == "get":
+        return {"name": name,
+                "text": marks.getByName(name).getAnchor().getString()}
+    if action == "set":
+        marks.getByName(name).getAnchor().setString(args.get("text", ""))
+        return {"name": name, "text": args.get("text", "")}
+    raise RuntimeError("action must be list|insert|delete|get|set.")
+
+
+def tool_writer_insert_cross_reference(args):
+    doc = _require_writer()
+    from com.sun.star.text.ReferenceFieldSource import BOOKMARK, REFERENCE_MARK
+    from com.sun.star.text.ReferenceFieldPart import PAGE, TEXT, NUMBER
+    field = doc.createInstance("com.sun.star.text.textfield.GetReference")
+    src = str(args.get("source", "bookmark")).lower()
+    field.ReferenceFieldSource = BOOKMARK if src == "bookmark" else REFERENCE_MARK
+    parts = {"page": PAGE, "text": TEXT, "number": NUMBER}
+    field.ReferenceFieldPart = parts.get(str(args.get("show", "page")).lower(),
+                                         PAGE)
+    field.SourceName = args["target"]
+    text, cursor = _writer_end_cursor(doc)
+    text.insertTextContent(cursor, field, False)
+    try:
+        doc.getTextFields().refresh()
+    except Exception:
+        pass
+    return {"reference_to": args["target"], "source": src}
+
+
+def tool_writer_insert_footnote(args):
+    doc = _require_writer()
+    kind = str(args.get("kind", "footnote")).lower()
+    service = ("com.sun.star.text.Endnote" if kind == "endnote"
+               else "com.sun.star.text.Footnote")
+    note = doc.createInstance(service)
+    text = doc.getText()
+    if args.get("search"):
+        rng = _writer_find_first(doc, args["search"], args.get("match_case", False))
+        if rng is None:
+            raise RuntimeError("Search text %r not found." % args["search"])
+        cursor = text.createTextCursorByRange(rng.getEnd())
+    else:
+        cursor = text.createTextCursorByRange(text.getEnd())
+    text.insertTextContent(cursor, note, False)
+    if args.get("text"):
+        ntext = note.getText()
+        ntext.insertString(ntext.createTextCursor(), args["text"], False)
+    return {"inserted": kind}
+
+
+def tool_writer_insert_shape(args):
+    doc = _require_writer()
+    kind = str(args.get("kind", "rectangle")).lower()
+    service = _DRAW_SHAPES.get(kind)
+    if not service:
+        raise RuntimeError("kind must be one of %s." % sorted(_DRAW_SHAPES))
+    shape = doc.createInstance(service)
+    doc.getDrawPage().add(shape)
+    size = _uno_struct("com.sun.star.awt.Size")
+    size.Width = _mm100(args.get("width_mm", 40))
+    size.Height = _mm100(args.get("height_mm", 20))
+    shape.setSize(size)
+    pos = _uno_struct("com.sun.star.awt.Point")
+    pos.X = _mm100(args.get("x_mm", 10))
+    pos.Y = _mm100(args.get("y_mm", 10))
+    shape.setPosition(pos)
+    if args.get("fill_color") is not None:
+        shape.FillColor = _hex_color(args["fill_color"])
+    if args.get("line_color") is not None:
+        shape.LineColor = _hex_color(args["line_color"])
+    if args.get("text"):
+        shape.setString(args["text"])
+    if args.get("name"):
+        try:
+            shape.Name = args["name"]
+        except Exception:
+            pass
+    return {"inserted_shape": kind}
+
+
+def tool_writer_insert_text_frame(args):
+    doc = _require_writer()
+    frame = doc.createInstance("com.sun.star.text.TextFrame")
+    size = _uno_struct("com.sun.star.awt.Size")
+    size.Width = _mm100(args.get("width_mm", 50))
+    size.Height = _mm100(args.get("height_mm", 30))
+    frame.Size = size
+    text, cursor = _writer_end_cursor(doc)
+    text.insertTextContent(cursor, frame, False)
+    if args.get("text"):
+        ftext = frame.getText()
+        ftext.insertString(ftext.createTextCursor(), args["text"], False)
+    if args.get("name"):
+        try:
+            frame.Name = args["name"]
+        except Exception:
+            pass
+    return {"inserted": "text_frame"}
+
+
+def tool_writer_mail_merge(args):
+    doc = _require_writer()
+    url = doc.getURL()
+    if not url:
+        raise RuntimeError("Save the document first — mail merge needs a DocumentURL.")
+    from com.sun.star.sdb.CommandType import TABLE, QUERY, COMMAND
+    from com.sun.star.text.MailMergeType import FILE as MM_FILE, PRINTER, MAIL
+    state = _connect()
+    mm = state["smgr"].createInstanceWithContext(
+        "com.sun.star.text.MailMerge", state["ctx"])
+    mm.DocumentURL = url
+    mm.DataSourceName = args["data_source"]
+    mm.CommandType = {"table": TABLE, "query": QUERY, "command": COMMAND}.get(
+        str(args.get("command_type", "table")).lower(), TABLE)
+    mm.Command = args["command"]
+    mm.OutputType = {"file": MM_FILE, "printer": PRINTER, "mail": MAIL}.get(
+        str(args.get("output", "file")).lower(), MM_FILE)
+    if args.get("output_url"):
+        mm.OutputURL = _to_url(args["output_url"])
+    mm.execute(())
+    return {"merged": args["command"], "data_source": args["data_source"]}
+
+
+def tool_writer_track_changes(args):
+    doc = _require_writer()
+    action = str(args.get("action", "status")).lower()
+    if action == "enable":
+        doc.setPropertyValue("RecordChanges", True)
+    elif action == "disable":
+        doc.setPropertyValue("RecordChanges", False)
+    elif action == "accept_all":
+        _dispatch(doc, ".uno:AcceptAllTrackedChanges")
+    elif action == "reject_all":
+        _dispatch(doc, ".uno:RejectAllTrackedChanges")
+    elif action not in ("status", "list"):
+        raise RuntimeError("action must be enable|disable|accept_all|reject_all|list|status.")
+    redlines = []
+    if action in ("status", "list"):
+        try:
+            enum = doc.getRedlines().createEnumeration()
+            while enum.hasMoreElements():
+                r = enum.nextElement()
+                entry = {}
+                for key, prop in (("author", "RedlineAuthor"),
+                                  ("type", "RedlineType"),
+                                  ("comment", "RedlineComment")):
+                    try:
+                        entry[key] = r.getPropertyValue(prop)
+                    except Exception:
+                        pass
+                redlines.append(entry)
+        except Exception:
+            pass
+    return {"recording": bool(doc.getPropertyValue("RecordChanges")),
+            "redlines": redlines}
+
+
+def tool_writer_insert_horizontal_rule(_args):
+    doc = _require_writer()
+    _append_paragraph(doc, style="Horizontal Line")
+    return {"inserted": "horizontal_rule"}
+
+
+def tool_writer_redact(args):
+    doc = _require_writer()
+    desc = doc.createSearchDescriptor()
+    desc.SearchString = args["search"]
+    desc.setPropertyValue("SearchCaseSensitive", bool(args.get("match_case", False)))
+    found = doc.findAll(desc)
+    n = found.getCount()
+    for i in range(n):
+        rng = found.getByIndex(i)
+        rng.CharColor = 0x000000
+        try:
+            rng.CharHighlight = 0x000000
+        except Exception:
+            pass
+        try:
+            rng.CharBackColor = 0x000000
+        except Exception:
+            pass
+    return {"redacted_matches": n,
+            "note": "visual redaction (black-on-black) — not a secure content removal"}
+
+
+def tool_writer_set_page_background(args):
+    doc = _require_writer()
+    styles = doc.getStyleFamilies().getByName("PageStyles")
+    name = args.get("page_style") or "Standard"
+    ps = styles.getByName(name) if styles.hasByName(name) else styles.getByIndex(0)
+    if args.get("clear"):
+        ps.BackTransparent = True
+    elif args.get("color"):
+        ps.BackColor = _hex_color(args["color"])
+        ps.BackTransparent = False
+    else:
+        raise RuntimeError("Provide 'color' or set 'clear': true.")
+    return {"page_style": ps.Name,
+            "background": None if args.get("clear") else args.get("color")}
+
+
+def tool_writer_set_watermark(args):
+    doc = _require_writer()
+    text = args.get("text", "")
+    wm = [_pv("Text", text),
+          _pv("Font", args.get("font", "Liberation Sans")),
+          _pv("Angle", int(args.get("angle", 45))),
+          _pv("Transparency", int(args.get("transparency", 50))),
+          _pv("Color", _hex_color(args.get("color", "#c0c0c0")))]
+    _dispatch(doc, ".uno:Watermark", wm)
+    return {"watermark": text or "(cleared)"}
+
+
+def tool_writer_spellcheck(args):
+    import re
+    from com.sun.star.lang import Locale
+    doc = _require_writer()
+    state = _connect()
+    speller = state["smgr"].createInstanceWithContext(
+        "com.sun.star.linguistic2.SpellChecker", state["ctx"])
+    lang = str(args.get("language", "en-US")).replace("_", "-").split("-")
+    loc = Locale()
+    loc.Language = lang[0]
+    loc.Country = lang[1] if len(lang) > 1 else ""
+    limit = int(args.get("max_words", 100))
+    seen = set()
+    flagged = []
+    for m in re.finditer(r"[^\W\d_]+", doc.getText().getString(), re.UNICODE):
+        w = m.group(0)
+        if w in seen:
+            continue
+        seen.add(w)
+        try:
+            if speller.isValid(w, loc, ()):
+                continue
+        except Exception:
+            continue
+        entry = {"word": w}
+        try:
+            res = speller.spell(w, loc, ())
+            if res is not None:
+                entry["suggestions"] = list(res.getAlternatives())[:5]
+        except Exception:
+            pass
+        flagged.append(entry)
+        if len(flagged) >= limit:
+            break
+    return {"flagged": flagged, "count": len(flagged)}
+
+
+# --------------------------------------------------------------------------- #
+# Tools — Calc P1/P2/P3 — see docs/TOOLS-WANTED.md
+# --------------------------------------------------------------------------- #
+
+_CALC_SHAPES = dict(_DRAW_SHAPES)
+
+
+def _find_shape(sheet, name):
+    dp = sheet.DrawPage
+    for i in range(dp.getCount()):
+        shp = dp.getByIndex(i)
+        if getattr(shp, "Name", None) == name:
+            return shp
+    return None
+
+
+def tool_calc_add_shape(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    kind = str(args.get("kind", "rectangle")).lower()
+    service = _CALC_SHAPES.get(kind)
+    if not service:
+        raise RuntimeError("kind must be one of %s." % sorted(_CALC_SHAPES))
+    shape = doc.createInstance(service)
+    sheet.DrawPage.add(shape)
+    size = _uno_struct("com.sun.star.awt.Size")
+    size.Width = _mm100(args.get("width_mm", 40))
+    size.Height = _mm100(args.get("height_mm", 20))
+    shape.setSize(size)
+    pos = _uno_struct("com.sun.star.awt.Point")
+    if args.get("position_cell"):
+        p = sheet.getCellRangeByName(args["position_cell"]).Position
+        pos.X, pos.Y = p.X, p.Y
+    else:
+        pos.X = _mm100(args.get("x_mm", 10))
+        pos.Y = _mm100(args.get("y_mm", 10))
+    shape.setPosition(pos)
+    if args.get("fill_color") is not None:
+        shape.FillColor = _hex_color(args["fill_color"])
+    if args.get("line_color") is not None:
+        shape.LineColor = _hex_color(args["line_color"])
+    if args.get("text"):
+        shape.setString(args["text"])
+    if args.get("name"):
+        try:
+            shape.Name = args["name"]
+        except Exception:
+            pass
+    return {"added_shape": kind, "name": getattr(shape, "Name", "")}
+
+
+def tool_calc_insert_image(args):
+    path = args["path"]
+    if not os.path.exists(path):
+        raise RuntimeError("Image file not found: %s" % path)
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    state = _connect()
+    provider = state["smgr"].createInstanceWithContext(
+        "com.sun.star.graphic.GraphicProvider", state["ctx"])
+    graphic = provider.queryGraphic((_pv("URL", _to_url(path)),))
+    if graphic is None:
+        raise RuntimeError("Could not load image: %s" % path)
+    shape = doc.createInstance("com.sun.star.drawing.GraphicObjectShape")
+    shape.Graphic = graphic
+    sheet.DrawPage.add(shape)
+    size = _uno_struct("com.sun.star.awt.Size")
+    try:
+        native = graphic.Size100thMM
+        size.Width = (_mm100(args["width_mm"]) if args.get("width_mm")
+                      else native.Width or 4000)
+        size.Height = (_mm100(args["height_mm"]) if args.get("height_mm")
+                       else native.Height or 3000)
+    except Exception:
+        size.Width = _mm100(args.get("width_mm", 40))
+        size.Height = _mm100(args.get("height_mm", 30))
+    shape.setSize(size)
+    pos = _uno_struct("com.sun.star.awt.Point")
+    if args.get("position_cell"):
+        p = sheet.getCellRangeByName(args["position_cell"]).Position
+        pos.X, pos.Y = p.X, p.Y
+    else:
+        pos.X = _mm100(args.get("x_mm", 5))
+        pos.Y = _mm100(args.get("y_mm", 5))
+    shape.setPosition(pos)
+    return {"inserted": os.path.basename(path)}
+
+
+def tool_calc_position_shape(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    shape = _find_shape(sheet, args["name"])
+    if shape is None:
+        raise RuntimeError("No shape named %r on this sheet." % args["name"])
+    if args.get("x_mm") is not None or args.get("y_mm") is not None:
+        cur = shape.Position
+        p = _uno_struct("com.sun.star.awt.Point")
+        p.X = _mm100(args["x_mm"]) if args.get("x_mm") is not None else cur.X
+        p.Y = _mm100(args["y_mm"]) if args.get("y_mm") is not None else cur.Y
+        shape.setPosition(p)
+    if args.get("width_mm") is not None or args.get("height_mm") is not None:
+        cur = shape.Size
+        s = _uno_struct("com.sun.star.awt.Size")
+        s.Width = _mm100(args["width_mm"]) if args.get("width_mm") is not None else cur.Width
+        s.Height = _mm100(args["height_mm"]) if args.get("height_mm") is not None else cur.Height
+        shape.setSize(s)
+    if args.get("z_order") is not None:
+        try:
+            shape.ZOrder = int(args["z_order"])
+        except Exception:
+            pass
+    return {"positioned": args["name"]}
+
+
+def tool_calc_autofilter(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    dbr = doc.DatabaseRanges
+    name = args.get("name") or ("Claude_AF_%s" % sheet.getName())
+    enable = bool(args.get("enable", True))
+    if dbr.hasByName(name):
+        dbr.removeByName(name)
+    if not enable:
+        return {"autofilter": "off", "name": name}
+    addr = sheet.getCellRangeByName(args["range"]).getRangeAddress()
+    dbr.addNewByName(name, addr)
+    dbr.getByName(name).AutoFilter = True
+    return {"autofilter": "on", "range": args["range"], "name": name}
+
+
+def tool_calc_edit_chart(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    charts = sheet.getCharts()
+    name = args["name"]
+    if not charts.hasByName(name):
+        raise RuntimeError("No chart named %r. Charts: %s"
+                           % (name, ", ".join(charts.getElementNames())))
+    cdoc = charts.getByName(name).getEmbeddedObject()
+    changed = []
+    if args.get("title") is not None:
+        cdoc.HasMainTitle = True
+        cdoc.getTitle().String = args["title"]
+        changed.append("title")
+    if args.get("subtitle") is not None:
+        cdoc.HasSubTitle = True
+        cdoc.getSubTitle().String = args["subtitle"]
+        changed.append("subtitle")
+    if args.get("legend") is not None:
+        cdoc.HasLegend = bool(args["legend"])
+        changed.append("legend")
+    if args.get("x_axis_title") is not None:
+        diag = cdoc.getDiagram()
+        diag.HasXAxisTitle = True
+        diag.getXAxisTitle().String = args["x_axis_title"]
+        changed.append("x_axis_title")
+    if args.get("y_axis_title") is not None:
+        diag = cdoc.getDiagram()
+        diag.HasYAxisTitle = True
+        diag.getYAxisTitle().String = args["y_axis_title"]
+        changed.append("y_axis_title")
+    if args.get("chart_type"):
+        ct = str(args["chart_type"]).lower()
+        if ct not in _CHART_DIAGRAMS:
+            raise RuntimeError("chart_type must be one of %s."
+                               % sorted(_CHART_DIAGRAMS))
+        service, vertical = _CHART_DIAGRAMS[ct]
+        cdoc.setDiagram(cdoc.createInstance(service))
+        if vertical is not None:
+            cdoc.getDiagram().Vertical = vertical
+        changed.append("chart_type")
+    return {"chart": name, "changed": changed}
+
+
+def tool_calc_list_charts(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    charts = sheet.getCharts()
+    out = []
+    for nm in charts.getElementNames():
+        c = charts.getByName(nm)
+        entry = {"name": nm}
+        try:
+            entry["ranges"] = [_addr_to_a1(a) for a in c.getRanges()]
+        except Exception:
+            pass
+        for key, prop in (("column_headers", "HasColumnHeaders"),
+                          ("row_headers", "HasRowHeaders")):
+            try:
+                entry[key] = bool(getattr(c, prop))
+            except Exception:
+                pass
+        out.append(entry)
+    return {"charts": out}
+
+
+def tool_calc_named_ranges(args):
+    doc = _require_calc()
+    names = doc.NamedRanges
+    action = str(args.get("action", "list")).lower()
+    if action == "list":
+        out = []
+        for nm in names.getElementNames():
+            try:
+                out.append({"name": nm, "content": names.getByName(nm).getContent()})
+            except Exception:
+                out.append({"name": nm})
+        return {"named_ranges": out}
+    if action == "add":
+        name, content = args["name"], args["content"]
+        sheet = _resolve_sheet(doc, args.get("sheet"))
+        ref = _uno_struct("com.sun.star.table.CellAddress")
+        ref.Sheet = sheet.getRangeAddress().Sheet
+        ref.Column = 0
+        ref.Row = 0
+        names.addNewByName(name, content, ref, 0)
+        return {"added": name, "content": content}
+    if action == "delete":
+        name = args["name"]
+        if not names.hasByName(name):
+            raise RuntimeError("No named range %r." % name)
+        names.removeByName(name)
+        return {"deleted": name}
+    raise RuntimeError("action must be list|add|delete.")
+
+
+def tool_calc_create_pivot(args):
+    from com.sun.star.sheet.DataPilotFieldOrientation import ROW, COLUMN, PAGE, DATA
+    from com.sun.star.sheet.GeneralFunction import (SUM, COUNT, AVERAGE, MAX, MIN,
+                                                    PRODUCT, COUNTNUMS)
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    pilots = sheet.getDataPilotTables()
+    name = args["name"]
+    if pilots.hasByName(name):
+        raise RuntimeError("A pivot table named %r already exists." % name)
+    desc = pilots.createDataPilotDescriptor()
+    src = sheet.getCellRangeByName(args["source_range"]).getRangeAddress()
+    desc.setSourceRange(src)
+    fields = desc.getDataPilotFields()
+    byname = {}
+    for i in range(fields.getCount()):
+        f = fields.getByIndex(i)
+        try:
+            byname[f.Name] = f
+        except Exception:
+            pass
+    orient_map = {"row": ROW, "column": COLUMN, "page": PAGE, "data": DATA}
+    func_map = {"sum": SUM, "count": COUNT, "average": AVERAGE, "max": MAX,
+                "min": MIN, "product": PRODUCT, "countnums": COUNTNUMS}
+    for spec in (args.get("fields") or []):
+        fname = spec["field"]
+        f = byname.get(fname)
+        if f is None:
+            raise RuntimeError("No source field %r. Available: %s"
+                               % (fname, ", ".join(byname)))
+        orient = orient_map.get(str(spec.get("orientation", "row")).lower(), ROW)
+        f.Orientation = orient
+        if orient == DATA and spec.get("function"):
+            f.Function = func_map.get(str(spec["function"]).lower(), SUM)
+    out_addr = sheet.getCellRangeByName(args["output_cell"]).getRangeAddress()
+    dest = _uno_struct("com.sun.star.table.CellAddress")
+    dest.Sheet = out_addr.Sheet
+    dest.Column = out_addr.StartColumn
+    dest.Row = out_addr.StartRow
+    pilots.insertNewByName(name, dest, desc)
+    return {"pivot": name, "source": args["source_range"]}
+
+
+def tool_calc_refresh_pivot(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    pilots = sheet.getDataPilotTables()
+    action = str(args.get("action", "refresh")).lower()
+    if action == "list":
+        return {"pivots": list(pilots.getElementNames())}
+    name = args.get("name")
+    if action == "refresh":
+        targets = [name] if name else list(pilots.getElementNames())
+        for nm in targets:
+            pilots.getByName(nm).refresh()
+        return {"refreshed": name or "all"}
+    if action == "delete":
+        if not name:
+            raise RuntimeError("delete needs 'name'.")
+        pilots.removeByName(name)
+        return {"deleted": name}
+    raise RuntimeError("action must be list|refresh|delete.")
+
+
+def tool_calc_add_subtotals(args):
+    from com.sun.star.sheet.GeneralFunction import SUM, COUNT, AVERAGE, MAX, MIN
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    if args.get("remove"):
+        rng.removeSubTotals()
+        return {"subtotals": "removed"}
+    func_map = {"sum": SUM, "count": COUNT, "average": AVERAGE, "max": MAX, "min": MIN}
+    func = func_map.get(str(args.get("function", "sum")).lower(), SUM)
+    fields = []
+    for c in args["columns"]:
+        col = _uno_struct("com.sun.star.sheet.SubTotalColumn")
+        col.Column = int(c)
+        col.Function = func
+        fields.append(col)
+    desc = rng.createSubTotalDescriptor(True)
+    desc.addNew(tuple(fields), int(args["group_by"]))
+    rng.applySubTotals(desc, bool(args.get("replace", True)))
+    return {"subtotals": "applied", "group_by": int(args["group_by"])}
+
+
+def tool_calc_goal_seek(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    fcell = sheet.getCellRangeByName(args["formula_cell"]).getCellByPosition(0, 0)
+    vcell = sheet.getCellRangeByName(args["variable_cell"]).getCellByPosition(0, 0)
+    res = doc.seekGoal(fcell.getCellAddress(), vcell.getCellAddress(),
+                       str(args["target"]))
+    applied = bool(args.get("apply", True))
+    if applied:
+        vcell.setValue(res.Result)
+    return {"result": res.Result, "divergence": res.Divergence, "applied": applied}
+
+
+def tool_calc_fill_series(args):
+    from com.sun.star.sheet.FillDirection import TO_BOTTOM, TO_RIGHT, TO_TOP, TO_LEFT
+    from com.sun.star.sheet.FillMode import LINEAR, GROWTH, DATE, AUTO
+    from com.sun.star.sheet.FillDateMode import FILL_DATE_DAY
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    direction = {"down": TO_BOTTOM, "right": TO_RIGHT, "up": TO_TOP,
+                 "left": TO_LEFT}.get(str(args.get("direction", "down")).lower(),
+                                      TO_BOTTOM)
+    mode = {"linear": LINEAR, "growth": GROWTH, "date": DATE,
+            "auto": AUTO}.get(str(args.get("mode", "linear")).lower(), LINEAR)
+    step = float(args.get("step", 1))
+    end = float(args["end"]) if args.get("end") is not None else 1.7976931348623157e+308
+    rng.fillSeries(direction, mode, FILL_DATE_DAY, step, end)
+    return {"filled": args["range"], "mode": str(args.get("mode", "linear"))}
+
+
+def tool_calc_cell_protection(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    prot = _uno_struct("com.sun.star.util.CellProtection")
+    prot.IsLocked = bool(args.get("locked", True))
+    prot.IsFormulaHidden = bool(args.get("formula_hidden", False))
+    prot.IsHidden = bool(args.get("hidden", False))
+    prot.IsPrintHidden = bool(args.get("print_hidden", False))
+    rng.CellProtection = prot
+    return {"range": args["range"], "locked": prot.IsLocked,
+            "note": "cell protection only takes effect once the sheet is protected"}
+
+
+_VERT_JUSTIFY = {"standard": 0, "top": 1, "center": 2, "bottom": 3}
+
+
+def tool_calc_format_cells_advanced(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    changed = []
+    if args.get("vertical_align"):
+        va = _VERT_JUSTIFY.get(str(args["vertical_align"]).lower())
+        if va is None:
+            raise RuntimeError("vertical_align must be one of %s." % sorted(_VERT_JUSTIFY))
+        rng.VertJustify = va
+        changed.append("vertical_align")
+    if args.get("rotation") is not None:
+        rng.RotateAngle = int(float(args["rotation"]) * 100)
+        changed.append("rotation")
+    if args.get("indent") is not None:
+        rng.ParaIndent = _mm100(args["indent"])
+        changed.append("indent")
+    if args.get("shrink_to_fit") is not None:
+        rng.ShrinkToFit = bool(args["shrink_to_fit"])
+        changed.append("shrink_to_fit")
+    if args.get("wrap") is not None:
+        rng.IsTextWrapped = bool(args["wrap"])
+        changed.append("wrap")
+    return {"range": args["range"], "changed": changed}
+
+
+def tool_calc_get_cell_format(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    cell = sheet.getCellRangeByName(args["cell"]).getCellByPosition(0, 0)
+    out = {"cell": args["cell"]}
+    try:
+        out["number_format"] = doc.getNumberFormats().getByKey(
+            cell.NumberFormat).FormatString
+    except Exception:
+        pass
+    for key, prop in (("font", "CharFontName"), ("font_size", "CharHeight"),
+                      ("weight", "CharWeight"), ("font_color", "CharColor"),
+                      ("background_color", "CellBackColor"),
+                      ("h_align", "HoriJustify"), ("cell_style", "CellStyle")):
+        try:
+            out[key] = _jsonable(cell.getPropertyValue(prop))
+        except Exception:
+            pass
+    for ck in ("font_color", "background_color"):
+        if isinstance(out.get(ck), int) and out[ck] >= 0:
+            out[ck] = "#%06X" % out[ck]
+    return out
+
+
+def tool_calc_get_conditional_formats(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    out = []
+    try:
+        cfs = sheet.ConditionalFormats.getConditionalFormats()
+    except Exception:
+        cfs = []
+    for cf in cfs:
+        entry = {}
+        try:
+            entry["range"] = [_addr_to_a1(a)
+                              for a in cf.getRange().getRangeAddresses()]
+        except Exception:
+            pass
+        conditions = []
+        try:
+            for i in range(cf.getCount()):
+                c = cf.getByIndex(i)
+                cond = {}
+                for prop in ("Formula1", "Formula2", "StyleName"):
+                    try:
+                        cond[prop] = _jsonable(c.getPropertyValue(prop))
+                    except Exception:
+                        pass
+                conditions.append(cond)
+        except Exception:
+            pass
+        entry["conditions"] = conditions
+        out.append(entry)
+    return {"conditional_formats": out}
+
+
+def tool_calc_get_validation(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    cell = sheet.getCellRangeByName(args["range"]).getCellByPosition(0, 0)
+    val = cell.Validation
+    out = {}
+    for prop in ("Type", "ShowInputMessage", "InputTitle", "InputMessage",
+                 "ShowErrorMessage", "ErrorTitle", "ErrorMessage", "ShowList"):
+        try:
+            out[prop] = _jsonable(val.getPropertyValue(prop))
+        except Exception:
+            pass
+    try:
+        out["Formula1"] = val.getFormula1()
+        out["Formula2"] = val.getFormula2()
+    except Exception:
+        pass
+    return {"validation": out}
+
+
+def tool_calc_page_setup(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    ps = doc.getStyleFamilies().getByName("PageStyles").getByName(sheet.PageStyle)
+    changed = []
+    if args.get("landscape") is not None:
+        ps.IsLandscape = bool(args["landscape"])
+        changed.append("landscape")
+    if args.get("paper"):
+        size = _PAPER.get(str(args["paper"]).lower())
+        if size:
+            w, h = size
+            if getattr(ps, "IsLandscape", False):
+                w, h = h, w
+            s = _uno_struct("com.sun.star.awt.Size")
+            s.Width, s.Height = w, h
+            ps.Size = s
+            changed.append("paper")
+    for key, prop in (("margin_top", "TopMargin"), ("margin_bottom", "BottomMargin"),
+                      ("margin_left", "LeftMargin"), ("margin_right", "RightMargin")):
+        if args.get(key) is not None:
+            setattr(ps, prop, _mm100(args[key]))
+            changed.append(key)
+    for key, prop in (("scale", "PageScale"), ("fit_pages_x", "ScaleToPagesX"),
+                      ("fit_pages_y", "ScaleToPagesY")):
+        if args.get(key) is not None:
+            setattr(ps, prop, int(args[key]))
+            changed.append(key)
+    if args.get("center_h") is not None:
+        ps.CenterHorizontally = bool(args["center_h"])
+        changed.append("center_h")
+    if args.get("center_v") is not None:
+        ps.CenterVertically = bool(args["center_v"])
+        changed.append("center_v")
+    return {"page_style": sheet.PageStyle, "changed": changed}
+
+
+def tool_calc_set_print_area(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    if args.get("clear"):
+        sheet.setPrintAreas(())
+        return {"print_area": "cleared"}
+    addr = sheet.getCellRangeByName(args["range"]).getRangeAddress()
+    sheet.setPrintAreas((addr,))
+    if args.get("title_rows"):
+        sheet.setTitleRows(sheet.getCellRangeByName(args["title_rows"]).getRangeAddress())
+        sheet.setPrintTitleRows(True)
+    if args.get("title_columns"):
+        sheet.setTitleColumns(sheet.getCellRangeByName(args["title_columns"]).getRangeAddress())
+        sheet.setPrintTitleColumns(True)
+    return {"print_area": args["range"]}
+
+
+def tool_calc_standard_filter(args):
+    from com.sun.star.sheet.FilterOperator import (EQUAL, NOT_EQUAL, GREATER,
+                                                   GREATER_EQUAL, LESS, LESS_EQUAL)
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    desc = rng.createFilterDescriptor(True)
+    op_map = {"=": EQUAL, "==": EQUAL, "!=": NOT_EQUAL, "<>": NOT_EQUAL,
+              ">": GREATER, ">=": GREATER_EQUAL, "<": LESS, "<=": LESS_EQUAL}
+    fields = []
+    for cond in args["conditions"]:
+        ff = _uno_struct("com.sun.star.sheet.TableFilterField")
+        ff.Field = int(cond["column"])
+        ff.Operator = op_map.get(str(cond.get("operator", "=")), EQUAL)
+        v = cond["value"]
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            ff.IsNumeric = True
+            ff.NumericValue = float(v)
+        else:
+            ff.IsNumeric = False
+            ff.StringValue = str(v)
+        fields.append(ff)
+    desc.setFilterFields(tuple(fields))
+    try:
+        desc.setPropertyValue("ContainsHeader", bool(args.get("has_header", True)))
+    except Exception:
+        pass
+    rng.filter(desc)
+    return {"filtered": args["range"], "conditions": len(fields)}
+
+
+def tool_calc_group_shapes(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    dp = sheet.DrawPage
+    if args.get("ungroup"):
+        grp = _find_shape(sheet, args["group"])
+        if grp is None:
+            raise RuntimeError("No group named %r." % args["group"])
+        dp.ungroup(grp)
+        return {"ungrouped": args["group"]}
+    names = set(args["names"])
+    coll = doc.createInstance("com.sun.star.drawing.ShapeCollection")
+    for i in range(dp.getCount()):
+        shp = dp.getByIndex(i)
+        if getattr(shp, "Name", None) in names:
+            coll.add(shp)
+    if coll.getCount() < 2:
+        raise RuntimeError("Need >= 2 matching named shapes to group.")
+    group = dp.group(coll)
+    if args.get("group"):
+        try:
+            group.Name = args["group"]
+        except Exception:
+            pass
+    return {"grouped": coll.getCount(), "name": getattr(group, "Name", "")}
+
+
+def tool_calc_group_outline(args):
+    from com.sun.star.table.TableOrientation import ROWS, COLUMNS
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    orient = (COLUMNS if str(args.get("axis", "rows")).lower().startswith("col")
+              else ROWS)
+    action = str(args.get("action", "group")).lower()
+    if action == "clear":
+        sheet.clearOutline()
+        return {"outline": "cleared"}
+    addr = sheet.getCellRangeByName(args["range"]).getRangeAddress()
+    if action == "group":
+        sheet.group(addr, orient)
+    elif action == "ungroup":
+        sheet.ungroup(addr, orient)
+    elif action == "show":
+        sheet.showDetail(addr)
+    elif action == "hide":
+        sheet.hideDetail(addr)
+    else:
+        raise RuntimeError("action must be group|ungroup|show|hide|clear.")
+    return {"outline": action, "range": args["range"]}
+
+
+def tool_calc_multiple_operations(args):
+    from com.sun.star.sheet.TableOperationMode import COLUMN, ROW, BOTH
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    target = sheet.getCellRangeByName(args["range"])
+    formulas = sheet.getCellRangeByName(args["formula_range"]).getRangeAddress()
+    mode = {"column": COLUMN, "row": ROW,
+            "both": BOTH}.get(str(args.get("mode", "column")).lower(), COLUMN)
+
+    def _cell_addr(a1):
+        return sheet.getCellRangeByName(a1).getCellByPosition(0, 0).getCellAddress()
+
+    col_in = _cell_addr(args["column_input"]) if args.get("column_input") else None
+    row_in = _cell_addr(args["row_input"]) if args.get("row_input") else None
+    if col_in is None:
+        col_in = row_in
+    if row_in is None:
+        row_in = col_in
+    if col_in is None:
+        raise RuntimeError("Provide column_input and/or row_input.")
+    target.setTableOperation(formulas, mode, col_in, row_in)
+    return {"table_operation": args["range"], "mode": str(args.get("mode", "column"))}
+
+
+def tool_calc_remove_duplicates(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    data = [list(r) for r in rng.getDataArray()]
+    if not data:
+        return {"removed": 0, "kept": 0}
+    header = bool(args.get("has_header", False))
+    head = data[:1] if header else []
+    body = data[1:] if header else data
+    keys = args.get("key_columns")
+    seen = set()
+    survivors = []
+    for row in body:
+        k = tuple(row[i] for i in keys) if keys else tuple(row)
+        if k in seen:
+            continue
+        seen.add(k)
+        survivors.append(row)
+    ncols = len(data[0])
+    result = head + survivors
+    while len(result) < len(data):
+        result.append([""] * ncols)
+    rng.setDataArray(tuple(tuple("" if v is None else v for v in r)
+                           for r in result))
+    return {"removed": len(body) - len(survivors), "kept": len(survivors)}
+
+
+def tool_calc_transpose(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    src = sheet.getCellRangeByName(args["source_range"])
+    data = [list(r) for r in src.getDataArray()]
+    if not data:
+        raise RuntimeError("Source range is empty.")
+    trans = [list(col) for col in zip(*data)]
+    tgt_sheet = (_resolve_sheet(doc, args["target_sheet"])
+                 if args.get("target_sheet") else sheet)
+    start = tgt_sheet.getCellRangeByName(args["target_cell"]).getRangeAddress()
+    rows, cols = len(trans), len(trans[0])
+    dest = tgt_sheet.getCellRangeByPosition(
+        start.StartColumn, start.StartRow,
+        start.StartColumn + cols - 1, start.StartRow + rows - 1)
+    dest.setDataArray(tuple(tuple("" if v is None else v for v in r)
+                            for r in trans))
+    return {"transposed": "%dx%d -> %dx%d"
+            % (len(data), len(data[0]), rows, cols)}
+
+
+def tool_calc_apply_cell_style(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    if args.get("style"):
+        rng.CellStyle = args["style"]
+        return {"applied_style": args["style"], "range": args["range"]}
+    return {"cell_style": rng.getCellByPosition(0, 0).CellStyle,
+            "range": args["range"]}
+
+
+def tool_calc_add_sparkline(args):
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    target = sheet.getCellRangeByName(args["target_range"])
+    try:
+        groups = target.getSparklineGroups()
+    except Exception:
+        raise RuntimeError("Sparklines require LibreOffice 7.5+ "
+                           "(getSparklineGroups is unavailable here).")
+    src = sheet.getCellRangeByName(args["data_range"]).getRangeAddress()
+    try:
+        groups.addSparklines(src, target.getRangeAddress())
+    except Exception as exc:
+        raise RuntimeError("Could not add sparklines (%s). The Sparkline UNO API "
+                           "varies by version." % type(exc).__name__)
+    return {"sparkline": args["target_range"], "data": args["data_range"]}
+
+
+def tool_calc_add_scale_format(args):
+    from com.sun.star.sheet.ConditionEntryType import COLORSCALE, DATABAR
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    addr = sheet.getCellRangeByName(args["range"]).getRangeAddress()
+    ranges = doc.createInstance("com.sun.star.sheet.SheetCellRanges")
+    ranges.addRangeAddress(addr, False)
+    cfs = sheet.ConditionalFormats
+    cf_id = cfs.createByRange(ranges)
+    cf = None
+    for c in cfs.getConditionalFormats():
+        try:
+            if c.ID == cf_id:
+                cf = c
+                break
+        except Exception:
+            pass
+    if cf is None:
+        raise RuntimeError("Could not create the conditional format entry.")
+    kind = str(args.get("kind", "colorscale")).lower()
+    try:
+        cf.createEntry(DATABAR if kind == "databar" else COLORSCALE, 0)
+    except Exception as exc:
+        raise RuntimeError("Could not populate the %s entry (%s) — the scale-format "
+                           "UNO API is version-sensitive." % (kind, type(exc).__name__))
+    return {"scale_format": kind, "range": args["range"],
+            "note": "created with default thresholds/colors; adjust in the UI if needed"}
+
+
+def tool_calc_copy_sheet(args):
+    doc = _require_calc()
+    sheets = doc.getSheets()
+    src = args["name"]
+    if not sheets.hasByName(src):
+        raise RuntimeError("No sheet named %r." % src)
+    dest = args["new_name"]
+    if sheets.hasByName(dest):
+        raise RuntimeError("A sheet named %r already exists." % dest)
+    pos = args.get("position")
+    sheets.copyByName(src, dest, int(pos) if pos is not None else sheets.getCount())
+    return {"copied": src, "to": dest}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -2034,6 +4061,87 @@ TOOLS = {
     "basic_module": tool_basic_module,
     "inspect_ods": tool_inspect_ods,
     "uno_exec": tool_uno_exec,
+    # good first tools (single-API wrappers)
+    "calc_sort_range": tool_calc_sort_range,
+    "calc_set_dimensions": tool_calc_set_dimensions,
+    "calc_set_visibility": tool_calc_set_visibility,
+    "calc_move_sheet": tool_calc_move_sheet,
+    "calc_recalculate": tool_calc_recalculate,
+    "calc_delete_comment": tool_calc_delete_comment,
+    "calc_delete_chart": tool_calc_delete_chart,
+    "writer_word_count": tool_writer_word_count,
+    "writer_read_table": tool_writer_read_table,
+    "writer_get_paragraphs": tool_writer_get_paragraphs,
+    "get_document_properties": tool_get_document_properties,
+    "set_document_modified": tool_set_document_modified,
+    # writer P1
+    "writer_list_objects": tool_writer_list_objects,
+    "writer_set_paragraph_text": tool_writer_set_paragraph_text,
+    "writer_insert_field": tool_writer_insert_field,
+    "writer_insert_toc": tool_writer_insert_toc,
+    "writer_update_indexes": tool_writer_update_indexes,
+    "writer_apply_list": tool_writer_apply_list,
+    # cross-cutting (Calc & Writer)
+    "set_hyperlink": tool_set_hyperlink,
+    "export_document": tool_export_document,
+    "set_document_properties": tool_set_document_properties,
+    "list_styles": tool_list_styles,
+    "set_style": tool_set_style,
+    "protect_document": tool_protect_document,
+    "dispatch_uno": tool_dispatch_uno,
+    "document_undo": tool_document_undo,
+    "bind_document_event": tool_bind_document_event,
+    "set_view_zoom": tool_set_view_zoom,
+    "get_signatures": tool_get_signatures,
+    "list_embedded_objects": tool_list_embedded_objects,
+    "insert_ole_object": tool_insert_ole_object,
+    # writer P2/P3
+    "writer_delete_object": tool_writer_delete_object,
+    "writer_edit_table": tool_writer_edit_table,
+    "writer_set_image_layout": tool_writer_set_image_layout,
+    "writer_add_section": tool_writer_add_section,
+    "writer_bookmarks": tool_writer_bookmarks,
+    "writer_insert_cross_reference": tool_writer_insert_cross_reference,
+    "writer_insert_footnote": tool_writer_insert_footnote,
+    "writer_insert_shape": tool_writer_insert_shape,
+    "writer_insert_text_frame": tool_writer_insert_text_frame,
+    "writer_mail_merge": tool_writer_mail_merge,
+    "writer_track_changes": tool_writer_track_changes,
+    "writer_insert_horizontal_rule": tool_writer_insert_horizontal_rule,
+    "writer_redact": tool_writer_redact,
+    "writer_set_page_background": tool_writer_set_page_background,
+    "writer_set_watermark": tool_writer_set_watermark,
+    "writer_spellcheck": tool_writer_spellcheck,
+    # calc P1/P2/P3
+    "calc_add_shape": tool_calc_add_shape,
+    "calc_insert_image": tool_calc_insert_image,
+    "calc_position_shape": tool_calc_position_shape,
+    "calc_autofilter": tool_calc_autofilter,
+    "calc_edit_chart": tool_calc_edit_chart,
+    "calc_list_charts": tool_calc_list_charts,
+    "calc_named_ranges": tool_calc_named_ranges,
+    "calc_create_pivot": tool_calc_create_pivot,
+    "calc_refresh_pivot": tool_calc_refresh_pivot,
+    "calc_add_subtotals": tool_calc_add_subtotals,
+    "calc_goal_seek": tool_calc_goal_seek,
+    "calc_fill_series": tool_calc_fill_series,
+    "calc_cell_protection": tool_calc_cell_protection,
+    "calc_format_cells_advanced": tool_calc_format_cells_advanced,
+    "calc_get_cell_format": tool_calc_get_cell_format,
+    "calc_get_conditional_formats": tool_calc_get_conditional_formats,
+    "calc_get_validation": tool_calc_get_validation,
+    "calc_page_setup": tool_calc_page_setup,
+    "calc_set_print_area": tool_calc_set_print_area,
+    "calc_standard_filter": tool_calc_standard_filter,
+    "calc_group_shapes": tool_calc_group_shapes,
+    "calc_group_outline": tool_calc_group_outline,
+    "calc_multiple_operations": tool_calc_multiple_operations,
+    "calc_remove_duplicates": tool_calc_remove_duplicates,
+    "calc_transpose": tool_calc_transpose,
+    "calc_apply_cell_style": tool_calc_apply_cell_style,
+    "calc_add_sparkline": tool_calc_add_sparkline,
+    "calc_add_scale_format": tool_calc_add_scale_format,
+    "calc_copy_sheet": tool_calc_copy_sheet,
 }
 
 _STR = {"type": "string"}
@@ -2353,6 +4461,366 @@ TOOL_DEFS = [
     {"name": "uno_exec",
      "description": "Escape hatch: run a short Python snippet against the live UNO bridge. In scope: ctx, smgr, desktop, doc (active document), uno. Printed output is returned as 'stdout'; assign to a variable named `result` to return a JSON value. Use when no dedicated tool fits.",
      "inputSchema": _schema({"code": dict(_STR, description="Python source to exec")}, ["code"])},
+    # --- good first tools (single-API wrappers) ---
+    {"name": "writer_word_count",
+     "description": "Document statistics for the active Writer doc: word, paragraph, character counts and page count.",
+     "inputSchema": _schema()},
+    {"name": "writer_read_table",
+     "description": "Read an existing Writer table back as a 2-D grid of cell strings. Give 'name' (from writer_list_objects / find) or a 0-based 'index' (default 0).",
+     "inputSchema": _schema({"name": dict(_STR, description="table name (e.g. 'Table1')"),
+                             "index": dict(_INT, description="0-based table index if no name")})},
+    {"name": "writer_get_paragraphs",
+     "description": "List body paragraphs as [{index, text, style, is_heading}] so callers can target a paragraph by 0-based index or applied style instead of a unique search string. Index counts only body paragraphs (skips tables/frames).",
+     "inputSchema": _schema()},
+    {"name": "calc_sort_range",
+     "description": "Sort a cell range by one or more key columns. 'keys' is a list of {column: 0-based offset within the range, descending?, case_sensitive?}. Set has_header to keep the first row in place.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "keys": {"type": "array", "items": {"type": "object"},
+                                      "description": "e.g. [{\"column\":0},{\"column\":2,\"descending\":true}]"},
+                             "has_header": dict(_BOOL, description="exclude a header row from the sort (default false)")},
+                            ["range", "keys"])},
+    {"name": "calc_set_dimensions",
+     "description": "Set column widths or row heights (mm) or auto-fit them for a span. Give 'axis' ('columns'|'rows'), 'start' (0-based), 'count', and either 'size_mm' or 'autofit': true.",
+     "inputSchema": _schema({"sheet": _SHEET,
+                             "axis": dict(_STR, enum=["columns", "rows"]),
+                             "start": _INT, "count": _INT,
+                             "size_mm": dict(_NUM, description="width/height in mm"),
+                             "autofit": dict(_BOOL, description="auto-fit instead of a fixed size")},
+                            ["axis", "start"])},
+    {"name": "calc_set_visibility",
+     "description": "Hide or show a span of rows or columns. Give 'axis' ('columns'|'rows'), 'start' (0-based), 'count', and 'visible'.",
+     "inputSchema": _schema({"sheet": _SHEET,
+                             "axis": dict(_STR, enum=["columns", "rows"]),
+                             "start": _INT, "count": _INT, "visible": _BOOL},
+                            ["axis", "start", "visible"])},
+    {"name": "calc_move_sheet",
+     "description": "Reorder an existing sheet to a new 0-based position.",
+     "inputSchema": _schema({"name": _STR, "position": _INT}, ["name", "position"])},
+    {"name": "calc_recalculate",
+     "description": "Force a recalculation after bulk formula writes: hard=true (default) recomputes everything, hard=false only dirty cells.",
+     "inputSchema": _schema({"hard": dict(_BOOL, description="calculateAll (default true) vs calculate")})},
+    {"name": "calc_delete_comment",
+     "description": "Delete the cell comment/annotation on a cell (companion to calc_add_comment / calc_get_comments).",
+     "inputSchema": _schema({"cell": dict(_STR, description="e.g. 'B2'"), "sheet": _SHEET}, ["cell"])},
+    {"name": "calc_delete_chart",
+     "description": "Remove an embedded chart from a sheet by name.",
+     "inputSchema": _schema({"name": dict(_STR, description="chart name"), "sheet": _SHEET}, ["name"])},
+    {"name": "get_document_properties",
+     "description": "Read the active document's metadata: title/author/subject/keywords/description, created/modified dates + editor, statistics, and custom user-defined properties.",
+     "inputSchema": _schema()},
+    {"name": "set_document_modified",
+     "description": "Read the dirty flag and optionally set it: modified=false marks the document saved, true forces it dirty. Returns the resulting state.",
+     "inputSchema": _schema({"modified": dict(_BOOL, description="omit to just read; false=clear, true=force")})},
+    # --- writer P1 ---
+    {"name": "writer_list_objects",
+     "description": "Enumerate floating objects in the active Writer doc — graphics, text frames, and embedded/OLE objects — with name, anchor type, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs.",
+     "inputSchema": _schema()},
+    {"name": "writer_set_paragraph_text",
+     "description": "Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks.",
+     "inputSchema": _schema({"index": _INT, "text": _STR}, ["index", "text"])},
+    {"name": "writer_insert_field",
+     "description": "Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes.",
+     "inputSchema": _schema({"field": dict(_STR, enum=["page_number", "page_count", "date", "time", "title", "author"]),
+                             "fixed": dict(_BOOL, description="date/time: freeze the value (default false = updates)"),
+                             "new_paragraph": dict(_BOOL, description="insert on a new trailing paragraph (default false = inline at end)")})},
+    {"name": "writer_insert_toc",
+     "description": "Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings.",
+     "inputSchema": _schema({"title": dict(_STR, description="heading shown above the TOC"),
+                             "levels": dict(_INT, description="outline levels to include (default all)"),
+                             "at_start": dict(_BOOL, description="insert at the top of the document (default false = end)")})},
+    {"name": "writer_update_indexes",
+     "description": "Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits.",
+     "inputSchema": _schema()},
+    {"name": "writer_apply_list",
+     "description": "Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by applying the 'List Bullet'/'List Number' paragraph style. Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end.",
+     "inputSchema": _schema({"ordered": dict(_BOOL, description="numbered list (default false = bulleted)"),
+                             "start": dict(_INT, description="first paragraph index (default 0)"),
+                             "count": dict(_INT, description="how many paragraphs (default: to end)")})},
+    # --- cross-cutting (Calc & Writer) ---
+    {"name": "set_hyperlink",
+     "description": "Attach a clickable hyperlink. Calc: give 'cell' — replaces it with a URL field. Writer: give 'search' — links every matching text range.",
+     "inputSchema": _schema({"url": _STR,
+                             "cell": dict(_STR, description="Calc cell, e.g. 'B2'"),
+                             "search": dict(_STR, description="Writer text to link"),
+                             "text": dict(_STR, description="Calc display text (default: cell text or URL)"),
+                             "target": dict(_STR, description="Writer target frame, e.g. '_blank'"),
+                             "sheet": _SHEET, "match_case": _BOOL},
+                            ["url"])},
+    {"name": "export_document",
+     "description": "Store to a path with filter options. format 'pdf' (page_range, pdfa, quality 0-100, password) or 'csv' (delimiter, quote). Format defaults to the path extension.",
+     "inputSchema": _schema({"path": _STR,
+                             "format": dict(_STR, enum=["pdf", "csv"]),
+                             "page_range": dict(_STR, description="PDF pages, e.g. '1-3'"),
+                             "pdfa": dict(_BOOL, description="PDF/A-1 archival"),
+                             "quality": dict(_INT, description="PDF image quality 0-100"),
+                             "password": dict(_STR, description="PDF open password"),
+                             "delimiter": dict(_STR, description="CSV field delimiter (default ',')"),
+                             "quote": dict(_STR, description="CSV text delimiter (default '\"')")},
+                            ["path"])},
+    {"name": "set_document_properties",
+     "description": "Set document metadata: title/author/subject/description, keywords (array), and 'custom' user-defined properties ({name: value}; value null removes).",
+     "inputSchema": _schema({"title": _STR, "author": _STR, "subject": _STR,
+                             "description": _STR,
+                             "keywords": {"type": "array", "items": _STR},
+                             "custom": {"type": "object", "description": "user-defined props"}})},
+    {"name": "list_styles",
+     "description": "List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied.",
+     "inputSchema": _schema({"family": dict(_STR, description="style family (omit for all)"),
+                             "in_use_only": _BOOL})},
+    {"name": "set_style",
+     "description": "Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background and optional parent. Reusable across cells/paragraphs.",
+     "inputSchema": _schema({"family": _STR, "name": _STR, "parent": _STR,
+                             "bold": _BOOL, "italic": _BOOL,
+                             "font_name": _STR, "font_size": _NUM,
+                             "font_color": _STR, "background_color": _STR},
+                            ["family", "name"])},
+    {"name": "protect_document",
+     "description": "Set/remove protection. Calc: a 'sheet' protects that sheet, else the workbook structure; optional 'password'. Writer: toggles IsProtected on all text sections. protect=false unprotects.",
+     "inputSchema": _schema({"protect": dict(_BOOL, description="protect (default true) or unprotect"),
+                             "password": _STR, "sheet": _SHEET})},
+    {"name": "dispatch_uno",
+     "description": "Execute an arbitrary .uno: command against the active frame (e.g. '.uno:Undo', '.uno:GoToCell', '.uno:InsertPagebreak') with optional named args. Escape hatch when no dedicated tool fits.",
+     "inputSchema": _schema({"command": dict(_STR, description="e.g. '.uno:GoToCell'"),
+                             "args": {"type": "object", "description": "named PropertyValue args"}},
+                            ["command"])},
+    {"name": "document_undo",
+     "description": "Undo/redo/clear the active document's undo stack, or just query it (action 'status'). Returns whether undo/redo are possible and the next undo title.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["undo", "redo", "clear", "status"])})},
+    {"name": "bind_document_event",
+     "description": "Bind (or clear) a Basic/script macro to a document event such as OnSave, OnLoad, OnModifyChanged, OnPrint. Omit 'script' to clear the binding.",
+     "inputSchema": _schema({"event": dict(_STR, description="e.g. 'OnSave'"),
+                             "script": dict(_STR, description="vnd.sun.star.script: URI (omit to clear)")},
+                            ["event"])},
+    {"name": "set_view_zoom",
+     "description": "Set the window zoom: 'percent' (a number) and/or 'type' (optimal/page_width/whole_page/percent/page_width_exact).",
+     "inputSchema": _schema({"percent": _INT,
+                             "type": dict(_STR, enum=["optimal", "page_width", "whole_page", "percent", "page_width_exact"])})},
+    {"name": "get_signatures",
+     "description": "Report digital-signature status of the saved document: whether it is signed, validity, signer, and signing date.",
+     "inputSchema": _schema()},
+    {"name": "list_embedded_objects",
+     "description": "List embedded images and OLE objects with name, type, and size (mm). Writer: graphics + embedded objects. Calc: DrawPage graphic/OLE shapes across all sheets.",
+     "inputSchema": _schema()},
+    {"name": "insert_ole_object",
+     "description": "Embed an OLE object. Give 'object' (math/calc/chart) or a raw 'clsid'. Writer: inserts at the end. Calc: adds to a sheet's DrawPage at the given size.",
+     "inputSchema": _schema({"object": dict(_STR, enum=["math", "calc", "chart"]),
+                             "clsid": dict(_STR, description="explicit component CLSID"),
+                             "sheet": _SHEET, "width_mm": _NUM, "height_mm": _NUM})},
+    # --- writer P2/P3 ---
+    {"name": "writer_delete_object",
+     "description": "Delete a graphic, text frame, embedded object, draw shape, or text section by name.",
+     "inputSchema": _schema({"name": _STR}, ["name"])},
+    {"name": "writer_edit_table",
+     "description": "Edit an existing Writer table (by 'name' or 0-based 'index'): insert/delete rows/columns (at_row/at_column), merge a cell range ('A1:B2'), and set a cell background color.",
+     "inputSchema": _schema({"name": _STR, "index": _INT,
+                             "insert_rows": _INT, "delete_rows": _INT, "at_row": _INT,
+                             "insert_columns": _INT, "delete_columns": _INT, "at_column": _INT,
+                             "merge": dict(_STR, description="cell range to merge, e.g. 'A1:B2'"),
+                             "cell": dict(_STR, description="cell for background, e.g. 'A1'"),
+                             "background_color": _STR})},
+    {"name": "writer_set_image_layout",
+     "description": "Set anchor (as_char/char/paragraph/page/frame), text wrap (none/through/parallel/dynamic/left/right), and absolute position (x_mm/y_mm) of an existing image or text frame by name.",
+     "inputSchema": _schema({"name": _STR,
+                             "anchor": dict(_STR, enum=["as_char", "char", "paragraph", "page", "frame"]),
+                             "wrap": dict(_STR, enum=["none", "through", "parallel", "dynamic", "left", "right"]),
+                             "x_mm": _NUM, "y_mm": _NUM},
+                            ["name"])},
+    {"name": "writer_add_section",
+     "description": "Insert a named text section at the end, optionally multi-column and/or write-protected, wrapping optional text.",
+     "inputSchema": _schema({"name": _STR, "text": _STR,
+                             "columns": dict(_INT, description="number of columns"),
+                             "protected": _BOOL},
+                            ["name"])},
+    {"name": "writer_bookmarks",
+     "description": "Bookmark lifecycle: action 'list', 'insert' (at a 'search' match or the end), 'delete', 'get' (anchored text), or 'set' (replace anchored text).",
+     "inputSchema": _schema({"action": dict(_STR, enum=["list", "insert", "delete", "get", "set"]),
+                             "name": _STR, "search": _STR, "text": _STR, "match_case": _BOOL})},
+    {"name": "writer_insert_cross_reference",
+     "description": "Insert a cross-reference field at the end pointing at a bookmark or reference mark ('target'), showing its page/number/text ('show'). Refreshed on insert.",
+     "inputSchema": _schema({"target": dict(_STR, description="bookmark / reference-mark name"),
+                             "source": dict(_STR, enum=["bookmark", "reference_mark"]),
+                             "show": dict(_STR, enum=["page", "number", "text"])},
+                            ["target"])},
+    {"name": "writer_insert_footnote",
+     "description": "Insert a footnote or endnote (kind) with body text, anchored at a 'search' match or the document end.",
+     "inputSchema": _schema({"kind": dict(_STR, enum=["footnote", "endnote"]),
+                             "text": dict(_STR, description="note body text"),
+                             "search": dict(_STR, description="anchor at this text (default: end)"),
+                             "match_case": _BOOL})},
+    {"name": "writer_insert_shape",
+     "description": "Draw a rectangle/ellipse/line/text shape on the draw page at position/size (mm) with optional fill/line color, caption text, and name.",
+     "inputSchema": _schema({"kind": dict(_STR, enum=["rectangle", "ellipse", "line", "text"]),
+                             "x_mm": _NUM, "y_mm": _NUM, "width_mm": _NUM, "height_mm": _NUM,
+                             "fill_color": _STR, "line_color": _STR, "text": _STR, "name": _STR})},
+    {"name": "writer_insert_text_frame",
+     "description": "Insert a floating text frame (text box) at the end with a given size (mm), optionally pre-filled with text and named.",
+     "inputSchema": _schema({"width_mm": _NUM, "height_mm": _NUM, "text": _STR, "name": _STR})},
+    {"name": "writer_mail_merge",
+     "description": "Run a mail merge over Database fields already in the (saved) document, from a registered 'data_source' + 'command' (table/query name), emitting file/printer/mail output. Requires a registered data source.",
+     "inputSchema": _schema({"data_source": dict(_STR, description="registered data source name"),
+                             "command": dict(_STR, description="table or query name"),
+                             "command_type": dict(_STR, enum=["table", "query", "command"]),
+                             "output": dict(_STR, enum=["file", "printer", "mail"]),
+                             "output_url": dict(_STR, description="output folder path (file output)")},
+                            ["data_source", "command"])},
+    {"name": "writer_track_changes",
+     "description": "Manage tracked changes: action enable/disable recording, accept_all, reject_all, or list/status (returns recording state + pending redlines with author/type/comment).",
+     "inputSchema": _schema({"action": dict(_STR, enum=["enable", "disable", "accept_all", "reject_all", "list", "status"])})},
+    {"name": "writer_insert_horizontal_rule",
+     "description": "Insert a horizontal divider line at the document end (a paragraph in the 'Horizontal Line' style).",
+     "inputSchema": _schema()},
+    {"name": "writer_redact",
+     "description": "Black out every occurrence of a search term (black text on black background). NOTE: visual redaction only — the underlying text still exists in the file.",
+     "inputSchema": _schema({"search": _STR, "match_case": _BOOL}, ["search"])},
+    {"name": "writer_set_page_background",
+     "description": "Set (color) or clear (clear=true) the page background color on a page style (default 'Standard').",
+     "inputSchema": _schema({"color": dict(_STR, description="'#RRGGBB'"),
+                             "clear": _BOOL, "page_style": _STR})},
+    {"name": "writer_set_watermark",
+     "description": "Add a text watermark (empty text clears it) with font, angle, transparency (0-100) and color across all pages.",
+     "inputSchema": _schema({"text": _STR, "font": _STR,
+                             "angle": _INT, "transparency": _INT, "color": _STR})},
+    {"name": "writer_spellcheck",
+     "description": "Spell-check the document body and return flagged words with suggestions. 'language' is a BCP-47 tag (default 'en-US'); 'max_words' caps results.",
+     "inputSchema": _schema({"language": _STR, "max_words": _INT})},
+    # --- calc P1/P2/P3 ---
+    {"name": "calc_add_shape",
+     "description": "Draw a rectangle/ellipse/line/text shape on a sheet at a position (position_cell or x_mm/y_mm) and size (mm), with optional fill/line color, caption text, and name.",
+     "inputSchema": _schema({"sheet": _SHEET, "kind": dict(_STR, enum=["rectangle", "ellipse", "line", "text"]),
+                             "position_cell": dict(_STR, description="anchor to this cell's top-left"),
+                             "x_mm": _NUM, "y_mm": _NUM, "width_mm": _NUM, "height_mm": _NUM,
+                             "fill_color": _STR, "line_color": _STR, "text": _STR, "name": _STR})},
+    {"name": "calc_insert_image",
+     "description": "Insert an image file onto a sheet at a position (position_cell or x_mm/y_mm) and optional size (mm; defaults to the image's native size).",
+     "inputSchema": _schema({"path": _STR, "sheet": _SHEET, "position_cell": _STR,
+                             "x_mm": _NUM, "y_mm": _NUM, "width_mm": _NUM, "height_mm": _NUM},
+                            ["path"])},
+    {"name": "calc_position_shape",
+     "description": "Move (x_mm/y_mm), resize (width_mm/height_mm) or restack (z_order) an existing shape/image/chart on a sheet by name.",
+     "inputSchema": _schema({"name": _STR, "sheet": _SHEET,
+                             "x_mm": _NUM, "y_mm": _NUM, "width_mm": _NUM, "height_mm": _NUM,
+                             "z_order": _INT}, ["name"])},
+    {"name": "calc_autofilter",
+     "description": "Turn the AutoFilter dropdowns on for a range (enable=true, default) or off (enable=false).",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "enable": _BOOL,
+                             "name": dict(_STR, description="database-range name (optional)")})},
+    {"name": "calc_edit_chart",
+     "description": "Modify an existing chart: title, subtitle, legend on/off, x/y axis titles, and chart_type (column/bar/line/area/pie/...).",
+     "inputSchema": _schema({"name": _STR, "sheet": _SHEET, "title": _STR, "subtitle": _STR,
+                             "legend": _BOOL, "x_axis_title": _STR, "y_axis_title": _STR,
+                             "chart_type": _STR}, ["name"])},
+    {"name": "calc_list_charts",
+     "description": "List embedded charts on a sheet with name, source ranges, and header flags.",
+     "inputSchema": _schema({"sheet": _SHEET})},
+    {"name": "calc_named_ranges",
+     "description": "Workbook named ranges: action 'list', 'add' (name + content like 'Sheet1.$A$1:$B$5'), or 'delete'.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["list", "add", "delete"]),
+                             "name": _STR, "content": dict(_STR, description="the range reference"),
+                             "sheet": _SHEET})},
+    {"name": "calc_create_pivot",
+     "description": "Create a pivot table (DataPilot) from a source range. 'fields' is a list of {field, orientation: row|column|page|data, function: sum|count|average|max|min}. Output anchored at output_cell.",
+     "inputSchema": _schema({"name": _STR, "source_range": _RANGE, "output_cell": _STR,
+                             "sheet": _SHEET,
+                             "fields": {"type": "array", "items": {"type": "object"}}},
+                            ["name", "source_range", "output_cell", "fields"])},
+    {"name": "calc_refresh_pivot",
+     "description": "Existing pivot tables on a sheet: action 'list', 'refresh' (one 'name' or all), or 'delete'.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["list", "refresh", "delete"]),
+                             "name": _STR, "sheet": _SHEET})},
+    {"name": "calc_add_subtotals",
+     "description": "Apply grouped subtotals: group by column 'group_by' (0-based) and aggregate 'columns' (0-based list) with 'function' (sum/count/average/max/min); or remove=true to clear.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "group_by": _INT,
+                             "columns": {"type": "array", "items": _INT},
+                             "function": dict(_STR, enum=["sum", "count", "average", "max", "min"]),
+                             "replace": _BOOL, "remove": _BOOL})},
+    {"name": "calc_goal_seek",
+     "description": "Solve for the variable-cell value that makes a formula cell reach 'target'; writes it back unless apply=false. Returns result + divergence.",
+     "inputSchema": _schema({"formula_cell": _STR, "variable_cell": _STR, "target": _NUM,
+                             "sheet": _SHEET, "apply": _BOOL},
+                            ["formula_cell", "variable_cell", "target"])},
+    {"name": "calc_fill_series",
+     "description": "Fill a series across a range: direction (down/right/up/left), mode (linear/growth/date/auto), step, and optional end value.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "direction": dict(_STR, enum=["down", "right", "up", "left"]),
+                             "mode": dict(_STR, enum=["linear", "growth", "date", "auto"]),
+                             "step": _NUM, "end": _NUM}, ["range"])},
+    {"name": "calc_cell_protection",
+     "description": "Set locked/formula-hidden/hidden/print-hidden protection attributes on a range. Only takes effect once the sheet is protected (protect_document).",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "locked": _BOOL, "formula_hidden": _BOOL,
+                             "hidden": _BOOL, "print_hidden": _BOOL}, ["range"])},
+    {"name": "calc_format_cells_advanced",
+     "description": "Advanced cell presentation: vertical_align (standard/top/center/bottom), rotation (degrees), indent (mm), shrink_to_fit, wrap.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "vertical_align": dict(_STR, enum=["standard", "top", "center", "bottom"]),
+                             "rotation": _NUM, "indent": _NUM,
+                             "shrink_to_fit": _BOOL, "wrap": _BOOL}, ["range"])},
+    {"name": "calc_get_cell_format",
+     "description": "Read a cell's number-format code, font, size, weight, colors (hex), horizontal alignment, and applied cell style.",
+     "inputSchema": _schema({"cell": dict(_STR, description="e.g. 'B2'"), "sheet": _SHEET}, ["cell"])},
+    {"name": "calc_get_conditional_formats",
+     "description": "Read back the conditional formats on a sheet: their ranges and per-condition Formula1/Formula2/StyleName.",
+     "inputSchema": _schema({"sheet": _SHEET})},
+    {"name": "calc_get_validation",
+     "description": "Read back the data-validation rule on a range (type, formulas, input/error messages, dropdown flag).",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET}, ["range"])},
+    {"name": "calc_page_setup",
+     "description": "Calc page style: landscape, paper (a4/a5/a3/letter/legal), margins (mm), scale %, fit_pages_x/y, center_h/center_v.",
+     "inputSchema": _schema({"sheet": _SHEET, "landscape": _BOOL,
+                             "paper": dict(_STR, enum=["a4", "a5", "a3", "letter", "legal"]),
+                             "margin_top": _NUM, "margin_bottom": _NUM,
+                             "margin_left": _NUM, "margin_right": _NUM,
+                             "scale": _INT, "fit_pages_x": _INT, "fit_pages_y": _INT,
+                             "center_h": _BOOL, "center_v": _BOOL})},
+    {"name": "calc_set_print_area",
+     "description": "Define the print range for a sheet (or clear=true), with optional repeating title_rows / title_columns ranges.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "clear": _BOOL,
+                             "title_rows": _STR, "title_columns": _STR})},
+    {"name": "calc_standard_filter",
+     "description": "Apply a criteria filter that hides non-matching rows. 'conditions' is a list of {column: 0-based, operator: =|!=|>|>=|<|<=, value}.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "has_header": _BOOL,
+                             "conditions": {"type": "array", "items": {"type": "object"}}},
+                            ["range", "conditions"])},
+    {"name": "calc_group_shapes",
+     "description": "Group >=2 named shapes into one ('names' + optional 'group' name), or ungroup=true a group named 'group'.",
+     "inputSchema": _schema({"sheet": _SHEET,
+                             "names": {"type": "array", "items": _STR},
+                             "group": _STR, "ungroup": _BOOL})},
+    {"name": "calc_group_outline",
+     "description": "Row/column outline: action group/ungroup/show/hide over a range (axis rows|columns), or clear the whole outline.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "action": dict(_STR, enum=["group", "ungroup", "show", "hide", "clear"]),
+                             "axis": dict(_STR, enum=["rows", "columns"])})},
+    {"name": "calc_multiple_operations",
+     "description": "Build a what-if data table over a formula range against column and/or row input cells (mode column/row/both).",
+     "inputSchema": _schema({"range": _RANGE, "formula_range": _STR, "sheet": _SHEET,
+                             "mode": dict(_STR, enum=["column", "row", "both"]),
+                             "column_input": _STR, "row_input": _STR},
+                            ["range", "formula_range"])},
+    {"name": "calc_remove_duplicates",
+     "description": "Remove duplicate rows in a range (keep first). key_columns (0-based list) restricts the dedupe key; has_header keeps the first row.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "has_header": _BOOL,
+                             "key_columns": {"type": "array", "items": _INT}}, ["range"])},
+    {"name": "calc_transpose",
+     "description": "Copy a range to a target cell with rows and columns swapped (optionally onto another sheet).",
+     "inputSchema": _schema({"source_range": _RANGE, "target_cell": _STR,
+                             "sheet": _SHEET, "target_sheet": _SHEET},
+                            ["source_range", "target_cell"])},
+    {"name": "calc_apply_cell_style",
+     "description": "Apply a named cell style (e.g. 'Good', 'Heading 1') to a range, or read the current style if 'style' is omitted.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "style": _STR}, ["range"])},
+    {"name": "calc_add_sparkline",
+     "description": "Add in-cell sparklines driven by a data range (LibreOffice 7.5+).",
+     "inputSchema": _schema({"target_range": _RANGE, "data_range": _RANGE, "sheet": _SHEET},
+                            ["target_range", "data_range"])},
+    {"name": "calc_add_scale_format",
+     "description": "Add a color-scale or data-bar conditional format to a range (kind colorscale|databar), with default thresholds/colors.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "kind": dict(_STR, enum=["colorscale", "databar"])}, ["range"])},
+    {"name": "calc_copy_sheet",
+     "description": "Duplicate a sheet within the document to 'new_name' at an optional 0-based position.",
+     "inputSchema": _schema({"name": _STR, "new_name": _STR, "position": _INT},
+                            ["name", "new_name"])},
 ]
 
 

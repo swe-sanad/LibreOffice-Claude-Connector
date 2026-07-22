@@ -9,7 +9,7 @@ no external runtime, no third-party Python packages:
    written straight back into your document.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the inverse: lets Claude Code /
    Claude Desktop (or any MCP client) reach **in** and drive LibreOffice as a tool,
-   with **61 tools** covering documents, Calc data/formulas/formatting/charts, Writer
+   with **137 tools** covering documents, Calc data/formulas/formatting/charts, Writer
    text/tables, embedded Basic macros, drawing shapes, window screenshots, and a raw
    UNO escape hatch. See [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md) for the full catalog.
 
@@ -226,7 +226,7 @@ with 🥇 good-first-tool picks to start from.
 
 ```
 LibreOffice-Claude-Connector/
-├── mcp/             libreoffice_mcp.py (stdio MCP server, 61 tools — see docs/MCP-TOOLS.md)
+├── mcp/             libreoffice_mcp.py (stdio MCP server, 137 tools — see docs/MCP-TOOLS.md)
 ├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md,
 │                    MCP-TOOLS.md (generated tool reference), TOOLS-WANTED.md (roadmap),
 │                    KNOWN-GAPS.md, TEST-PLAN.md, SECURITY.md, UPSTREAMING.md

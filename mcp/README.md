@@ -12,7 +12,7 @@ way Claude uses the Figma or Chrome MCP servers.
 - Live tool tests: `../tests/integration/test_mcp_tools.py` (core) and
   `../tests/integration/test_mcp_tools_extended.py` (full 37-tool sweep).
 
-## Tools (50)
+## Tools (137)
 
 **Status & selection**
 

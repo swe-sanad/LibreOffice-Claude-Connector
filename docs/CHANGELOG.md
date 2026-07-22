@@ -8,6 +8,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **MCP tools 61 → 137 — the full `docs/TOOLS-WANTED.md` roadmap.** 76 new tools
+  landing the whole prioritized wish-list:
+  - **Good-first (12):** `calc_sort_range`, `calc_set_dimensions`, `calc_set_visibility`,
+    `calc_move_sheet`, `calc_recalculate`, `calc_delete_comment`, `calc_delete_chart`,
+    `writer_word_count`, `writer_read_table`, `writer_get_paragraphs`,
+    `get_document_properties`, `set_document_modified`.
+  - **Writer (22):** list_objects, set_paragraph_text, insert_field, insert_toc,
+    update_indexes, apply_list, delete_object, edit_table, set_image_layout,
+    add_section, bookmarks, insert_cross_reference, insert_footnote, insert_shape,
+    insert_text_frame, mail_merge, track_changes, insert_horizontal_rule, redact,
+    set_page_background, set_watermark, spellcheck.
+  - **Calc (29):** add_shape, insert_image, position_shape, autofilter, edit_chart,
+    list_charts, named_ranges, create_pivot, refresh_pivot, add_subtotals, goal_seek,
+    fill_series, cell_protection, format_cells_advanced, get_cell_format,
+    get_conditional_formats, get_validation, page_setup, set_print_area,
+    standard_filter, group_shapes, group_outline, multiple_operations,
+    remove_duplicates, transpose, apply_cell_style, add_sparkline, add_scale_format,
+    copy_sheet.
+  - **Cross-cutting umbrellas (13):** set_hyperlink, export_document,
+    set_document_properties, list_styles, set_style, protect_document, dispatch_uno,
+    document_undo, bind_document_event, set_view_zoom, get_signatures,
+    list_embedded_objects, insert_ole_object.
+  - Followed the doc's "don't build two of these" umbrella guidance — built the
+    consolidated tool, skipped the overlapping pieces (calc_set_hyperlink,
+    writer_insert_hyperlink, writer_export_pdf, calc_define_name,
+    writer_insert_bookmark, writer_manage_styles, calc_protect_sheet, refresh_fields,
+    writer_insert_ole_chart).
+  - `docs/MCP-TOOLS.md` regenerated (137 tools / 16 sections). Validated offline:
+    AST parse, module import, office-free protocol smoke test (137 tools), and
+    137/137 `TOOLS`↔`TOOL_DEFS` consistency (no dupes/orphans, all handlers callable,
+    all schemas valid). **Live-UNO exercise still pending** — the office was in use by
+    another session; the version-sensitive tools (create_pivot, add_scale_format,
+    add_sparkline, multiple_operations, mail_merge) are best-effort and fail in-band
+    with a clear message rather than crashing.
+
 - **v0.7.0 — the agent-acceptor extension: flag-free connect to any running
   LibreOffice.** A Job (`src/agent_acceptor.py`, `ext/Jobs.xcu`) opens a per-user
   named-pipe UNO acceptor from inside the office at startup, so a LibreOffice you

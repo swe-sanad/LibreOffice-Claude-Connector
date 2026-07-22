@@ -2,9 +2,24 @@
      current 61 tools. Regenerate/curate by hand; not auto-synced. -->
 # Tools wanted — the Calc & Writer roadmap
 
-The connector ships **61 tools today** ([full reference](MCP-TOOLS.md)). This is the
-prioritized wish-list of what to add next — **85 proposed tools** from a domain-by-domain
-sweep of the LibreOffice UNO API, each mapped to the exact API a contributor would wrap.
+The connector ships **137 tools today** ([full reference](MCP-TOOLS.md)). This
+started as a prioritized wish-list of what to add next — **85 proposed tools** from a
+domain-by-domain sweep of the LibreOffice UNO API, each mapped to the exact API a
+contributor would wrap.
+
+**Status: the roadmap below is essentially shipped.** All 🥇 good-first tools, the
+Writer P1/P2/P3 set, the Calc P1/P2/P3 set, and the cross-cutting umbrellas have been
+implemented (76 new tools, 61 → 137). Where the doc's "don't build two of these"
+umbrella guidance applied, the consolidated tool was built and the overlapping pieces
+were skipped: `set_hyperlink` (not `calc_set_hyperlink`/`writer_insert_hyperlink`),
+`export_document` (not `writer_export_pdf`), `calc_named_ranges` (not `calc_define_name`),
+`writer_bookmarks` (not `writer_insert_bookmark`), `list_styles`+`set_style` (not
+`writer_manage_styles`), `protect_document`+`calc_cell_protection` (not `calc_protect_sheet`);
+`refresh_fields` is covered by the shipped `writer_update_indexes`+`calc_recalculate`,
+and `writer_insert_ole_chart` by `insert_ole_object object=chart`. A handful of
+version-sensitive tools (`calc_create_pivot`, `calc_add_scale_format`, `calc_add_sparkline`,
+`calc_multiple_operations`, `writer_mail_merge`) are implemented best-effort and still
+need a live-office pass. The tables below are kept as the historical spec.
 
 **Want to build one?** Pick an item below, then follow the recipe in
 [CONTRIBUTING.md](../CONTRIBUTING.md). Open an issue first so we don't double-build.
