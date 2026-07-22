@@ -143,3 +143,27 @@ Arabic (RTL) technical+financial proposal — ~45 `writer_*` calls, logo image,
 | `caption` param on `writer_insert_table` | every table needs a following "جدول N — …" caption as a separate append; couple it to the insert (real Writer caption via `SetReferenceMark`/sequence field). |
 | echo active-doc title in every tool response | drift (bug 1) only surfaces as a *later* failed write; returning the active title each call makes it visible immediately. |
 | cursor positioning / edit-in-place | everything appends to end — can't insert mid-document or edit an existing table cell after the fact. |
+
+### The rebuild tax (structural edits are impossible → discard & rebuild)
+
+Confirmed live: when the proposal's whole theme changed, there was **no way to
+edit structure** — only append. `writer_find_replace` (+ search-based
+`writer_format_text`/`writer_format_paragraph`) can swap a word/phrase or
+restyle a match, but there is **no** way to:
+
+- delete a paragraph or a **range** of paragraphs,
+- delete a table, or reshape one (add/remove rows/columns, edit a cell after insert).
+
+So any change beyond word-level — reordering sections, dropping a subsection,
+turning a 6×2 table into a 7×3 — means **discarding the entire document and
+rebuilding it from scratch** (~45 calls again). That "rebuild tax" is the single
+biggest productivity sink of a long Writer session.
+
+Note: the enabling tools are **already** on the wishlist in
+[TOOLS-WANTED.md](TOOLS-WANTED.md) — `writer_edit_table` (P1),
+`writer_delete_object` (P1), `writer_set_paragraph_text` (P2),
+`writer_get_paragraphs` (P1). What this session adds is (a) the **priority
+signal** — ship these before more feature tools; the append-only model makes
+iterative work punishing — and (b) one genuinely missing primitive:
+`writer_delete_paragraphs(from, to)` / a range delete, which no wishlist item
+currently covers.
