@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-23
+
 ### Added
 
 - **MCP tools 61 → 137 — the full `docs/TOOLS-WANTED.md` roadmap.** 76 new tools
@@ -42,6 +44,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     another session; the version-sensitive tools (create_pivot, add_scale_format,
     add_sparkline, multiple_operations, mail_merge) are best-effort and fail in-band
     with a clear message rather than crashing.
+
+## [0.7.0] - 2026-07-19
+
+### Added
 
 - **v0.7.0 — the agent-acceptor extension: flag-free connect to any running
   LibreOffice.** A Job (`src/agent_acceptor.py`, `ext/Jobs.xcu`) opens a per-user
