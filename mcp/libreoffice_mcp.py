@@ -42,7 +42,8 @@ def _log(message):
 # Lazy LibreOffice connection (reuses src/uno_bridge.py)
 # --------------------------------------------------------------------------- #
 
-_state = {"ctx": None, "smgr": None, "desktop": None, "transport": None}
+_state = {"ctx": None, "smgr": None, "desktop": None, "transport": None,
+          "arg_sep": None}
 
 
 def _bridge():
@@ -153,7 +154,7 @@ def _connect():
 
 def _reset_connection():
     """Drop the cached UNO connection so the next call reconnects fresh."""
-    _state.update(ctx=None, smgr=None, desktop=None, transport=None)
+    _state.update(ctx=None, smgr=None, desktop=None, transport=None, arg_sep=None)
 
 
 # Substrings (lower-cased) that mark a lost/disposed UNO bridge — i.e. the office
@@ -229,6 +230,55 @@ def _current_doc():
     raise RuntimeError("No document is currently open/active in LibreOffice.")
 
 
+def _select_doc(args):
+    """Pick a SPECIFIC open document by 'index' (0-based), 'url' (substring), or
+    'title' (substring). Returns None when no selector is given (caller decides
+    the default). Raises — listing the open docs — when a selector matches
+    nothing. Shared by set_active_document and close_document so the caller can
+    target a doc explicitly instead of relying on unreliable GUI focus."""
+    if (args.get("index") is None and not args.get("url")
+            and not args.get("title")):
+        return None
+    docs = _open_docs()
+    if not docs:
+        raise RuntimeError("No documents are open.")
+    target = None
+    if args.get("index") is not None:
+        i = int(args["index"])
+        if i < 0 or i >= len(docs):
+            raise RuntimeError("index %d out of range (0..%d)." % (i, len(docs) - 1))
+        target = docs[i]
+    elif args.get("url"):
+        want = str(args["url"]).replace("\\", "/").lower()
+        target = next((d for d in docs
+                       if want in ((d.getURL() or "").replace("\\", "/").lower())),
+                      None)
+    else:  # title
+        want = str(args["title"]).lower()
+        for d in docs:
+            try:
+                tt = d.getTitle()
+            except Exception:
+                tt = ""
+            if want in (tt or "").lower():
+                target = d
+                break
+    if target is None:
+        listing = "; ".join("%d:%s" % (i, _doc_info(d)["title"])
+                            for i, d in enumerate(docs))
+        raise RuntimeError("No open document matched. Open: %s" % listing)
+    return target
+
+
+def _activate(doc):
+    """Bring a document's window to the front so getCurrentComponent() and the
+    focus-based tools target it. Best-effort — never fatal."""
+    try:
+        doc.getCurrentController().getFrame().activate()
+    except Exception:
+        pass
+
+
 def _require_calc():
     ub = _bridge()
     doc = _current_doc()
@@ -294,6 +344,18 @@ def _uno_struct(type_name):
     return uno.createUnoStruct(type_name)
 
 
+def _any_seq(type_name, items):
+    """Wrap a Python sequence of UNO structs/values as a TYPED UNO sequence Any.
+
+    Assigning a bare Python tuple where UNO wants a `[]com.sun.star...` sequence
+    is silently marshalled as the wrong type — the call then no-ops or throws
+    IllegalArgumentException. Everywhere a sequence-of-struct is handed to a UNO
+    API (setPropertyValue / replaceByName / replaceByIndex / sort descriptors),
+    route it through here. See the FilterData / chapter-numbering call sites."""
+    import uno
+    return uno.Any("[]" + type_name, tuple(items))
+
+
 def _hex_color(value):
     """'#RRGGBB' (or 'RRGGBB') -> int, as UNO colors are plain ints."""
     s = str(value).lstrip("#")
@@ -354,6 +416,13 @@ def _col_letters(index):
 def _addr_to_a1(addr):
     return "%s%d:%s%d" % (_col_letters(addr.StartColumn), addr.StartRow + 1,
                           _col_letters(addr.EndColumn), addr.EndRow + 1)
+
+
+def _addr_intersects(a, b):
+    """True when two CellRangeAddress rectangles overlap (same sheet)."""
+    return (a.Sheet == b.Sheet
+            and a.StartColumn <= b.EndColumn and a.EndColumn >= b.StartColumn
+            and a.StartRow <= b.EndRow and a.EndRow >= b.StartRow)
 
 
 def _doc_kind(doc):
@@ -647,6 +716,7 @@ def tool_create_document(args):
     if url is None:
         raise RuntimeError("type must be 'calc' or 'writer', got: %r" % kind)
     doc = _desktop().loadComponentFromURL(url, "_blank", 0, ())
+    _activate(doc)   # make the new doc the active one for subsequent calls
     return {"created": _doc_info(doc)}
 
 
@@ -657,6 +727,7 @@ def tool_open_document(args):
     doc = _desktop().loadComponentFromURL(_to_url(path), "_blank", 0, ())
     if doc is None:
         raise RuntimeError("LibreOffice could not open: %s" % path)
+    _activate(doc)
     return {"opened": _doc_info(doc)}
 
 
@@ -691,7 +762,10 @@ def tool_save_document(args):
 
 
 def tool_close_document(args):
-    doc = _current_doc()
+    # Prefer an explicit target (index/title/url); fall back to the active doc.
+    # Focus-based resolution alone once closed the WRONG document, so callers
+    # can — and for safety should — name which doc to close.
+    doc = _select_doc(args) or _current_doc()
     info = _doc_info(doc)
     if args.get("save"):
         if not doc.hasLocation():
@@ -743,15 +817,88 @@ def tool_calc_get_formulas(args):
             "formulas": [list(row) for row in rng.getFormulaArray()]}
 
 
+def _arg_separator(doc):
+    """The document's ACTUAL function-argument separator (',' or ';'), detected
+    at runtime and cached. Localized builds (Arabic, most of Europe) use ';'
+    because their decimal separator is ',' — so a comma-separated formula like
+    =SUM(1,2,3) silently computes to #NAME?/Err. Probed on a throwaway temp
+    sheet so user data is never touched."""
+    sep = _state.get("arg_sep")
+    if sep:
+        return sep
+    sep = ","
+    try:
+        sheets = doc.getSheets()
+        probe = "__lo_mcp_sep_probe__"
+        if not sheets.hasByName(probe):
+            sheets.insertNewByName(probe, sheets.getCount())
+        try:
+            cell = sheets.getByName(probe).getCellByPosition(0, 0)
+            cell.setFormula("=SUM(1,2)")
+            if cell.getError() != 0:      # comma rejected -> ';' locale
+                sep = ";"
+        finally:
+            if sheets.hasByName(probe):
+                sheets.removeByName(probe)
+    except Exception:
+        sep = ","                         # conservative on any probe failure
+    _state["arg_sep"] = sep
+    return sep
+
+
+def _normalize_formula(s, sep):
+    """Rewrite TOP-LEVEL ',' argument separators to `sep`, leaving commas inside
+    "..." string literals untouched. No-op when the doc already uses ','."""
+    if sep == "," or "," not in s:
+        return s
+    out, in_str = [], False
+    for ch in s:
+        if ch == '"':
+            in_str = not in_str
+            out.append(ch)
+        elif ch == "," and not in_str:
+            out.append(sep)
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def _range_errors(rng):
+    """Cells in a range holding an error value (Err:5xx / #NAME? / #REF! ...),
+    as [{cell, code, text}] — so formula writes can't silently 'succeed'."""
+    errs = []
+    try:
+        addr = rng.getRangeAddress()
+        for r in range(addr.EndRow - addr.StartRow + 1):
+            for c in range(addr.EndColumn - addr.StartColumn + 1):
+                cell = rng.getCellByPosition(c, r)
+                code = cell.getError()
+                if code:
+                    errs.append({"cell": "%s%d" % (_col_letters(addr.StartColumn + c),
+                                                   addr.StartRow + r + 1),
+                                 "code": int(code), "text": cell.getString()})
+    except Exception:
+        pass
+    return errs
+
+
 def tool_calc_set_formulas(args):
     doc = _require_calc()
     sheet = _resolve_sheet(doc, args.get("sheet"))
     rng = sheet.getCellRangeByName(args["range"])
     formulas = args["formulas"]
     rows, cols = _check_grid_shape(rng, formulas, "formulas")
-    rng.setFormulaArray(tuple(tuple("" if v is None else str(v) for v in row)
-                              for row in formulas))
-    return {"written": args["range"], "rows": rows, "columns": cols}
+    sep = _arg_separator(doc)
+    rng.setFormulaArray(tuple(
+        tuple("" if v is None else _normalize_formula(str(v), sep) for v in row)
+        for row in formulas))
+    out = {"written": args["range"], "rows": rows, "columns": cols}
+    if sep != ",":
+        out["arg_separator"] = sep
+    errors = _range_errors(rng)
+    if errors:
+        out["errors"] = errors
+    return out
 
 
 def tool_calc_clear_range(args):
@@ -1234,8 +1381,31 @@ def tool_writer_insert_table(args):
 
     table = doc.createInstance("com.sun.star.text.TextTable")
     table.initialize(rows, cols)
-    text, cursor = _writer_end_cursor(doc)
-    text.insertTextContent(cursor, table, False)
+
+    # Position: after a matched paragraph ('search'), after a body-paragraph
+    # index ('after_index'), or (default) at the document end.
+    text = doc.getText()
+    if args.get("search") or args.get("after_index") is not None:
+        from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+        if args.get("search"):
+            rng = _writer_find_first(doc, args["search"],
+                                     args.get("match_case", False))
+            if rng is None:
+                raise RuntimeError("Search text %r not found." % args["search"])
+            cursor = text.createTextCursorByRange(rng.getEnd())
+            cursor.gotoEndOfParagraph(False)
+        else:
+            idx = int(args["after_index"])
+            paras = [p for _, p in _writer_paragraphs(doc)]
+            if idx < 0 or idx >= len(paras):
+                raise RuntimeError("No body paragraph at index %d (document "
+                                   "has %d)." % (idx, len(paras)))
+            cursor = text.createTextCursorByRange(paras[idx].getEnd())
+        text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+        text.insertTextContent(cursor, table, False)
+    else:
+        text, cursor = _writer_end_cursor(doc)
+        text.insertTextContent(cursor, table, False)
 
     filled = 0
     if data:
@@ -1386,13 +1556,16 @@ def tool_writer_add_conditional_section(args):
 
     section = doc.createInstance("com.sun.star.text.TextSection")
     section.setName(name)
-    section.Condition = args["condition"]
-    if "visible" in args:
-        section.IsVisible = bool(args["visible"])
     text.insertTextContent(span, section, True)
 
+    # Set Condition / IsVisible AFTER insertion — properties set on a
+    # not-yet-inserted section are dropped (so visible=false didn't hide it).
     applied = doc.getTextSections().getByName(name)
+    applied.Condition = args["condition"]
+    if "visible" in args:
+        applied.IsVisible = bool(args["visible"])
     return {"section": name, "condition": args["condition"],
+            "is_visible": bool(applied.IsVisible),
             "currently_visible": bool(applied.IsCurrentlyVisible)}
 
 
@@ -2013,7 +2186,9 @@ def tool_calc_sort_range(args):
     desc = list(rng.createSortDescriptor())
     for pv in desc:
         if pv.Name == "SortFields":
-            pv.Value = tuple(fields)
+            # MUST be a typed UNO sequence — a bare tuple is silently ignored
+            # and rng.sort() then no-ops (reporting success but not sorting).
+            pv.Value = _any_seq("com.sun.star.table.TableSortField", fields)
         elif pv.Name == "ContainsHeader":
             pv.Value = bool(args.get("has_header", False))
         elif pv.Name == "BindFormatsToContent":
@@ -2192,6 +2367,12 @@ def tool_writer_get_paragraphs(_args):
 def _jsonable(v):
     if v is None or isinstance(v, (str, int, float, bool)):
         return v
+    try:
+        import uno
+        if isinstance(v, uno.Enum):          # e.g. CellHoriJustify -> 'CENTER'
+            return v.value
+    except Exception:
+        pass
     return str(v)
 
 
@@ -2279,6 +2460,38 @@ def tool_writer_list_objects(_args):
     _named("graphic", doc.getGraphicObjects)
     _named("frame", doc.getTextFrames)
     _named("embedded", doc.getEmbeddedObjects)
+
+    # Draw shapes (rectangle/ellipse/line/text/custom) live only on the draw
+    # page — they were previously invisible to discovery. Skip the graphics/OLE
+    # already listed by name above so nothing double-counts.
+    seen = {e["name"] for e in out if e.get("name")}
+    try:
+        dp = doc.getDrawPage()
+    except Exception:
+        dp = None
+    for i in range(dp.getCount() if dp else 0):
+        try:
+            shp = dp.getByIndex(i)
+            st = getattr(shp, "ShapeType", "") or ""
+        except Exception:
+            continue
+        if ("GraphicObjectShape" in st or "OLE2Shape" in st
+                or "FrameShape" in st):
+            continue
+        nm = getattr(shp, "Name", "") or ""
+        if nm and nm in seen:
+            continue
+        entry = {"kind": "shape", "name": nm, "type": st}
+        try:
+            entry["anchor"] = _enum_value(shp.AnchorType)
+        except Exception:
+            pass
+        try:
+            entry["size_mm"] = [round(shp.Size.Width / 100.0, 1),
+                                round(shp.Size.Height / 100.0, 1)]
+        except Exception:
+            pass
+        out.append(entry)
     return {"objects": out, "count": len(out)}
 
 
@@ -2488,22 +2701,47 @@ def tool_writer_update_indexes(_args):
     return {"indexes_updated": indexes, "fields_refreshed": True}
 
 
+def _make_numbering_rules(doc, ordered):
+    """A bullet (default) or ordered NumberingRules, applied directly to
+    paragraphs so lists work regardless of the build's localized list-STYLE
+    names (e.g. 'List 1' / 'Numbering 1' instead of 'List Bullet')."""
+    import uno
+    from com.sun.star.style.NumberingType import ARABIC, CHAR_SPECIAL
+    rules = doc.createInstance("com.sun.star.text.NumberingRules")
+    if ordered:
+        level = (_pv("NumberingType", ARABIC), _pv("Prefix", ""),
+                 _pv("Suffix", "."))
+    else:
+        level = (_pv("NumberingType", CHAR_SPECIAL),
+                 _pv("BulletChar", u"•"), _pv("BulletFontName", "OpenSymbol"),
+                 _pv("Prefix", ""), _pv("Suffix", ""))
+    uno.invoke(rules, "replaceByIndex",
+               (0, _any_seq("com.sun.star.beans.PropertyValue", level)))
+    return rules
+
+
 def tool_writer_apply_list(args):
     doc = _require_writer()
     ordered = bool(args.get("ordered", False))
-    style = "List Number" if ordered else "List Bullet"
     start = int(args.get("start", 0))
     count = args.get("count")
     end = start + int(count) - 1 if count is not None else None
-    changed = 0
+    rules = _make_numbering_rules(doc, ordered)
+    changed = matched = 0
     for i, para in _writer_paragraphs(doc):
         if i >= start and (end is None or i <= end):
+            matched += 1
             try:
-                para.ParaStyleName = style
+                para.NumberingRules = rules
+                para.NumberingLevel = 0
                 changed += 1
             except Exception:
                 pass
-    return {"style": style, "paragraphs_changed": changed}
+    if matched == 0:
+        raise RuntimeError("No body paragraphs in range (start=%d, count=%s)."
+                           % (start, count))
+    return {"ordered": ordered, "paragraphs_changed": changed,
+            "paragraphs_matched": matched}
 
 
 # --------------------------------------------------------------------------- #
@@ -2800,40 +3038,59 @@ def tool_document_undo(args):
 
 
 def tool_bind_document_event(args):
+    import uno
     doc = _current_doc()
     events = doc.getEvents()
     name = args["event"]
     script = args.get("script")
+    # The PropertyValue sequence MUST be a typed UNO Any — a bare tuple is
+    # rejected with IllegalArgumentException. uno.invoke marshals it correctly.
     if script:
-        events.replaceByName(name, (_pv("EventType", "Script"),
-                                    _pv("Script", script)))
+        binding = _any_seq("com.sun.star.beans.PropertyValue",
+                           (_pv("EventType", "Script"), _pv("Script", script)))
     else:
-        events.replaceByName(name, ())
+        binding = _any_seq("com.sun.star.beans.PropertyValue", ())
+    uno.invoke(events, "replaceByName", (name, binding))
     return {"event": name, "bound": bool(script)}
+
+
+def _zoom_target(ctrl):
+    """The object carrying ZoomType/ZoomValue: Calc's controller exposes them
+    directly; Writer's live on ctrl.ViewSettings. (Writing ctrl.ZoomValue on
+    Writer raised AttributeError — the original bug.)"""
+    if hasattr(ctrl, "ZoomValue"):
+        return ctrl
+    for get in (lambda: ctrl.ViewSettings, lambda: ctrl.getViewSettings()):
+        try:
+            vs = get()
+        except Exception:
+            vs = None
+        if vs is not None and hasattr(vs, "ZoomValue"):
+            return vs
+    return None
 
 
 def tool_set_view_zoom(args):
     doc = _current_doc()
     ctrl = doc.getCurrentController()
+    # ZoomType is a com.sun.star.view.DocumentZoomType short.
+    vs = _zoom_target(ctrl)
+    if vs is None:
+        raise RuntimeError("The active view exposes no zoom settings "
+                           "(headless sessions have no view).")
     zoom_types = {"optimal": 0, "page_width": 1, "whole_page": 2,
                   "percent": 3, "page_width_exact": 4}
-    ztype = args.get("type")
-    if ztype:
-        key = str(ztype).lower()
+    if args.get("percent") is not None:
+        vs.ZoomType = 3                       # BY_VALUE
+        vs.ZoomValue = int(args["percent"])
+    elif args.get("type"):
+        key = str(args["type"]).lower()
         if key not in zoom_types:
             raise RuntimeError("type must be one of %s." % sorted(zoom_types))
-        try:
-            ctrl.ZoomType = zoom_types[key]
-        except Exception:
-            pass
-    if args.get("percent") is not None:
-        try:
-            ctrl.ZoomType = 3
-        except Exception:
-            pass
-        ctrl.ZoomValue = int(args["percent"])
-    return {"zoom_value": getattr(ctrl, "ZoomValue", None),
-            "zoom_type": getattr(ctrl, "ZoomType", None)}
+        vs.ZoomType = zoom_types[key]
+    else:
+        raise RuntimeError("Provide 'percent' and/or 'type'.")
+    return {"zoom_type": int(vs.ZoomType), "zoom_value": int(vs.ZoomValue)}
 
 
 def tool_get_signatures(_args):
@@ -2847,7 +3104,16 @@ def tool_get_signatures(_args):
     try:
         dds = state["smgr"].createInstanceWithContext(
             "com.sun.star.security.DocumentDigitalSignatures", state["ctx"])
-        infos = dds.verifyDocumentContentSignatures(url, None)
+        # verifyDocumentContentSignatures wants an XStorage — a URL string raises
+        # CannotConvertException. Open the doc as a read-only storage first.
+        try:
+            from com.sun.star.embed.ElementModes import READ
+            sf = state["smgr"].createInstanceWithContext(
+                "com.sun.star.embed.StorageFactory", state["ctx"])
+            storage = sf.openStorageFromURL(url, READ)
+            infos = dds.verifyDocumentContentSignatures(storage, None)
+        except Exception:
+            infos = dds.verifyDocumentContentSignatures(url, None)  # legacy overload
     except Exception as exc:
         out["note"] = "Could not read signatures (%s)." % type(exc).__name__
         return out
@@ -3799,8 +4065,10 @@ def tool_calc_get_conditional_formats(args):
     for cf in cfs:
         entry = {}
         try:
+            # XConditionalFormat exposes the range as the `Range` PROPERTY
+            # (there is no getRange() method on this build).
             entry["range"] = [_addr_to_a1(a)
-                              for a in cf.getRange().getRangeAddresses()]
+                              for a in cf.Range.getRangeAddresses()]
         except Exception:
             pass
         conditions = []
@@ -3937,7 +4205,11 @@ def tool_calc_group_shapes(args):
         dp.ungroup(grp)
         return {"ungrouped": args["group"]}
     names = set(args["names"])
-    coll = doc.createInstance("com.sun.star.drawing.ShapeCollection")
+    # doc.createInstance("...ShapeCollection") returns None here — the collection
+    # must come from the office service manager.
+    state = _connect()
+    coll = state["smgr"].createInstanceWithContext(
+        "com.sun.star.drawing.ShapeCollection", state["ctx"])
     for i in range(dp.getCount()):
         shp = dp.getByIndex(i)
         if getattr(shp, "Name", None) in names:
@@ -3997,8 +4269,22 @@ def tool_calc_multiple_operations(args):
         row_in = col_in
     if col_in is None:
         raise RuntimeError("Provide column_input and/or row_input.")
+    # The formula cell(s) must sit OUTSIDE the filled range, else TABLE() is
+    # written into the formula cell itself -> self-reference (Err:522).
+    if _addr_intersects(target.getRangeAddress(), formulas):
+        raise RuntimeError(
+            "formula_range (%s) must be OUTSIDE range (%s): the formula sits in "
+            "the row above (row mode) or column left of (column mode) the "
+            "input+result block; 'range' covers only the inputs and result "
+            "cells. Overlap makes every result a circular reference (Err:522)."
+            % (args["formula_range"], args["range"]))
     target.setTableOperation(formulas, mode, col_in, row_in)
-    return {"table_operation": args["range"], "mode": str(args.get("mode", "column"))}
+    out = {"table_operation": args["range"],
+           "mode": str(args.get("mode", "column"))}
+    errs = _range_errors(target)
+    if errs:
+        out["errors"] = errs
+    return out
 
 
 def tool_calc_remove_duplicates(args):
@@ -4587,7 +4873,11 @@ def tool_writer_clear_formatting(args):
                               bool(args.get("match_case", False)))
         found = doc.findAll(desc)
         for i in range(found.getCount()):
-            text.createTextCursorByRange(found.getByIndex(i)).setAllPropertiesToDefault()
+            r = found.getByIndex(i)
+            # Use each match's OWN text (body / header / footer / frame) — using
+            # the body `text` object on a header/footer range throws
+            # "End of content node doesn't have the proper start node".
+            r.getText().createTextCursorByRange(r).setAllPropertiesToDefault()
         return {"cleared": found.getCount(), "scope": "search"}
     start = int(args.get("start", 0))
     cnt = args.get("count")
@@ -4623,37 +4913,11 @@ def tool_set_active_document(args):
     """Focus a specific open document so subsequent reads/writes target it,
     selected by 'title' (substring), 'url' (substring), or 0-based 'index' over
     the open documents. The fix for focus-stealing silently redirecting writes."""
-    docs = _open_docs()
-    if not docs:
-        raise RuntimeError("No documents are open.")
-    target = None
-    if args.get("index") is not None:
-        i = int(args["index"])
-        if i < 0 or i >= len(docs):
-            raise RuntimeError("index %d out of range (0..%d)." % (i, len(docs) - 1))
-        target = docs[i]
-    elif args.get("url"):
-        want = str(args["url"]).replace("\\", "/").lower()
-        target = next((d for d in docs
-                       if want in ((d.getURL() or "").replace("\\", "/").lower())), None)
-    elif args.get("title"):
-        want = str(args["title"]).lower()
-        for d in docs:
-            try:
-                tt = d.getTitle()
-            except Exception:
-                tt = ""
-            if want in (tt or "").lower():
-                target = d
-                break
-    else:
-        raise RuntimeError("Give one of: title, url, or index.")
+    target = _select_doc(args)
     if target is None:
-        listing = "; ".join("%d:%s" % (i, _doc_info(d)["title"])
-                            for i, d in enumerate(docs))
-        raise RuntimeError("No open document matched. Open: %s" % listing)
-    target.getCurrentController().getFrame().activate()
-    return {"active": _doc_info(target), "open_count": len(docs)}
+        raise RuntimeError("Give one of: title, url, or index.")
+    _activate(target)
+    return {"active": _doc_info(target), "open_count": len(_open_docs())}
 
 
 def tool_writer_replace_image(args):
@@ -5145,8 +5409,11 @@ TOOL_DEFS = [
      "inputSchema": _schema({"path": _STR,
                              "format": dict(_STR, enum=["native", "ods", "xlsx", "csv", "odt", "docx", "txt", "pdf"])})},
     {"name": "close_document",
-     "description": "Close the active document, optionally saving it first (save=true needs an existing file location).",
-     "inputSchema": _schema({"save": _BOOL})},
+     "description": "Close a document, optionally saving it first (save=true needs an existing file location). Targets a SPECIFIC doc by 'index'/'title'/'url' (recommended when several are open — focus alone can close the wrong one); defaults to the active document.",
+     "inputSchema": _schema({"save": _BOOL,
+                             "title": dict(_STR, description="match by window title substring"),
+                             "url": dict(_STR, description="match by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
     # --- calc data ---
     {"name": "calc_read_range",
      "description": "Read a Calc cell range as a 2-D array of values.",
@@ -5289,8 +5556,11 @@ TOOL_DEFS = [
                              "font_name": _STR, "font_size": _NUM,
                              "font_color": dict(_STR, description="'#RRGGBB'")}, ["search"])},
     {"name": "writer_insert_table",
-     "description": "Insert a table at the end of the Writer document, optionally filled with data (rows of strings/numbers).",
-     "inputSchema": _schema({"rows": _INT, "columns": _INT, "data": _GRID}, ["rows", "columns"])},
+     "description": "Insert a table, optionally filled with data (rows of strings/numbers). By default appends at the document end; give 'search' to place it right after the first paragraph containing that text, or 'after_index' to place it after a 0-based body-paragraph index.",
+     "inputSchema": _schema({"rows": _INT, "columns": _INT, "data": _GRID,
+                             "search": dict(_STR, description="place the table after the paragraph containing this text"),
+                             "after_index": dict(_INT, description="place the table after this 0-based body-paragraph index"),
+                             "match_case": _BOOL}, ["rows", "columns"])},
     {"name": "writer_insert_image",
      "description": "Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size).",
      "inputSchema": _schema({"path": _STR, "width_mm": _INT, "height_mm": _INT}, ["path"])},
