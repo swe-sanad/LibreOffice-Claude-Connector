@@ -29,7 +29,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `calc_read_range` | Read a Calc cell range as a 2-D array of values. |
 | `calc_write_range` | Write a 2-D array of values into a Calc range (dimensions must match the range). |
 | `calc_get_formulas` | Read a Calc range as formulas (e.g. '=SUM(A1:A3)') instead of computed values. |
-| `calc_set_formulas` | Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. |
+| `calc_set_formulas` | Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify). |
 | `calc_clear_range` | Clear the contents of a Calc range (values, text, formulas; optionally formatting too). |
 | `calc_copy_range` | Copy a Calc range (values, formulas, formatting) to a target cell, optionally on another sheet. |
 | `calc_find_replace` | Find & replace cell text in one sheet, or in every sheet when 'sheet' is omitted. Returns the replacement count. |
@@ -148,7 +148,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `writer_insert_field` | Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes. |
 | `writer_insert_toc` | Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings. |
 | `writer_update_indexes` | Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits. |
-| `writer_apply_list` | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by applying the 'List Bullet'/'List Number' paragraph style. Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. |
+| `writer_apply_list` | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. Errors if the range matches no paragraph or none could be changed. |
 
 ## Cross-cutting (calc & writer)
 

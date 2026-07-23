@@ -31,7 +31,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   typed `uno.Any` via `uno.invoke` (was `IllegalArgumentException`).
 - **`writer_apply_list`** applies real bullets/numbers via `NumberingRules`
   instead of hardcoded `List Bullet`/`List Number` styles (absent on localized
-  builds, where it silently no-oped).
+  builds, where it silently no-oped); now errors if nothing could be applied, and
+  its result reports `ordered`/`paragraphs_matched` (the old `style` key is gone).
 - **`calc_group_shapes`** builds the `ShapeCollection` from the office service
   manager (`doc.createInstance` returns `None` here → `AttributeError`).
 - **`set_view_zoom`** writes zoom on the right object per doc type (Calc =
