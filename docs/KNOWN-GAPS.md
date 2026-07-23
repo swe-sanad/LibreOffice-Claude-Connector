@@ -175,7 +175,7 @@ currently covers.
 Driving a 17-page bilingual RTL Writer proposal. Two of the top pains recorded
 above are now **CLOSED**, plus a paper-cut and a test-harness gotcha.
 
-## Shipped this session (137 → 147 tools)
+## Shipped this session (137 → 151 tools)
 
 ### Paragraph structure + RTL
 
@@ -238,13 +238,26 @@ All six covered by `check_menu_coverage_tools` in the same test file.
 
 Covered by `check_structural_tools` in the test file.
 
+### Niche tools (Table / Format / Tools)
+
+- **`writer_table_formula`** — set a formula in a table cell (`=<A1>+<A2>`,
+  `sum <A1:A5>`) and return the computed value (XCell.setFormula).
+- **`writer_split_cells`** — split a cell (or `A1:B1` range) into N cells along
+  columns or rows (table cursor `splitRange`).
+- **`writer_clear_formatting`** — reset direct char/para formatting to the
+  underlying style (`setAllPropertiesToDefault`) over a match or paragraph range.
+- **`writer_set_line_numbering`** — turn document line numbering on/off with
+  interval/options (`getLineNumberingProperties`).
+
+Covered by `check_niche_tools` in the test file.
+
 ## Still open (Writer)
 
-- In-cell table formula (SUM/etc. inside a Writer table cell).
-- Deeper table ops: split cells, repeat-heading-rows.
-- Format: clear-direct-formatting, autoformat. Tools: line numbering, autotext,
-  bibliography, hyphenation/thesaurus config, signature *creation*.
+- Deeper table ops: repeat-heading-rows across page breaks.
+- Format: autoformat/autocorrect-apply. Tools: autotext, bibliography,
+  hyphenation/thesaurus config, digital-signature *creation*.
 - Form authoring: data binding, design-mode toggle, form navigator.
+- These are the genuinely low-value / high-complexity long tail — build on demand.
 
 ## Still open (Calc / cross-cutting)
 

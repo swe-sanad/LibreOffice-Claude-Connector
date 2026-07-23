@@ -4531,6 +4531,88 @@ def tool_writer_insert_caption(args):
             "text": label}
 
 
+def tool_writer_table_formula(args):
+    """Set a formula in a Writer table cell (e.g. '=<A1>+<A2>' or 'sum <A1:A3>')
+    and return the computed value."""
+    doc = _require_writer()
+    table = _resolve_table(doc, args)
+    cellname = args["cell"]
+    formula = str(args["formula"]).lstrip("=")
+    cell = table.getCellByName(cellname)
+    if cell is None:
+        raise RuntimeError("No cell %r in table %r." % (cellname, table.Name))
+    cell.setFormula(formula)
+    return {"table": table.Name, "cell": cellname,
+            "formula": cell.getFormula(), "value": cell.getValue(),
+            "text": cell.getString()}
+
+
+def tool_writer_split_cells(args):
+    """Split a table cell (or 'A1:B1' range) into N cells along columns or rows."""
+    doc = _require_writer()
+    table = _resolve_table(doc, args)
+    into = int(args.get("into", 2))
+    if into < 2:
+        raise RuntimeError("into must be >= 2.")
+    direction = str(args.get("direction", "columns")).lower()
+    if direction not in ("columns", "rows"):
+        raise RuntimeError("direction must be 'columns' or 'rows'.")
+    horizontal = direction == "rows"     # bHorizontal True -> stacked rows
+    cellspec = str(args["cell"])
+    start, _, end = cellspec.partition(":")
+    cur = table.createCursorByCellName(start)
+    if end:
+        cur.gotoCellByName(end, True)
+    cur.splitRange(into - 1, horizontal)
+    return {"table": table.Name, "cell": cellspec, "into": into,
+            "direction": direction}
+
+
+def tool_writer_clear_formatting(args):
+    """Remove direct character/paragraph formatting (reset to the underlying
+    style) from matched text ('search') or a body-paragraph range (start/count,
+    default all)."""
+    doc = _require_writer()
+    text = doc.getText()
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        for i in range(found.getCount()):
+            text.createTextCursorByRange(found.getByIndex(i)).setAllPropertiesToDefault()
+        return {"cleared": found.getCount(), "scope": "search"}
+    start = int(args.get("start", 0))
+    cnt = args.get("count")
+    n = 0
+    for i, para in _writer_paragraphs(doc):
+        if i < start:
+            continue
+        if cnt is not None and i >= start + int(cnt):
+            break
+        cur = text.createTextCursorByRange(para.getStart())
+        cur.gotoEndOfParagraph(True)
+        cur.setAllPropertiesToDefault()
+        n += 1
+    return {"cleared": n, "scope": "range"}
+
+
+def tool_writer_set_line_numbering(args):
+    """Turn document line numbering on/off and set its interval/options
+    (Tools > Line Numbering)."""
+    doc = _require_writer()
+    lnp = doc.getLineNumberingProperties()
+    lnp.IsOn = bool(args.get("enable", True))
+    if args.get("interval") is not None:
+        lnp.Interval = int(args["interval"])
+    if args.get("count_empty_lines") is not None:
+        lnp.CountEmptyLines = bool(args["count_empty_lines"])
+    if args.get("distance_mm") is not None:
+        lnp.Distance = _mm100(args["distance_mm"])
+    return {"enabled": bool(lnp.IsOn), "interval": lnp.Interval}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -4666,6 +4748,10 @@ TOOLS = {
     "writer_move_paragraphs": tool_writer_move_paragraphs,
     "writer_convert_table": tool_writer_convert_table,
     "writer_insert_caption": tool_writer_insert_caption,
+    "writer_table_formula": tool_writer_table_formula,
+    "writer_split_cells": tool_writer_split_cells,
+    "writer_clear_formatting": tool_writer_clear_formatting,
+    "writer_set_line_numbering": tool_writer_set_line_numbering,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -5449,6 +5535,31 @@ TOOL_DEFS = [
                              "numbering": dict(_STR, enum=["arabic", "roman_upper", "roman_lower", "letter_upper", "letter_lower"]),
                              "search": dict(_STR, description="place caption after this text's paragraph"),
                              "match_case": _BOOL})},
+    {"name": "writer_table_formula",
+     "description": "Set a formula in a Writer table cell and return the computed value. Writer cell-reference syntax, e.g. '=<A1>+<A2>', '=<A1>*2', 'sum <A1:A5>'. Target the table by 'name' or 0-based 'index'.",
+     "inputSchema": _schema({"cell": dict(_STR, description="cell name, e.g. 'A3'"),
+                             "formula": dict(_STR, description="e.g. '=<A1>+<A2>'"),
+                             "name": _STR, "index": _INT},
+                            ["cell", "formula"])},
+    {"name": "writer_split_cells",
+     "description": "Split a table cell (or an 'A1:B1' range) into 'into' cells (default 2) along 'columns' (default) or 'rows'. Target the table by 'name' or 0-based 'index'.",
+     "inputSchema": _schema({"cell": dict(_STR, description="cell 'A1' or range 'A1:B1'"),
+                             "into": dict(_INT, description="number of cells to split into (default 2)"),
+                             "direction": dict(_STR, enum=["columns", "rows"]),
+                             "name": _STR, "index": _INT},
+                            ["cell"])},
+    {"name": "writer_clear_formatting",
+     "description": "Remove direct character/paragraph formatting (reset to the underlying style) from text matching 'search', or a body-paragraph range ('start'/'count', default all).",
+     "inputSchema": _schema({"search": dict(_STR, description="clear matched text; omit for paragraph range"),
+                             "match_case": _BOOL,
+                             "start": dict(_INT, description="first paragraph index (0-based)"),
+                             "count": dict(_INT, description="how many paragraphs (default: to end)")})},
+    {"name": "writer_set_line_numbering",
+     "description": "Turn document line numbering on ('enable', default true) or off, and set 'interval' (number every Nth line), 'count_empty_lines', and left 'distance_mm' (Tools > Line Numbering).",
+     "inputSchema": _schema({"enable": _BOOL,
+                             "interval": dict(_INT, description="number every Nth line"),
+                             "count_empty_lines": _BOOL,
+                             "distance_mm": _NUM})},
 ]
 
 

@@ -562,6 +562,50 @@ def check_structural_tools(_tmpdir):
     server.tool_close_document({})
 
 
+def check_niche_tools(_tmpdir):
+    """writer_table_formula, writer_split_cells, writer_clear_formatting,
+    writer_set_line_numbering."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+
+    # in-cell table formula
+    server.tool_writer_insert_table({"rows": 3, "columns": 1})
+    tbl = doc.getTextTables().getByIndex(0)
+    tbl.getCellByName("A1").setValue(10)
+    tbl.getCellByName("A2").setValue(5)
+    r = server.tool_writer_table_formula(
+        {"index": 0, "cell": "A3", "formula": "=<A1>+<A2>"})
+    _assert(r["value"] == 15.0, "formula value: %r" % r)
+    _assert(tbl.getCellByName("A3").getValue() == 15.0, "cell not computed")
+    print("PASS: writer_table_formula")
+
+    # split a cell into 2 columns
+    before = list(tbl.getCellNames())
+    server.tool_writer_split_cells(
+        {"index": 0, "cell": "A1", "into": 2, "direction": "columns"})
+    after = list(doc.getTextTables().getByIndex(0).getCellNames())
+    _assert(len(after) == len(before) + 1, "split: %r -> %r" % (before, after))
+    print("PASS: writer_split_cells")
+
+    # clear direct formatting
+    server.tool_writer_append_text({"text": "formatted line"})
+    server.tool_writer_format_text({"search": "formatted line", "bold": True})
+    d = doc.createSearchDescriptor()
+    d.SearchString = "formatted line"
+    _assert(doc.findFirst(d).CharWeight == 150.0, "precondition: should be bold")
+    server.tool_writer_clear_formatting({"search": "formatted line"})
+    _assert(doc.findFirst(d).CharWeight == 100.0, "formatting not cleared")
+    print("PASS: writer_clear_formatting")
+
+    # line numbering
+    ln = server.tool_writer_set_line_numbering({"enable": True, "interval": 5})
+    _assert(ln["enabled"] is True and ln["interval"] == 5, ln)
+    _assert(doc.getLineNumberingProperties().IsOn is True, "line numbering off")
+    print("PASS: writer_set_line_numbering")
+
+    server.tool_close_document({})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -576,7 +620,9 @@ def main():
     check_menu_coverage_tools(tmpdir)
     print()
     check_structural_tools(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (147-tool server drives real "
+    print()
+    check_niche_tools(tmpdir)
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (151-tool server drives real "
           "LibreOffice)")
     return 0
 
