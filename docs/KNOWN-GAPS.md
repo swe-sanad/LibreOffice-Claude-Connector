@@ -277,3 +277,22 @@ pre-existing `check_writer` assertion failed on contaminated live-office state.
 Fix when running the harness alongside a live session: set **`LO_UNO_PIPE=0`**
 to force the socket rung. Worth having `run_integration.ps1` export that itself
 so the harness is always self-isolating.
+
+---
+
+# Session 6 field report (2026-07-23) — reliability keystone + power tools (151 → 154)
+
+- **`set_active_document`** (title | url | index) — **closes Session-3 bug #1**
+  (focus-stealing). Activates a chosen open document so subsequent reads/writes
+  target it, via `component.getCurrentController().getFrame().activate()`; verified
+  by switching focus between a live Writer and Calc doc and confirming each tool
+  lands on the activated one. This is the reliability keystone for multi-document
+  sessions — no more "The active document is not a Writer document".
+- **`writer_replace_image`** — swap an image's graphic (new file path via
+  GraphicProvider) and/or resize it in place, by name (e.g. update a logo).
+- **`writer_repeat_heading_rows`** — set a table's first N rows to repeat as a
+  header on every page it spans (`RepeatHeadline` + `HeaderRowCount`).
+
+Covered by `check_doc_activation_tools`. Deliberately NOT built (genuinely
+low-value / external-resource-bound / dialog-only — build on demand): bibliography
+DB, thesaurus, autotext, digital-signature creation, form data-binding.
