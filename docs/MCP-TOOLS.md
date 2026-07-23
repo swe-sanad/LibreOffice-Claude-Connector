@@ -20,7 +20,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `create_document` | Create and open a new empty document ('calc' spreadsheet or 'writer' text document). |
 | `open_document` | Open a document file (ods/xlsx/csv/odt/docx/...) in LibreOffice. |
 | `save_document` | Save the active document. With 'path': save-as (format from extension or explicit 'format': ods/xlsx/csv/odt/docx/txt). 'format':'pdf' exports a PDF copy. Without 'path': save in place. |
-| `close_document` | Close the active document, optionally saving it first (save=true needs an existing file location). |
+| `close_document` | Close a document, optionally saving it first (save=true needs an existing file location). Targets a SPECIFIC doc by 'index'/'title'/'url' (recommended when several are open — focus alone can close the wrong one); defaults to the active document. |
 
 ## Calc data
 
@@ -77,7 +77,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `writer_insert_heading` | Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document. |
 | `writer_find_replace` | Find & replace text across the Writer document. Returns the replacement count. |
 | `writer_format_text` | Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string. |
-| `writer_insert_table` | Insert a table at the end of the Writer document, optionally filled with data (rows of strings/numbers). |
+| `writer_insert_table` | Insert a table, optionally filled with data (rows of strings/numbers). By default appends at the document end; give 'search' to place it right after the first paragraph containing that text, or 'after_index' to place it after a 0-based body-paragraph index. |
 | `writer_insert_image` | Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size). |
 | `writer_insert_page_break` | Insert a page break at the end of the Writer document. |
 | `writer_get_outline` | List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs. |

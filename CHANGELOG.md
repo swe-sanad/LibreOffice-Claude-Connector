@@ -19,6 +19,47 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Generate Formula, Explain Range (Calc) — reuse the read → Claude → write-back path
 - New pure/testable action functions in `calc_actions` / `writer_actions`
 
+### Fixed — MCP server (full-tool field test, 2026-07-23; see `docs/KNOWN-GAPS.md` Session 7)
+- **`calc_set_formulas`** now computes regardless of locale: it detects the
+  document's actual function-argument separator (`,` vs `;`) at runtime and
+  normalizes top-level commas (quote-aware), then scans the written range and
+  surfaces any `Err:`/`#NAME?` cells instead of silently "succeeding". Comma
+  formulas like `=SUM(A1,A2,A3)` no longer break on ';' locales.
+- **`calc_sort_range`** actually sorts — `SortFields` is now a typed `uno.Any`
+  (a bare tuple was silently ignored: it reported success but never reordered).
+- **`bind_document_event`** binds again — the event `PropertyValue` sequence is a
+  typed `uno.Any` via `uno.invoke` (was `IllegalArgumentException`).
+- **`writer_apply_list`** applies real bullets/numbers via `NumberingRules`
+  instead of hardcoded `List Bullet`/`List Number` styles (absent on localized
+  builds, where it silently no-oped).
+- **`calc_group_shapes`** builds the `ShapeCollection` from the office service
+  manager (`doc.createInstance` returns `None` here → `AttributeError`).
+- **`set_view_zoom`** writes zoom on the right object per doc type (Calc =
+  controller, Writer = `ViewSettings`); previously raised `AttributeError`.
+- **`writer_clear_formatting`** (search) uses each match's own text object, so a
+  match in the header/footer no longer throws "End of content node …".
+- **`writer_add_conditional_section`** with `visible=false` now hides the section
+  (`IsVisible` set after insertion, not on the detached instance).
+- **`calc_multiple_operations`** rejects a `formula_range` overlapping `range`
+  (which produced self-referential `=TABLE()` → `Err:522`) with a clear message.
+- **`close_document`** can target a specific doc (`index`/`title`/`url`) and no
+  longer relies on GUI focus alone — it once closed the wrong document.
+- **`get_signatures`** reads via the document storage (a URL string raised
+  `CannotConvertException`).
+- **Enum serialization**: `_jsonable` emits an enum's `.value` (`"CENTER"`,
+  `"LIST"`, …) not the raw `<Enum instance …>` repr — fixes
+  `calc_get_cell_format`, `calc_get_validation`, `calc_get_conditional_formats`.
+- **`calc_get_conditional_formats`** reports each format's `range` (via the
+  `Range` property; no `getRange()` on this build).
+- `create_document` / `open_document` now activate the new doc so subsequent
+  focus-based calls target it.
+
+### Added — MCP server (field-test batch)
+- **`writer_list_objects`** now also lists draw shapes (rectangle/ellipse/line/
+  text) — previously only graphics/frames/OLE, so shapes were undiscoverable.
+- **`writer_insert_table`** gained a `search`/`after_index` anchor to place a
+  table after a chosen paragraph instead of only at the document end.
+
 ## [0.9.0] — 2026-07-23
 
 Writer toolset expansion: **137 → 154 tools** (+17 new, +3 extended), driven by
