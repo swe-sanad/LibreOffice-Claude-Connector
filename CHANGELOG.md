@@ -5,114 +5,69 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added — release automation
-- **`.github/workflows/release.yml`** — pushing a `v*` tag now builds the
-  `.mcpb` and `.oxt` bundles (pure-Python, no Node/LibreOffice) and attaches
-  them to the GitHub Release, so both are one download away.
-- **`scripts/stamp_version.py`** — stamps one version across `SERVER_VERSION`,
-  `mcpb/manifest.json`, and `ext/description.xml`; the CI runs it with the tag.
-- **`docs/BUILDING.md`** — how to build/verify both bundles locally and cut a release.
-
-### Changed
-- Unified the bundle versions to the release version (`.mcpb` 0.9.0 → 0.10.0,
-  `.oxt` 0.2.0 → 0.10.0) so every artifact of a release reports the same number.
-
-## [0.10.0] — 2026-07-23
-
-MCP server **154 → 161 tools** (inspection/AI-menu work) plus a full-tool
-field-test batch: 10 bug fixes, rough-edge fixes, and 2 tool expansions
-(`writer_list_objects` draw shapes, `writer_insert_table` anchor). Driven by the
-Session 7 field report in `docs/KNOWN-GAPS.md`.
-
-### Added — MCP server (154 → 161 tools)
-- `writer_find` — locate text (read-only), returning paragraph index + snippet
-- `writer_list_tables` / `writer_list_figures` — structural discovery
-- `writer_set_document_defaults` — base font/size (incl. Complex/RTL) via Standard style
-- `writer_insert_tab_stops` — paragraph tab stops (aligned columns / signature lines)
-- `calc_export_range` — export a range/used-range to CSV or JSON
-- `batch` — run several tool calls in one round-trip
-- `writer_get_outline` now returns each heading's `index` and `style` (targetable)
-
-### Added — .oxt extension "Claude" menu commands
-- Summarize, Translate (asks language), Fix Grammar (Calc + Writer)
-- Generate Formula, Explain Range (Calc) — reuse the read → Claude → write-back path
-- New pure/testable action functions in `calc_actions` / `writer_actions`
-
-### Fixed — MCP server (full-tool field test, 2026-07-23; see `docs/KNOWN-GAPS.md` Session 7)
-- **`calc_set_formulas`** now computes regardless of locale: it detects the
-  document's actual function-argument separator (`,` vs `;`) at runtime and
-  normalizes top-level commas (quote-aware), then scans the written range and
-  surfaces any `Err:`/`#NAME?` cells instead of silently "succeeding". Comma
-  formulas like `=SUM(A1,A2,A3)` no longer break on ';' locales.
-- **`calc_sort_range`** actually sorts — `SortFields` is now a typed `uno.Any`
-  (a bare tuple was silently ignored: it reported success but never reordered).
-- **`bind_document_event`** binds again — the event `PropertyValue` sequence is a
-  typed `uno.Any` via `uno.invoke` (was `IllegalArgumentException`).
-- **`writer_apply_list`** applies real bullets/numbers via `NumberingRules`
-  instead of hardcoded `List Bullet`/`List Number` styles (absent on localized
-  builds, where it silently no-oped); now errors if nothing could be applied, and
-  its result reports `ordered`/`paragraphs_matched` (the old `style` key is gone).
-- **`calc_group_shapes`** builds the `ShapeCollection` from the office service
-  manager (`doc.createInstance` returns `None` here → `AttributeError`).
-- **`set_view_zoom`** writes zoom on the right object per doc type (Calc =
-  controller, Writer = `ViewSettings`); previously raised `AttributeError`.
-- **`writer_clear_formatting`** (search) uses each match's own text object, so a
-  match in the header/footer no longer throws "End of content node …".
-- **`writer_add_conditional_section`** with `visible=false` now hides the section
-  (`IsVisible` set after insertion, not on the detached instance).
-- **`calc_multiple_operations`** rejects a `formula_range` overlapping `range`
-  (which produced self-referential `=TABLE()` → `Err:522`) with a clear message.
-- **`close_document`** can target a specific doc (`index`/`title`/`url`) and no
-  longer relies on GUI focus alone — it once closed the wrong document.
-- **`get_signatures`** reads via the document storage (a URL string raised
-  `CannotConvertException`).
-- **Enum serialization**: `_jsonable` emits an enum's `.value` (`"CENTER"`,
-  `"LIST"`, …) not the raw `<Enum instance …>` repr — fixes
-  `calc_get_cell_format`, `calc_get_validation`, `calc_get_conditional_formats`.
-- **`calc_get_conditional_formats`** reports each format's `range` (via the
-  `Range` property; no `getRange()` on this build).
-- `create_document` / `open_document` now activate the new doc so subsequent
-  focus-based calls target it.
-
-### Added — MCP server (field-test batch)
-- **`writer_list_objects`** now also lists draw shapes (rectangle/ellipse/line/
-  text) — previously only graphics/frames/OLE, so shapes were undiscoverable.
-- **`writer_insert_table`** gained a `search`/`after_index` anchor to place a
-  table after a chosen paragraph instead of only at the document end.
-
 ## [0.9.0] — 2026-07-23
 
-Writer toolset expansion: **137 → 154 tools** (+17 new, +3 extended), driven by
-field reports from real Arabic/RTL Writer proposal sessions (see
-`docs/KNOWN-GAPS.md`, Sessions 3/5/6).
+The Writer + Calc + cross-app surface at **161 tools** (up from 137 in v0.8.0):
+inspection / AI-menu additions, a full-tool field-test hardening pass, and
+release automation that builds and attaches the installable `.mcpb` / `.oxt`
+bundles. Driven by the field reports in `docs/KNOWN-GAPS.md` (Sessions 3/5/6/7).
 
-### Added
-- Paragraph structure & RTL: `writer_set_text_direction`, `writer_delete_paragraphs`,
-  `writer_move_paragraphs`
-- Tables: `writer_sort_table`, `writer_convert_table`, `writer_table_formula`,
-  `writer_split_cells`, `writer_repeat_heading_rows`
-- Styles & formatting: `writer_change_case`, `writer_apply_style`,
-  `writer_clear_formatting`
-- Captions & numbering: `writer_set_chapter_numbering`, `writer_insert_caption`,
-  `writer_set_line_numbering`
-- Reliability & multimedia: `set_active_document`, `writer_replace_image`,
-  `form_control`
+### Added — MCP server tools
+- **154 → 161**: `writer_find`, `writer_list_tables` / `writer_list_figures`,
+  `writer_set_document_defaults`, `writer_insert_tab_stops`, `calc_export_range`,
+  `batch`; `writer_get_outline` now returns each heading's `index` + `style`.
+- **137 → 154**: `writer_set_text_direction`, `writer_delete_paragraphs`,
+  `writer_move_paragraphs`, `writer_sort_table`, `writer_convert_table`,
+  `writer_table_formula`, `writer_split_cells`, `writer_repeat_heading_rows`,
+  `writer_change_case`, `writer_apply_style`, `writer_clear_formatting`,
+  `writer_set_chapter_numbering`, `writer_insert_caption`,
+  `writer_set_line_numbering`, `set_active_document`, `writer_replace_image`,
+  `form_control`.
+- `writer_list_objects` now also lists draw shapes; `writer_insert_table` gained
+  a `search`/`after_index` anchor for positional insert.
+
+### Added — .oxt "Claude" menu commands
+- Summarize, Translate (asks language), Fix Grammar (Calc + Writer); Generate
+  Formula, Explain Range (Calc) — pure/testable actions in `calc_actions` /
+  `writer_actions`.
+
+### Added — release automation
+- `.github/workflows/release.yml` — a `v*` tag builds the `.mcpb` + `.oxt`
+  (pure-Python, no Node/LibreOffice) and attaches them to the release.
+- `scripts/stamp_version.py` (one version across server + `.mcpb` + `.oxt`) and
+  `docs/BUILDING.md` (build / verify / release guide).
+
+### Fixed — full-tool field test (see `docs/KNOWN-GAPS.md` Session 7)
+- `calc_set_formulas`: comma formulas compute on any locale (runtime separator
+  detection + error-cell scan) — no more silent `#NAME?`/`Err:508`.
+- `calc_sort_range`: actually sorts (typed `uno.Any` SortFields).
+- `bind_document_event`: binds (typed `uno.Any` via `uno.invoke`).
+- `writer_apply_list`: locale-proof bullets/numbers via `NumberingRules`; errors
+  instead of silently no-oping.
+- `calc_group_shapes`: `ShapeCollection` from the service manager.
+- `set_view_zoom`: correct zoom target per doc type (Calc controller / Writer
+  `ViewSettings`).
+- `writer_clear_formatting`: no crash on a header/footer match.
+- `writer_add_conditional_section`: `visible=false` hides.
+- `calc_multiple_operations`: rejects a formula range overlapping the fill range
+  (`Err:522`).
+- `close_document`: targetable by `index`/`title`/`url` — no longer closes the
+  wrong document.
+- `get_signatures` (storage read), enum `.value` serialization, and
+  `calc_get_conditional_formats` range reporting.
+- Focus reliability: `set_active_document`; `create_document`/`open_document`
+  activate the new doc.
 
 ### Changed
-- `writer_format_paragraph` — now targets by `start`/`count` index in addition to `search`
-- `writer_edit_table` — now sets a cell's text after insert
-- `set_style` — now sets `follow_style` (next-paragraph style)
-- Bumped `SERVER_VERSION` and the `.mcpb` manifest to `0.9.0`
-
-### Fixed
-- Closed the focus-stealing hazard (`set_active_document`) where a background
-  document grabbing focus silently redirected writes to the wrong document
+- `writer_format_paragraph` targets by `start`/`count` index as well as `search`;
+  `writer_edit_table` sets cell text after insert; `set_style` sets `follow_style`.
+- Unified the version across the server, `.mcpb`, and `.oxt`.
 
 ### Tests
-- Extended `tests/integration/test_mcp_tools_extended.py` with
-  `check_writer_paragraph_ops`, `check_menu_coverage_tools`, `check_structural_tools`,
-  `check_niche_tools`, `check_doc_activation_tools`, all verified against a real
-  headless LibreOffice instance
+- `check_fieldtest_fixes` plus `check_writer_paragraph_ops`,
+  `check_menu_coverage_tools`, `check_structural_tools`, `check_niche_tools`,
+  `check_doc_activation_tools`, `check_inspection_tools` — all driven against a
+  real (headless) LibreOffice via `scripts/run_integration.ps1`.
 
 ## [0.8.0] - 2026-07-23
 

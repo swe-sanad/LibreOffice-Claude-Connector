@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **161 tools** of the `libreoffice` MCP server (v0.10.0), generated from
+All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -141,7 +141,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.10.0), generated from
 
 | Tool | Description |
 |---|---|
-| `writer_list_objects` | Enumerate floating objects in the active Writer doc — graphics, text frames, and embedded/OLE objects — with name, anchor type, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs. |
+| `writer_list_objects` | Enumerate objects in the active Writer doc — graphics, text frames, embedded/OLE objects, and draw shapes (rectangle/ellipse/line/text) — with name, type, anchor, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs. |
 | `writer_set_paragraph_text` | Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks. |
 | `writer_set_text_direction` | Set text writing direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Default flips the WHOLE document: every body paragraph, every table-cell paragraph (tables=false to skip), and the page style (page=false to skip). Give 'start'/'count' to flip only a body-paragraph range instead. Also sets paragraph alignment to match (align=false to keep alignment, e.g. a centered title). |
 | `writer_delete_paragraphs` | Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports. Deleting every paragraph leaves one empty paragraph (Writer requires at least one). |

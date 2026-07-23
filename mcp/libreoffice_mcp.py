@@ -27,7 +27,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.10.0"
+SERVER_VERSION = "0.9.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -5784,7 +5784,7 @@ TOOL_DEFS = [
      "inputSchema": _schema({"modified": dict(_BOOL, description="omit to just read; false=clear, true=force")})},
     # --- writer P1 ---
     {"name": "writer_list_objects",
-     "description": "Enumerate floating objects in the active Writer doc — graphics, text frames, and embedded/OLE objects — with name, anchor type, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs.",
+     "description": "Enumerate objects in the active Writer doc — graphics, text frames, embedded/OLE objects, and draw shapes (rectangle/ellipse/line/text) — with name, type, anchor, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs.",
      "inputSchema": _schema()},
     {"name": "writer_set_paragraph_text",
      "description": "Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks.",
