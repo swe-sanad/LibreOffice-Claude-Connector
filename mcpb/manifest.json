@@ -2,8 +2,8 @@
   "manifest_version": "0.2",
   "name": "libreoffice-connector",
   "display_name": "LibreOffice Connector",
-  "version": "0.7.0",
-  "description": "Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 61 tools. Auto-launches LibreOffice.",
+  "version": "0.9.0",
+  "description": "Drive LibreOffice from Claude: read/write Calc sheets & Writer docs, tables, styles, charts, run macros, take window screenshots — 154 tools. Auto-launches LibreOffice.",
   "long_description": "Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. A Node.js launcher (index.js) hands stdio to the server process, which runs under LibreOffice's own bundled Python — the only interpreter that ships the required 'uno' module. Requires a local LibreOffice installation; no other dependencies, no telemetry.",
   "author": {
     "name": "Sanad Arousi",
