@@ -2722,6 +2722,11 @@ def tool_set_style(args):
             style.ParentStyle = args["parent"]
         except Exception:
             pass
+    if args.get("follow_style"):
+        try:
+            style.FollowStyle = args["follow_style"]   # next-paragraph style
+        except Exception:
+            pass
     _apply_style_props(style, args)
     return {"style": name, "family": fam, "created": created}
 
@@ -4375,6 +4380,157 @@ def tool_writer_set_chapter_numbering(args):
     return {"levels": levels, "numbering": numbering, "separator": separator}
 
 
+def tool_writer_move_paragraphs(args):
+    """Move a block of body paragraphs to a new index via .uno:MoveUp/MoveDown
+    (which preserves each paragraph's content and formatting). 'to' is the
+    destination index in the current paragraph numbering; the block lands before
+    the paragraph currently there (to == paragraph count appends at the end)."""
+    doc = _require_writer()
+    start = int(args["start"])
+    count = int(args.get("count", 1))
+    to = int(args["to"])
+    if count < 1:
+        raise RuntimeError("count must be >= 1.")
+    paras = [p for _, p in _writer_paragraphs(doc)]
+    n = len(paras)
+    if start < 0 or start >= n:
+        raise RuntimeError("No body paragraph at index %d (document has %d)."
+                           % (start, n))
+    end = min(start + count, n)
+    count = end - start
+    if start <= to < end:
+        return {"moved": 0, "note": "target index is inside the moved block; no-op"}
+    if to < 0 or to > n:
+        raise RuntimeError("target index %d out of range (0..%d)." % (to, n))
+    vc = doc.getCurrentController().getViewCursor()
+    vc.gotoRange(paras[start].getStart(), False)
+    vc.gotoRange(paras[end - 1].getEnd(), True)
+    if to < start:
+        command, steps = ".uno:MoveUp", start - to
+    else:
+        command, steps = ".uno:MoveDown", to - end
+    for _ in range(steps):
+        _dispatch(doc, command)
+    return {"moved": count, "from": start, "to": to,
+            "command": command, "steps": steps}
+
+
+def tool_writer_convert_table(args):
+    """Convert a Writer table to delimited text ('to_text'), or a range of body
+    paragraphs to a table ('to_table')."""
+    doc = _require_writer()
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    direction = str(args.get("direction", "to_text")).lower()
+    sep = args.get("separator")
+    if sep is None or sep == "":
+        sep = "\t"
+    text = doc.getText()
+    if direction == "to_text":
+        table = _resolve_table(doc, args)
+        nr, nc = table.getRows().getCount(), table.getColumns().getCount()
+        grid = [[table.getCellByPosition(c, r).getString() for c in range(nc)]
+                for r in range(nr)]
+        els = []
+        en = text.createEnumeration()
+        while en.hasMoreElements():
+            els.append(en.nextElement())
+        ti = next((i for i, e in enumerate(els)
+                   if e.supportsService("com.sun.star.text.TextTable")
+                   and getattr(e, "Name", None) == table.Name), None)
+        if ti is not None and ti + 1 < len(els):
+            ins = text.createTextCursorByRange(els[ti + 1].getStart())
+        else:
+            ins = text.createTextCursorByRange(text.getEnd())
+        for row in grid:
+            text.insertString(ins, sep.join(row), False)
+            text.insertControlCharacter(ins, PARAGRAPH_BREAK, False)
+        text.removeTextContent(table)
+        return {"direction": "to_text", "rows": nr, "columns": nc}
+    if direction == "to_table":
+        start = int(args["start"])
+        count = int(args.get("count", 1))
+        if count < 1:
+            raise RuntimeError("count must be >= 1.")
+        paras = [p for _, p in _writer_paragraphs(doc)]
+        n = len(paras)
+        if start < 0 or start >= n:
+            raise RuntimeError("No body paragraph at index %d (document has %d)."
+                               % (start, n))
+        end = min(start + count, n)
+        rows = [paras[i].getString().split(sep) for i in range(start, end)]
+        ncols = max((len(r) for r in rows), default=1)
+        rows = [r + [""] * (ncols - len(r)) for r in rows]
+        table = doc.createInstance("com.sun.star.text.TextTable")
+        table.initialize(len(rows), ncols)
+        text.insertTextContent(
+            text.createTextCursorByRange(paras[start].getStart()), table, False)
+        for r in range(len(rows)):
+            for c in range(ncols):
+                table.getCellByPosition(c, r).setString(rows[r][c])
+        # The table is not a paragraph, so the source paragraphs keep their
+        # indices — delete them with the same range logic as delete_paragraphs.
+        paras = [p for _, p in _writer_paragraphs(doc)]
+        n = len(paras)
+        if end < n:
+            left, right = paras[start].getStart(), paras[end].getStart()
+        else:
+            left, right = paras[start - 1].getEnd(), paras[n - 1].getEnd()
+        cur = text.createTextCursorByRange(left)
+        cur.gotoRange(right, True)
+        cur.setString("")
+        return {"direction": "to_table", "table": table.Name,
+                "rows": len(rows), "columns": ncols}
+    raise RuntimeError("direction must be 'to_text' or 'to_table'.")
+
+
+def tool_writer_insert_caption(args):
+    """Insert an auto-numbering caption ('Figure 1 — ...') as a new paragraph,
+    backed by a per-category SetExpression sequence field so numbers increment
+    across captions of the same category."""
+    doc = _require_writer()
+    from com.sun.star.text.SetVariableType import SEQUENCE
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    category = str(args.get("category", "Figure"))
+    label = args.get("text", "")
+    sep = args.get("separator", " — ")
+    nt = {"arabic": 4, "roman_upper": 2, "roman_lower": 3,
+          "letter_upper": 0, "letter_lower": 1}.get(
+              str(args.get("numbering", "arabic")).lower(), 4)
+    mname = "com.sun.star.text.FieldMaster.SetExpression." + category
+    masters = doc.getTextFieldMasters()
+    if masters.hasByName(mname):
+        master = masters.getByName(mname)
+    else:
+        master = doc.createInstance("com.sun.star.text.FieldMaster.SetExpression")
+        master.Name = category
+    field = doc.createInstance("com.sun.star.text.TextField.SetExpression")
+    field.NumberingType = nt
+    field.SubType = SEQUENCE
+    field.attachTextFieldMaster(master)
+    text = doc.getText()
+    if args.get("search"):
+        rng = _writer_find_first(doc, args["search"], args.get("match_case", False))
+        if rng is None:
+            raise RuntimeError("Search text %r not found." % args["search"])
+        cur = text.createTextCursorByRange(rng.getEnd())
+        cur.gotoEndOfParagraph(False)
+        text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+    else:
+        cur = text.createTextCursorByRange(text.getEnd())
+        if text.getString():
+            text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+    text.insertString(cur, category + " ", False)
+    text.insertTextContent(cur, field, False)
+    if label:
+        text.insertString(cur, sep + label, False)
+    try:
+        doc.getTextFields().refresh()
+    except Exception:
+        pass
+    return {"category": category, "number": field.getPresentation(False),
+            "text": label}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -4507,6 +4663,9 @@ TOOLS = {
     "writer_apply_style": tool_writer_apply_style,
     "form_control": tool_form_control,
     "writer_set_chapter_numbering": tool_writer_set_chapter_numbering,
+    "writer_move_paragraphs": tool_writer_move_paragraphs,
+    "writer_convert_table": tool_writer_convert_table,
+    "writer_insert_caption": tool_writer_insert_caption,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -4980,8 +5139,9 @@ TOOL_DEFS = [
      "inputSchema": _schema({"family": dict(_STR, description="style family (omit for all)"),
                              "in_use_only": _BOOL})},
     {"name": "set_style",
-     "description": "Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background and optional parent. Reusable across cells/paragraphs.",
+     "description": "Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background, optional 'parent' (inherit-from) and 'follow_style' (next-paragraph style, e.g. a heading followed by body text). Reusable across cells/paragraphs.",
      "inputSchema": _schema({"family": _STR, "name": _STR, "parent": _STR,
+                             "follow_style": dict(_STR, description="next-paragraph style name, e.g. 'Standard'"),
                              "bold": _BOOL, "italic": _BOOL,
                              "font_name": _STR, "font_size": _NUM,
                              "font_color": _STR, "background_color": _STR},
@@ -5267,6 +5427,28 @@ TOOL_DEFS = [
      "inputSchema": _schema({"levels": dict(_INT, description="how many outline levels to number (default 3)"),
                              "numbering": dict(_STR, enum=["arabic", "roman_upper", "roman_lower", "letter_upper", "letter_lower", "none"]),
                              "separator": dict(_STR, description="separator/suffix, default '.'")})},
+    {"name": "writer_move_paragraphs",
+     "description": "Reorder body paragraphs: move the block of 'count' (default 1) paragraphs starting at 0-based 'start' to index 'to' (the block lands before the paragraph currently there; to == paragraph count appends at the end). Preserves content and formatting. Indices are the writer_get_paragraphs space.",
+     "inputSchema": _schema({"start": _INT,
+                             "count": dict(_INT, description="how many paragraphs to move (default 1)"),
+                             "to": dict(_INT, description="destination index (0-based)")},
+                            ["start", "to"])},
+    {"name": "writer_convert_table",
+     "description": "Convert between a table and text. direction 'to_text': turn a table (by 'name' or 0-based 'index') into rows of paragraphs, cells joined by 'separator' (default tab). direction 'to_table': turn body paragraphs [start, start+count) into a table, splitting each on 'separator' (default tab) into columns.",
+     "inputSchema": _schema({"direction": dict(_STR, enum=["to_text", "to_table"]),
+                             "name": _STR, "index": _INT,
+                             "start": dict(_INT, description="to_table: first paragraph index (0-based)"),
+                             "count": dict(_INT, description="to_table: how many paragraphs (default 1)"),
+                             "separator": dict(_STR, description="cell delimiter (default tab)")},
+                            ["direction"])},
+    {"name": "writer_insert_caption",
+     "description": "Insert an auto-numbering caption on a new paragraph, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/... ; numbers increment across captions sharing a category). 'text' is the label, 'separator' joins number and label (default ' — '), 'numbering' the number style. With 'search', the caption is placed after the matched paragraph.",
+     "inputSchema": _schema({"category": dict(_STR, description="sequence name, e.g. 'Figure' or 'Table'"),
+                             "text": dict(_STR, description="caption label"),
+                             "separator": dict(_STR, description="between number and label (default ' — ')"),
+                             "numbering": dict(_STR, enum=["arabic", "roman_upper", "roman_lower", "letter_upper", "letter_lower"]),
+                             "search": dict(_STR, description="place caption after this text's paragraph"),
+                             "match_case": _BOOL})},
 ]
 
 

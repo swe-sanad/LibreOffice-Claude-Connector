@@ -492,6 +492,76 @@ def check_menu_coverage_tools(_tmpdir):
     server.tool_close_document({})
 
 
+def check_structural_tools(_tmpdir):
+    """writer_move_paragraphs, writer_convert_table (both directions),
+    writer_insert_caption, and set_style follow_style."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+    text = doc.getText()
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+
+    def build(items):
+        text.setString("")
+        cur = text.createTextCursor()
+        cur.gotoStart(False)
+        for i, s in enumerate(items):
+            text.insertString(cur, s, False)
+            if i < len(items) - 1:
+                text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+
+    def bodies():
+        return [p["text"] for p in server.tool_writer_get_paragraphs({})["paragraphs"]]
+
+    # move a paragraph down, then up
+    build(["P0", "P1", "P2", "P3", "P4"])
+    server.tool_writer_move_paragraphs({"start": 1, "count": 1, "to": 4})
+    _assert(bodies() == ["P0", "P2", "P3", "P1", "P4"], "move down: %r" % bodies())
+    print("PASS: writer_move_paragraphs (down)")
+    build(["P0", "P1", "P2", "P3", "P4"])
+    server.tool_writer_move_paragraphs({"start": 3, "count": 1, "to": 1})
+    _assert(bodies() == ["P0", "P3", "P1", "P2", "P4"], "move up: %r" % bodies())
+    print("PASS: writer_move_paragraphs (up)")
+
+    # text -> table (rows 1..2 become a 2x2 table; keeps flank paragraphs)
+    build(["keep0", "a,b", "c,d", "keep3"])
+    r = server.tool_writer_convert_table(
+        {"direction": "to_table", "start": 1, "count": 2, "separator": ","})
+    _assert(r["rows"] == 2 and r["columns"] == 2, r)
+    _assert(bodies() == ["keep0", "keep3"], "to_table paras: %r" % bodies())
+    tbl = doc.getTextTables().getByIndex(0)
+    _assert(tbl.getCellByName("A1").getString() == "a"
+            and tbl.getCellByName("B2").getString() == "d", "to_table cells")
+    print("PASS: writer_convert_table (text -> table)")
+
+    # table -> text (round-trip the table back to rows)
+    server.tool_writer_convert_table({"direction": "to_text", "index": 0})
+    _assert(doc.getTextTables().getCount() == 0, "table not removed")
+    b = bodies()
+    _assert("a\tb" in b and "c\td" in b, "to_text paras: %r" % b)
+    print("PASS: writer_convert_table (table -> text)")
+    server.tool_close_document({})
+
+    # caption: two auto-numbered captions in the same category
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+    c1 = server.tool_writer_insert_caption({"category": "Figure", "text": "First"})
+    c2 = server.tool_writer_insert_caption({"category": "Figure", "text": "Second"})
+    _assert(c1["number"] == "1" and c2["number"] == "2",
+            "caption numbers: %r / %r" % (c1.get("number"), c2.get("number")))
+    txt = server.tool_writer_get_text({})["text"]
+    _assert("Figure 1" in txt and "Figure 2" in txt, "caption text: %r" % txt[:120])
+    print("PASS: writer_insert_caption (auto-numbering sequence)")
+
+    # set_style follow_style (next paragraph style)
+    server.tool_set_style({"family": "paragraph", "name": "IntroHead",
+                           "bold": True, "follow_style": "Standard"})
+    st = doc.getStyleFamilies().getByName("ParagraphStyles").getByName("IntroHead")
+    _assert(st.FollowStyle == "Standard", "follow_style not set: %r" % st.FollowStyle)
+    print("PASS: set_style (follow_style / next style)")
+
+    server.tool_close_document({})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -504,7 +574,9 @@ def main():
     check_writer_paragraph_ops(tmpdir)
     print()
     check_menu_coverage_tools(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (144-tool server drives real "
+    print()
+    check_structural_tools(tmpdir)
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (147-tool server drives real "
           "LibreOffice)")
     return 0
 

@@ -175,7 +175,7 @@ currently covers.
 Driving a 17-page bilingual RTL Writer proposal. Two of the top pains recorded
 above are now **CLOSED**, plus a paper-cut and a test-harness gotcha.
 
-## Shipped this session (137 → 144 tools)
+## Shipped this session (137 → 147 tools)
 
 ### Paragraph structure + RTL
 
@@ -222,11 +222,37 @@ index restyle).
 
 All six covered by `check_menu_coverage_tools` in the same test file.
 
+### Structural editing — finishing the set
+
+- **`writer_move_paragraphs`** (start, count, to) — reorder a paragraph block via
+  `.uno:MoveUp`/`.uno:MoveDown` (preserves content + formatting; works headless).
+- **`writer_convert_table`** (`to_text`/`to_table`) — table → rows-of-paragraphs
+  (cells joined by a separator), or paragraphs → table (split on a separator).
+  Both done Python-side (read/parse → insert → delete) rather than via a dialog
+  dispatch, so they're deterministic.
+- **`writer_insert_caption`** — auto-numbering caption ("Figure 1 — …") backed by
+  a per-category `SetExpression` SEQUENCE field, so numbers increment across
+  captions of the same category (verified 1, 2).
+- **`set_style` gained `follow_style`** — set a paragraph style's next-paragraph
+  style (e.g. a heading followed by body), so style chains can be built.
+
+Covered by `check_structural_tools` in the test file.
+
 ## Still open (Writer)
 
-- Convert text ↔ table; in-cell table formula.
-- Figure/table caption insert.
-- `writer_move_paragraphs` (reorder) — delete now exists; move does not.
+- In-cell table formula (SUM/etc. inside a Writer table cell).
+- Deeper table ops: split cells, repeat-heading-rows.
+- Format: clear-direct-formatting, autoformat. Tools: line numbering, autotext,
+  bibliography, hyphenation/thesaurus config, signature *creation*.
+- Form authoring: data binding, design-mode toggle, form navigator.
+
+## Still open (Calc / cross-cutting)
+
+- The `sheet` param rejects Arabic/non-ASCII names + integer indices, and errors
+  come back empty (Session-1 bugs 1–3) — still unfixed; bites bilingual work.
+- Version-sensitive tools implemented best-effort, never verified live:
+  `calc_create_pivot`, `calc_add_scale_format`, `calc_add_sparkline`,
+  `calc_multiple_operations`, `writer_mail_merge` — need a live-office pass.
 
 ## Test-harness gotcha (not a server bug, but bit this session)
 

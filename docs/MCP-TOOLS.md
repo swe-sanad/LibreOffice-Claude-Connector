@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **144 tools** of the `libreoffice` MCP server (v0.8.0), generated from
+All **147 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -158,7 +158,7 @@ All **144 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `export_document` | Store to a path with filter options. format 'pdf' (page_range, pdfa, quality 0-100, password) or 'csv' (delimiter, quote). Format defaults to the path extension. |
 | `set_document_properties` | Set document metadata: title/author/subject/description, keywords (array), and 'custom' user-defined properties ({name: value}; value null removes). |
 | `list_styles` | List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied. |
-| `set_style` | Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background and optional parent. Reusable across cells/paragraphs. |
+| `set_style` | Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background, optional 'parent' (inherit-from) and 'follow_style' (next-paragraph style, e.g. a heading followed by body text). Reusable across cells/paragraphs. |
 | `protect_document` | Set/remove protection. Calc: a 'sheet' protects that sheet, else the workbook structure; optional 'password'. Writer: toggles IsProtected on all text sections. protect=false unprotects. |
 | `dispatch_uno` | Execute an arbitrary .uno: command against the active frame (e.g. '.uno:Undo', '.uno:GoToCell', '.uno:InsertPagebreak') with optional named args. Escape hatch when no dedicated tool fits. |
 | `document_undo` | Undo/redo/clear the active document's undo stack, or just query it (action 'status'). Returns whether undo/redo are possible and the next undo title. |
@@ -232,3 +232,6 @@ All **144 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `writer_apply_style` | Apply a named style to text. kind 'paragraph' (default): target a 'search' match or a start/count paragraph range. kind 'character': requires 'search'. The style must already exist (create it with set_style). |
 | `form_control` | Manage existing form controls (Writer or Calc). action 'list' returns each control's form/name/type/props; action 'set' updates a control by 'name': label, value, state (0/1/2), enabled, read_only, items (listbox). |
 | `writer_set_chapter_numbering` | Turn on heading (chapter) numbering: bind the first 'levels' outline levels (default 3) to a scheme so Heading 1/2/3 auto-number as 1, 1.1, 1.1.1. numbering arabic/roman_upper/roman_lower/letter_upper/letter_lower/none; 'separator' between/after numbers (default '.'). |
+| `writer_move_paragraphs` | Reorder body paragraphs: move the block of 'count' (default 1) paragraphs starting at 0-based 'start' to index 'to' (the block lands before the paragraph currently there; to == paragraph count appends at the end). Preserves content and formatting. Indices are the writer_get_paragraphs space. |
+| `writer_convert_table` | Convert between a table and text. direction 'to_text': turn a table (by 'name' or 0-based 'index') into rows of paragraphs, cells joined by 'separator' (default tab). direction 'to_table': turn body paragraphs [start, start+count) into a table, splitting each on 'separator' (default tab) into columns. |
+| `writer_insert_caption` | Insert an auto-numbering caption on a new paragraph, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/... ; numbers increment across captions sharing a category). 'text' is the label, 'separator' joins number and label (default ' — '), 'numbering' the number style. With 'search', the caption is placed after the matched paragraph. |
