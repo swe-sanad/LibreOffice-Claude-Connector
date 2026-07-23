@@ -2,7 +2,7 @@
      current 61 tools. Regenerate/curate by hand; not auto-synced. -->
 # Tools wanted — the Calc & Writer roadmap
 
-The connector ships **151 tools today** ([full reference](MCP-TOOLS.md)). This
+The connector ships **154 tools today** ([full reference](MCP-TOOLS.md)). This
 started as a prioritized wish-list of what to add next — **85 proposed tools** from a
 domain-by-domain sweep of the LibreOffice UNO API, each mapped to the exact API a
 contributor would wrap.

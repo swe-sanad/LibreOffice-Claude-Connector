@@ -606,6 +606,57 @@ def check_niche_tools(_tmpdir):
     server.tool_close_document({})
 
 
+def check_doc_activation_tools(tmpdir):
+    """set_active_document (switch focus between docs), writer_replace_image,
+    writer_repeat_heading_rows."""
+    # Open a Writer and a Calc doc; prove set_active_document switches focus.
+    server.tool_create_document({"type": "writer"})
+    server.tool_create_document({"type": "calc"})
+    # Now the calc doc is focused; activate the writer by title and confirm a
+    # writer-only op succeeds (would raise "not a Writer document" otherwise).
+    docs = server.tool_list_documents({})["documents"]
+    wtitle = next(d["title"] for d in docs if d["type"] == "writer")
+    act = server.tool_set_active_document({"title": wtitle})
+    _assert(act["active"]["type"] == "writer", "did not activate writer: %r" % act)
+    server.tool_writer_append_text({"text": "now targeting the writer doc"})
+    _assert("targeting the writer" in server.tool_writer_get_text({})["text"],
+            "writer op did not hit the activated doc")
+    print("PASS: set_active_document (focus switched to writer)")
+    # Switch to the calc doc and confirm a calc op lands there.
+    ctitle = next(d["title"] for d in docs if d["type"] == "calc")
+    server.tool_set_active_document({"title": ctitle})
+    server.tool_calc_write_range({"range": "A1:A1", "cells": [["hi"]]})
+    _assert(server.tool_calc_read_range({"range": "A1:A1"})["cells"] == [["hi"]],
+            "calc op did not hit the activated doc")
+    print("PASS: set_active_document (focus switched to calc)")
+    server.tool_close_document({})   # close calc
+    server.tool_set_active_document({"title": wtitle})
+
+    # writer_replace_image: insert an image, then resize it in place.
+    png = os.path.join(tmpdir, "logo.png")
+    with open(png, "wb") as fh:
+        fh.write(_PNG)
+    server.tool_writer_insert_image({"path": png, "width_mm": 10, "height_mm": 10})
+    doc = server._current_doc()
+    img = doc.getGraphicObjects().getByIndex(0)
+    r = server.tool_writer_replace_image(
+        {"name": img.Name, "width_mm": 40, "height_mm": 25})
+    _assert("width" in r["changed"], r)
+    _assert(abs(img.Width - 4000) <= 5 and abs(img.Height - 2500) <= 5,
+            "image not resized: %d x %d" % (img.Width, img.Height))
+    print("PASS: writer_replace_image (resize in place)")
+
+    # writer_repeat_heading_rows
+    server.tool_writer_insert_table({"rows": 4, "columns": 2})
+    r = server.tool_writer_repeat_heading_rows({"index": 0, "rows": 1})
+    _assert(r["repeat"] is True and r["header_rows"] == 1, r)
+    _assert(doc.getTextTables().getByIndex(0).RepeatHeadline is True,
+            "RepeatHeadline not set")
+    print("PASS: writer_repeat_heading_rows")
+
+    server.tool_close_document({})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -622,7 +673,9 @@ def main():
     check_structural_tools(tmpdir)
     print()
     check_niche_tools(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (151-tool server drives real "
+    print()
+    check_doc_activation_tools(tmpdir)
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (154-tool server drives real "
           "LibreOffice)")
     return 0
 

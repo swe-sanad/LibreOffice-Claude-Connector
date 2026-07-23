@@ -4613,6 +4613,86 @@ def tool_writer_set_line_numbering(args):
     return {"enabled": bool(lnp.IsOn), "interval": lnp.Interval}
 
 
+def tool_set_active_document(args):
+    """Focus a specific open document so subsequent reads/writes target it,
+    selected by 'title' (substring), 'url' (substring), or 0-based 'index' over
+    the open documents. The fix for focus-stealing silently redirecting writes."""
+    docs = _open_docs()
+    if not docs:
+        raise RuntimeError("No documents are open.")
+    target = None
+    if args.get("index") is not None:
+        i = int(args["index"])
+        if i < 0 or i >= len(docs):
+            raise RuntimeError("index %d out of range (0..%d)." % (i, len(docs) - 1))
+        target = docs[i]
+    elif args.get("url"):
+        want = str(args["url"]).replace("\\", "/").lower()
+        target = next((d for d in docs
+                       if want in ((d.getURL() or "").replace("\\", "/").lower())), None)
+    elif args.get("title"):
+        want = str(args["title"]).lower()
+        for d in docs:
+            try:
+                tt = d.getTitle()
+            except Exception:
+                tt = ""
+            if want in (tt or "").lower():
+                target = d
+                break
+    else:
+        raise RuntimeError("Give one of: title, url, or index.")
+    if target is None:
+        listing = "; ".join("%d:%s" % (i, _doc_info(d)["title"])
+                            for i, d in enumerate(docs))
+        raise RuntimeError("No open document matched. Open: %s" % listing)
+    target.getCurrentController().getFrame().activate()
+    return {"active": _doc_info(target), "open_count": len(docs)}
+
+
+def tool_writer_replace_image(args):
+    """Replace an existing image's graphic (new 'path') and/or resize it
+    (width_mm/height_mm), by image 'name' — e.g. swap a logo without rebuilding."""
+    doc = _require_writer()
+    name = args["name"]
+    graphics = doc.getGraphicObjects()
+    if not graphics.hasByName(name):
+        raise RuntimeError("No image named %r. Images: %s"
+                           % (name, ", ".join(graphics.getElementNames())))
+    img = graphics.getByName(name)
+    changed = []
+    if args.get("path"):
+        import unohelper
+        st = _connect()
+        gp = st["smgr"].createInstanceWithContext(
+            "com.sun.star.graphic.GraphicProvider", st["ctx"])
+        url = unohelper.systemPathToFileUrl(os.path.abspath(args["path"]))
+        img.Graphic = gp.queryGraphic((_pv("URL", url),))
+        changed.append("graphic")
+    if args.get("width_mm") is not None:
+        img.Width = _mm100(args["width_mm"])
+        changed.append("width")
+    if args.get("height_mm") is not None:
+        img.Height = _mm100(args["height_mm"])
+        changed.append("height")
+    if not changed:
+        raise RuntimeError("Give a new 'path' and/or width_mm/height_mm.")
+    return {"image": name, "changed": changed}
+
+
+def tool_writer_repeat_heading_rows(args):
+    """Make a table's first N rows repeat as a header on every page it spans
+    (or turn that off with repeat=false). Target by 'name' or 0-based 'index'."""
+    doc = _require_writer()
+    table = _resolve_table(doc, args)
+    repeat = bool(args.get("repeat", True))
+    table.RepeatHeadline = repeat
+    if repeat:
+        table.HeaderRowCount = int(args.get("rows", 1))
+    return {"table": table.Name, "repeat": repeat,
+            "header_rows": table.HeaderRowCount}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -4752,6 +4832,9 @@ TOOLS = {
     "writer_split_cells": tool_writer_split_cells,
     "writer_clear_formatting": tool_writer_clear_formatting,
     "writer_set_line_numbering": tool_writer_set_line_numbering,
+    "set_active_document": tool_set_active_document,
+    "writer_replace_image": tool_writer_replace_image,
+    "writer_repeat_heading_rows": tool_writer_repeat_heading_rows,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -5560,6 +5643,22 @@ TOOL_DEFS = [
                              "interval": dict(_INT, description="number every Nth line"),
                              "count_empty_lines": _BOOL,
                              "distance_mm": _NUM})},
+    {"name": "set_active_document",
+     "description": "Focus a specific open document so subsequent reads/writes target it — select by 'title' (substring, case-insensitive), 'url' (substring), or 0-based 'index' over the open docs (see list_documents). Fixes focus-stealing that silently redirects writes to the wrong document.",
+     "inputSchema": _schema({"title": dict(_STR, description="match by window title substring"),
+                             "url": dict(_STR, description="match by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
+    {"name": "writer_replace_image",
+     "description": "Replace an existing image by 'name': swap its graphic (new 'path') and/or resize it (width_mm/height_mm) in place — e.g. update a logo without rebuilding. Use writer_list_objects to find image names.",
+     "inputSchema": _schema({"name": _STR,
+                             "path": dict(_STR, description="new image file (omit to only resize)"),
+                             "width_mm": _NUM, "height_mm": _NUM},
+                            ["name"])},
+    {"name": "writer_repeat_heading_rows",
+     "description": "Make a table's first 'rows' (default 1) repeat as a header on every page the table spans, or turn it off with repeat=false. Target the table by 'name' or 0-based 'index'.",
+     "inputSchema": _schema({"name": _STR, "index": _INT,
+                             "rows": dict(_INT, description="how many header rows (default 1)"),
+                             "repeat": dict(_BOOL, description="on (default) or off")})},
 ]
 
 

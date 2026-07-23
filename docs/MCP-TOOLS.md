@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **151 tools** of the `libreoffice` MCP server (v0.8.0), generated from
+All **154 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -239,3 +239,6 @@ All **151 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `writer_split_cells` | Split a table cell (or an 'A1:B1' range) into 'into' cells (default 2) along 'columns' (default) or 'rows'. Target the table by 'name' or 0-based 'index'. |
 | `writer_clear_formatting` | Remove direct character/paragraph formatting (reset to the underlying style) from text matching 'search', or a body-paragraph range ('start'/'count', default all). |
 | `writer_set_line_numbering` | Turn document line numbering on ('enable', default true) or off, and set 'interval' (number every Nth line), 'count_empty_lines', and left 'distance_mm' (Tools > Line Numbering). |
+| `set_active_document` | Focus a specific open document so subsequent reads/writes target it — select by 'title' (substring, case-insensitive), 'url' (substring), or 0-based 'index' over the open docs (see list_documents). Fixes focus-stealing that silently redirects writes to the wrong document. |
+| `writer_replace_image` | Replace an existing image by 'name': swap its graphic (new 'path') and/or resize it (width_mm/height_mm) in place — e.g. update a logo without rebuilding. Use writer_list_objects to find image names. |
+| `writer_repeat_heading_rows` | Make a table's first 'rows' (default 1) repeat as a header on every page the table spans, or turn it off with repeat=false. Target the table by 'name' or 0-based 'index'. |
