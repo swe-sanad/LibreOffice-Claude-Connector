@@ -27,7 +27,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.9.0"
+SERVER_VERSION = "0.10.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")

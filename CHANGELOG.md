@@ -5,6 +5,13 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-23
+
+MCP server **154 → 161 tools** (inspection/AI-menu work) plus a full-tool
+field-test batch: 10 bug fixes, rough-edge fixes, and 2 tool expansions
+(`writer_list_objects` draw shapes, `writer_insert_table` anchor). Driven by the
+Session 7 field report in `docs/KNOWN-GAPS.md`.
+
 ### Added — MCP server (154 → 161 tools)
 - `writer_find` — locate text (read-only), returning paragraph index + snippet
 - `writer_list_tables` / `writer_list_figures` — structural discovery
