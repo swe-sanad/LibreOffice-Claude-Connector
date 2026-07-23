@@ -167,3 +167,74 @@ signal** — ship these before more feature tools; the append-only model makes
 iterative work punishing — and (b) one genuinely missing primitive:
 `writer_delete_paragraphs(from, to)` / a range delete, which no wishlist item
 currently covers.
+
+---
+
+# Session 5 field report (2026-07-23, Arabic proposal `عرض-فني-ومالي-نسق`)
+
+Driving a 17-page bilingual RTL Writer proposal. Two of the top pains recorded
+above are now **CLOSED**, plus a paper-cut and a test-harness gotcha.
+
+## Shipped this session (137 → 144 tools)
+
+### Paragraph structure + RTL
+
+- **`writer_set_text_direction`** — sets `rtl`/`ltr`. Default flips the WHOLE
+  document in one call: every body paragraph + every table-cell paragraph + the
+  page style (`WritingMode` RL_TB/LR_TB + matching `ParaAdjust`). This retires
+  the manual `uno_exec` RTL flip that every Arabic session re-implemented by
+  hand. `start`/`count` restrict it to a paragraph range; `align=false` keeps
+  alignment (e.g. a centered title); `tables`/`page=false` narrow the scope.
+- **`writer_delete_paragraphs(start, count)`** — the "genuinely missing
+  primitive" called out under *the rebuild tax*. Deletes a paragraph range
+  including its breaks; handles the mid-document, through-the-last, and
+  delete-everything (leaves one empty paragraph) cases. Structural reordering /
+  dropping a subsection no longer means discarding and rebuilding the doc.
+- **`writer_format_paragraph` now targets by index** — new `start`/`count`
+  (0-based, the `writer_get_paragraphs` index space), taking precedence over
+  `search`. Restyling one heading by index (e.g. fixing a stray empty
+  `Heading 1`) was previously only doable via `uno_exec`.
+
+These three are covered by `check_writer_paragraph_ops` in
+`tests/integration/test_mcp_tools_extended.py` — verified end-to-end against a
+real headless office (paragraph/cell/page `WritingMode`, delete-range sequences,
+index restyle).
+
+### Menu coverage — one tool per remaining menu (Table / Format / Style / Form / Tools)
+
+- **`writer_sort_table`** (Table) — sort a table's data rows by a key column,
+  numeric-aware, header pinned. Reads the grid, sorts in Python, writes back.
+- **`writer_edit_table` now sets cell text** (Table) — `cell` + `text` edits a
+  cell after insert, closing the "can't edit an existing table cell" gap.
+- **`writer_change_case`** (Format) — upper/lower/title/sentence over a `search`
+  match or a paragraph range.
+- **`writer_apply_style`** (Style) — apply a named paragraph style (search or
+  index range) OR a named **character** style (search) — the char-style-apply
+  gap `writer_format_text` never covered. Pairs with `set_style` (create).
+- **`form_control`** (Form) — `list` all controls, or `set` an existing one's
+  label/value/state/enabled/read_only/items. Works on Writer + Calc.
+- **`writer_set_chapter_numbering`** (Tools) — bind the first N outline levels to
+  a numbering scheme so Heading 1/2/3 auto-number 1 / 1.1 / 1.1.1. (Impl note:
+  `ChapterNumberingRules.replaceByIndex` must be called via `uno.invoke` with an
+  explicit `[]com.sun.star.beans.PropertyValue` Any, mutating the level's
+  existing structs in place — a plain tuple or `_pv`-rebuilt structs both throw
+  `IllegalArgumentException`.)
+
+All six covered by `check_menu_coverage_tools` in the same test file.
+
+## Still open (Writer)
+
+- Convert text ↔ table; in-cell table formula.
+- Figure/table caption insert.
+- `writer_move_paragraphs` (reorder) — delete now exists; move does not.
+
+## Test-harness gotcha (not a server bug, but bit this session)
+
+`scripts/run_integration.ps1` launches an isolated office on port 2002, but the
+server's **pipe-first** `_connect()` ladder will hijack onto a *live*
+agent-acceptor office if one is running (its pipe wins over the harness socket).
+Symptom: the test printed `connected over pipe 'lo-claude-sanad'` and a
+pre-existing `check_writer` assertion failed on contaminated live-office state.
+Fix when running the harness alongside a live session: set **`LO_UNO_PIPE=0`**
+to force the socket rung. Worth having `run_integration.ps1` export that itself
+so the harness is always self-isolating.

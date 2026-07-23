@@ -1440,6 +1440,21 @@ def tool_writer_format_paragraph(args):
                            "line_spacing_percent, space_above_mm, space_below_mm, "
                            "indent_left_mm, indent_right_mm, first_line_indent_mm, "
                            "style_name.")
+    # index-range targeting (0-based, pairs with writer_get_paragraphs);
+    # takes precedence over search when 'start'/'count' are given.
+    if "start" in args or "count" in args:
+        start = int(args.get("start", 0))
+        cnt = args.get("count")
+        applied = []
+        n = 0
+        for i, para in _writer_paragraphs(doc):
+            if i < start:
+                continue
+            if cnt is not None and i >= start + int(cnt):
+                break
+            applied = _apply_para_format(para, args)
+            n += 1
+        return {"paragraphs_formatted": n, "applied": applied}
     if args.get("search"):
         desc = doc.createSearchDescriptor()
         desc.SearchString = args["search"]
@@ -2290,6 +2305,111 @@ def tool_writer_set_paragraph_text(args):
     raise RuntimeError("No body paragraph at index %d." % target)
 
 
+def _set_para_direction(para, wm, adjust_key, do_align):
+    # WritingMode2 short: RL_TB=1 (rtl) / LR_TB=0 (ltr).
+    para.WritingMode = wm
+    if do_align:
+        para.ParaAdjust = _uno_enum("com.sun.star.style.ParagraphAdjust",
+                                    adjust_key)
+
+
+def tool_writer_set_text_direction(args):
+    doc = _require_writer()
+    direction = str(args.get("direction", "rtl")).lower()
+    if direction not in ("rtl", "ltr"):
+        raise RuntimeError("direction must be 'rtl' or 'ltr'.")
+    wm = 1 if direction == "rtl" else 0
+    adjust_key = "RIGHT" if direction == "rtl" else "LEFT"
+    do_align = bool(args.get("align", True))
+
+    # Targeted mode: only body paragraphs [start, start+count). Leaves tables
+    # and the page style untouched.
+    if "start" in args or "count" in args:
+        start = int(args.get("start", 0))
+        cnt = args.get("count")
+        done = 0
+        for i, para in _writer_paragraphs(doc):
+            if i < start:
+                continue
+            if cnt is not None and i >= start + int(cnt):
+                break
+            _set_para_direction(para, wm, adjust_key, do_align)
+            done += 1
+        return {"direction": direction, "scope": "range", "paragraphs": done}
+
+    # Whole-document flip: every body paragraph, then (by default) every
+    # table-cell paragraph and the page style — the full RTL/LTR recipe.
+    paras = 0
+    for _, para in _writer_paragraphs(doc):
+        _set_para_direction(para, wm, adjust_key, do_align)
+        paras += 1
+
+    cells = 0
+    if bool(args.get("tables", True)):
+        tables = doc.getTextTables()
+        for ti in range(tables.getCount()):
+            table = tables.getByIndex(ti)
+            for cn in table.getCellNames():
+                try:
+                    cenum = table.getCellByName(cn).createEnumeration()
+                except Exception:
+                    continue
+                while cenum.hasMoreElements():
+                    cpar = cenum.nextElement()
+                    try:
+                        if cpar.supportsService("com.sun.star.text.Paragraph"):
+                            _set_para_direction(cpar, wm, adjust_key, do_align)
+                            cells += 1
+                    except Exception:
+                        pass
+
+    page = False
+    if bool(args.get("page", True)):
+        try:
+            _page_style(doc, args.get("style_name")).WritingMode = wm
+            page = True
+        except Exception:
+            pass
+
+    return {"direction": direction, "scope": "document", "paragraphs": paras,
+            "table_cell_paragraphs": cells, "page_style_set": page}
+
+
+def tool_writer_delete_paragraphs(args):
+    doc = _require_writer()
+    start = int(args["start"])
+    count = int(args.get("count", 1))
+    if count < 1:
+        raise RuntimeError("count must be >= 1.")
+    paras = [p for _, p in _writer_paragraphs(doc)]
+    n = len(paras)
+    if start < 0 or start >= n:
+        raise RuntimeError("No body paragraph at index %d (document has %d)."
+                           % (start, n))
+    end = min(start + count, n)          # exclusive; clamp to the last paragraph
+    deleted = end - start
+    text = doc.getText()
+    if start == 0 and end == n:
+        # Text must keep one paragraph — collapse everything to a single empty one.
+        cur = text.createTextCursorByRange(text.getStart())
+        cur.gotoRange(text.getEnd(), True)
+        cur.setString("")
+        return {"deleted": deleted, "remaining": 1,
+                "note": "all paragraphs removed; one empty paragraph remains"}
+    if end < n:
+        # Consume paras[start..end-1] and their trailing breaks; paras[end]
+        # becomes the new paragraph at 'start'.
+        left, right = paras[start].getStart(), paras[end].getStart()
+    else:
+        # Deleting through the last paragraph: also consume the break BEFORE
+        # 'start' so paras[start-1] becomes the final paragraph.
+        left, right = paras[start - 1].getEnd(), paras[n - 1].getEnd()
+    cur = text.createTextCursorByRange(left)
+    cur.gotoRange(right, True)
+    cur.setString("")
+    return {"deleted": deleted, "start": start, "remaining": n - deleted}
+
+
 _FIELD_SERVICES = {
     "page_number": "com.sun.star.text.TextField.PageNumber",
     "page_count": "com.sun.star.text.TextField.PageCount",
@@ -2906,6 +3026,9 @@ def tool_writer_edit_table(args):
         table.getCellByName(args["cell"]).BackColor = _hex_color(
             args["background_color"])
         actions.append("background")
+    if args.get("cell") and args.get("text") is not None:
+        table.getCellByName(args["cell"]).setString(str(args["text"]))
+        actions.append("cell_text")
     return {"table": table.Name, "actions": actions}
 
 
@@ -3988,6 +4111,270 @@ def tool_calc_copy_sheet(args):
     return {"copied": src, "to": dest}
 
 
+# --------------------------------------------------------------------------- #
+# Menu-coverage tools — Table / Format / Style / Form / Tools
+# --------------------------------------------------------------------------- #
+
+def _resolve_table(doc, args):
+    tables = doc.getTextTables()
+    name = args.get("name")
+    if name not in (None, ""):
+        if not tables.hasByName(name):
+            raise RuntimeError("No table named %r. Tables: %s"
+                               % (name, ", ".join(tables.getElementNames())))
+        return tables.getByName(name)
+    if tables.getCount() == 0:
+        raise RuntimeError("The document has no tables.")
+    return tables.getByIndex(int(args.get("index", 0)))
+
+
+def tool_writer_sort_table(args):
+    """Sort a Writer table's data rows by one key column. Reads the grid, sorts
+    in Python (numeric-aware), writes cell text back."""
+    doc = _require_writer()
+    table = _resolve_table(doc, args)
+    nrows = table.getRows().getCount()
+    ncols = table.getColumns().getCount()
+    key = int(args.get("key_column", 0))
+    if key < 0 or key >= ncols:
+        raise RuntimeError("key_column %d out of range (0..%d)." % (key, ncols - 1))
+    has_header = bool(args.get("has_header", True))
+    descending = bool(args.get("descending", False))
+    grid = [[table.getCellByPosition(c, r).getString() for c in range(ncols)]
+            for r in range(nrows)]
+    head = grid[:1] if has_header else []
+    body = grid[1:] if has_header else grid
+
+    def _k(row):
+        v = row[key] if key < len(row) else ""
+        try:
+            return (0, float(str(v).replace(",", "").strip()))  # numbers first
+        except (ValueError, TypeError):
+            return (1, str(v).lower())
+
+    body.sort(key=_k, reverse=descending)
+    # ponytail: sorts by cell text and writes text back; a numeric cell keeps its
+    # digits as text (number-recognition is a display concern, not stored value).
+    ordered = head + body
+    for r in range(nrows):
+        for c in range(ncols):
+            table.getCellByPosition(c, r).setString(ordered[r][c])
+    return {"table": table.Name, "rows_sorted": len(body),
+            "key_column": key, "descending": descending}
+
+
+def _transform_case(s, mode):
+    if mode == "upper":
+        return s.upper()
+    if mode == "lower":
+        return s.lower()
+    if mode == "title":
+        return s.title()
+    if mode == "sentence":
+        return s.capitalize()
+    raise RuntimeError("mode must be upper|lower|title|sentence.")
+
+
+def tool_writer_change_case(args):
+    """Change letter case of matched text ('search') or a body-paragraph range
+    (start/count, default: all). ponytail: setString flattens direct formatting
+    inside the changed range — fine for a case pass on plain text."""
+    doc = _require_writer()
+    mode = str(args.get("mode", "upper")).lower()
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        for i in range(found.getCount()):
+            rng = found.getByIndex(i)
+            rng.setString(_transform_case(rng.getString(), mode))
+        return {"mode": mode, "ranges_changed": found.getCount(), "scope": "search"}
+    start = int(args.get("start", 0))
+    cnt = args.get("count")
+    n = 0
+    text = doc.getText()
+    for i, para in _writer_paragraphs(doc):
+        if i < start:
+            continue
+        if cnt is not None and i >= start + int(cnt):
+            break
+        s = para.getString()
+        if s:
+            cur = text.createTextCursorByRange(para.getStart())
+            cur.gotoEndOfParagraph(True)
+            cur.setString(_transform_case(s, mode))
+        n += 1
+    return {"mode": mode, "paragraphs_changed": n, "scope": "range"}
+
+
+def tool_writer_apply_style(args):
+    """Apply a named paragraph style (by 'search' match or start/count index) or
+    a named character style (by 'search' match) — Styles-menu 'apply'."""
+    doc = _require_writer()
+    style = args["style"]
+    kind = str(args.get("kind", "paragraph")).lower()
+    if kind not in ("paragraph", "character"):
+        raise RuntimeError("kind must be 'paragraph' or 'character'.")
+    fam = "ParagraphStyles" if kind == "paragraph" else "CharacterStyles"
+    if not doc.getStyleFamilies().getByName(fam).hasByName(style):
+        raise RuntimeError("No %s style named %r." % (kind, style))
+    prop = "ParaStyleName" if kind == "paragraph" else "CharStyleName"
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        for i in range(found.getCount()):
+            setattr(found.getByIndex(i), prop, style)
+        return {"style": style, "kind": kind, "applied": found.getCount(),
+                "scope": "search"}
+    if kind == "character":
+        raise RuntimeError("Character styles need a 'search' target.")
+    start = int(args.get("start", 0))
+    cnt = args.get("count")
+    n = 0
+    for i, para in _writer_paragraphs(doc):
+        if i < start:
+            continue
+        if cnt is not None and i >= start + int(cnt):
+            break
+        para.ParaStyleName = style
+        n += 1
+    return {"style": style, "kind": kind, "applied": n, "scope": "range"}
+
+
+def _form_controls(doc):
+    """Yield (form_name, control_model) over every form control in the active
+    document — the Writer draw page, or each Calc sheet's draw page."""
+    ub = _bridge()
+    pages = []
+    if ub.is_calc(doc):
+        sheets = doc.getSheets()
+        for i in range(sheets.getCount()):
+            pages.append(sheets.getByIndex(i).getDrawPage())
+    else:
+        pages.append(doc.getDrawPage())
+    for dp in pages:
+        try:
+            forms = dp.getForms()
+        except Exception:
+            continue
+        for fi in range(forms.getCount()):
+            form = forms.getByIndex(fi)
+            for ci in range(form.getCount()):
+                yield form.Name, form.getByIndex(ci)
+
+
+def _control_info(model):
+    info = {"name": getattr(model, "Name", "")}
+    try:
+        comp = [s for s in model.getSupportedServiceNames() if ".component." in s]
+        info["type"] = comp[0].rsplit(".", 1)[-1] if comp else ""
+    except Exception:
+        info["type"] = ""
+    try:
+        psi = model.getPropertySetInfo()
+        for p in ("Label", "Text", "DefaultText", "State", "Enabled", "ReadOnly"):
+            if psi.hasPropertyByName(p):
+                info[p] = _jsonable(getattr(model, p))
+    except Exception:
+        pass
+    return info
+
+
+def tool_form_control(args):
+    """List form controls (action 'list') or set an existing control's
+    properties by name (action 'set'): label, value, state, enabled, read_only,
+    items. Works on Writer and Calc form controls."""
+    doc = _current_doc()
+    action = str(args.get("action", "list")).lower()
+    if action == "list":
+        out = []
+        for form_name, model in _form_controls(doc):
+            entry = _control_info(model)
+            entry["form"] = form_name
+            out.append(entry)
+        return {"controls": out, "count": len(out)}
+    if action != "set":
+        raise RuntimeError("action must be 'list' or 'set'.")
+    name = args["name"]
+    target = None
+    for _, model in _form_controls(doc):
+        if getattr(model, "Name", None) == name:
+            target = model
+            break
+    if target is None:
+        raise RuntimeError("No form control named %r." % name)
+    psi = target.getPropertySetInfo()
+    applied = []
+
+    def _set(prop, value):
+        if psi.hasPropertyByName(prop):
+            setattr(target, prop, value)
+            applied.append(prop)
+            return True
+        return False
+
+    if "label" in args:
+        _set("Label", str(args["label"]))
+    if "value" in args:
+        if not _set("DefaultText", str(args["value"])):
+            _set("Text", str(args["value"]))
+    if "state" in args:            # checkbox/radio: 0 off, 1 on, 2 tristate
+        _set("DefaultState", int(args["state"]))
+        _set("State", int(args["state"]))
+    if "enabled" in args:
+        _set("Enabled", bool(args["enabled"]))
+    if "read_only" in args:
+        _set("ReadOnly", bool(args["read_only"]))
+    if args.get("items") is not None:
+        _set("StringItemList", tuple(str(x) for x in args["items"]))
+    if not applied:
+        raise RuntimeError("Give at least one of: label, value, state, enabled, "
+                           "read_only, items.")
+    return {"name": name, "applied": applied}
+
+
+def tool_writer_set_chapter_numbering(args):
+    """Configure heading (chapter) numbering: bind the first N outline levels to
+    a numbering scheme so Heading 1/2/3 auto-number as 1, 1.1, 1.1.1 (Tools >
+    Heading Numbering)."""
+    import uno
+    doc = _require_writer()
+    levels = int(args.get("levels", 3))
+    if levels < 1 or levels > 10:
+        raise RuntimeError("levels must be 1..10.")
+    from com.sun.star.style.NumberingType import (
+        ARABIC, ROMAN_UPPER, ROMAN_LOWER, CHARS_UPPER_LETTER,
+        CHARS_LOWER_LETTER, NUMBER_NONE)
+    types = {"arabic": ARABIC, "roman_upper": ROMAN_UPPER,
+             "roman_lower": ROMAN_LOWER, "letter_upper": CHARS_UPPER_LETTER,
+             "letter_lower": CHARS_LOWER_LETTER, "none": NUMBER_NONE}
+    numbering = str(args.get("numbering", "arabic")).lower()
+    if numbering not in types:
+        raise RuntimeError("numbering must be one of %s." % sorted(types))
+    ntype = types[numbering]
+    separator = str(args.get("separator", "."))
+    rules = doc.getChapterNumberingRules()
+    # Mutate the level's EXISTING PropertyValue structs in place, then hand the
+    # SAME sequence back via uno.invoke with an explicit []PropertyValue Any —
+    # a plain tuple is marshalled as the wrong UNO type (IllegalArgumentException),
+    # and rebuilding structs with _pv loses the types the rule needs.
+    # ParentNumbering already defaults to 10 (full path 1 / 1.1 / 1.1.1).
+    want = {"NumberingType": ntype, "Prefix": "", "Suffix": separator}
+    for lvl in range(levels):
+        rule = list(rules.getByIndex(lvl))
+        for pv in rule:
+            if pv.Name in want:
+                pv.Value = want[pv.Name]
+        uno.invoke(rules, "replaceByIndex",
+                   (lvl, uno.Any("[]com.sun.star.beans.PropertyValue", tuple(rule))))
+    return {"levels": levels, "numbering": numbering, "separator": separator}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -4077,6 +4464,8 @@ TOOLS = {
     # writer P1
     "writer_list_objects": tool_writer_list_objects,
     "writer_set_paragraph_text": tool_writer_set_paragraph_text,
+    "writer_set_text_direction": tool_writer_set_text_direction,
+    "writer_delete_paragraphs": tool_writer_delete_paragraphs,
     "writer_insert_field": tool_writer_insert_field,
     "writer_insert_toc": tool_writer_insert_toc,
     "writer_update_indexes": tool_writer_update_indexes,
@@ -4112,6 +4501,12 @@ TOOLS = {
     "writer_set_page_background": tool_writer_set_page_background,
     "writer_set_watermark": tool_writer_set_watermark,
     "writer_spellcheck": tool_writer_spellcheck,
+    # menu coverage — Table / Format / Style / Form / Tools
+    "writer_sort_table": tool_writer_sort_table,
+    "writer_change_case": tool_writer_change_case,
+    "writer_apply_style": tool_writer_apply_style,
+    "form_control": tool_form_control,
+    "writer_set_chapter_numbering": tool_writer_set_chapter_numbering,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -4368,8 +4763,10 @@ TOOL_DEFS = [
                             ["name", "condition"])},
     # --- writer paragraph / page / table styling ---
     {"name": "writer_format_paragraph",
-     "description": "Paragraph formatting for Writer. Targets paragraphs matching 'search', or ALL body paragraphs if 'search' is omitted. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title').",
+     "description": "Paragraph formatting for Writer. Targets body paragraphs by 0-based 'start'/'count' (the index space writer_get_paragraphs reports), else paragraphs matching 'search', else ALL body paragraphs. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title') — e.g. restyle one heading by index with start + style_name.",
      "inputSchema": _schema({"search": dict(_STR, description="format paragraphs containing this text; omit for all"),
+                             "start": dict(_INT, description="first paragraph index (0-based); overrides search"),
+                             "count": dict(_INT, description="how many paragraphs from 'start' (default: to end)"),
                              "match_case": _BOOL,
                              "align": dict(_STR, enum=["left", "center", "right", "justify"]),
                              "line_spacing_percent": dict(_INT, description="e.g. 100, 150, 200"),
@@ -4518,6 +4915,21 @@ TOOL_DEFS = [
     {"name": "writer_set_paragraph_text",
      "description": "Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks.",
      "inputSchema": _schema({"index": _INT, "text": _STR}, ["index", "text"])},
+    {"name": "writer_set_text_direction",
+     "description": "Set text writing direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Default flips the WHOLE document: every body paragraph, every table-cell paragraph (tables=false to skip), and the page style (page=false to skip). Give 'start'/'count' to flip only a body-paragraph range instead. Also sets paragraph alignment to match (align=false to keep alignment, e.g. a centered title).",
+     "inputSchema": _schema({"direction": dict(_STR, enum=["rtl", "ltr"]),
+                             "start": dict(_INT, description="range mode: first paragraph index (0-based)"),
+                             "count": dict(_INT, description="range mode: how many paragraphs (default: to end)"),
+                             "align": dict(_BOOL, description="also set alignment right/left to match (default true)"),
+                             "tables": dict(_BOOL, description="whole-doc mode: also flip table cells (default true)"),
+                             "page": dict(_BOOL, description="whole-doc mode: also set the page style direction (default true)"),
+                             "style_name": dict(_STR, description="page style to set (default: the one in use)")},
+                            ["direction"])},
+    {"name": "writer_delete_paragraphs",
+     "description": "Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports. Deleting every paragraph leaves one empty paragraph (Writer requires at least one).",
+     "inputSchema": _schema({"start": _INT,
+                             "count": dict(_INT, description="how many paragraphs to delete (default 1)")},
+                            ["start"])},
     {"name": "writer_insert_field",
      "description": "Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes.",
      "inputSchema": _schema({"field": dict(_STR, enum=["page_number", "page_count", "date", "time", "title", "author"]),
@@ -4611,13 +5023,14 @@ TOOL_DEFS = [
      "description": "Delete a graphic, text frame, embedded object, draw shape, or text section by name.",
      "inputSchema": _schema({"name": _STR}, ["name"])},
     {"name": "writer_edit_table",
-     "description": "Edit an existing Writer table (by 'name' or 0-based 'index'): insert/delete rows/columns (at_row/at_column), merge a cell range ('A1:B2'), and set a cell background color.",
+     "description": "Edit an existing Writer table (by 'name' or 0-based 'index'): insert/delete rows/columns (at_row/at_column), merge a cell range ('A1:B2'), and set a cell's background color and/or text ('cell' + 'background_color'/'text') — editing a cell after insert.",
      "inputSchema": _schema({"name": _STR, "index": _INT,
                              "insert_rows": _INT, "delete_rows": _INT, "at_row": _INT,
                              "insert_columns": _INT, "delete_columns": _INT, "at_column": _INT,
                              "merge": dict(_STR, description="cell range to merge, e.g. 'A1:B2'"),
-                             "cell": dict(_STR, description="cell for background, e.g. 'A1'"),
-                             "background_color": _STR})},
+                             "cell": dict(_STR, description="cell for background/text, e.g. 'A1'"),
+                             "background_color": _STR,
+                             "text": dict(_STR, description="replace the 'cell' text")})},
     {"name": "writer_set_image_layout",
      "description": "Set anchor (as_char/char/paragraph/page/frame), text wrap (none/through/parallel/dynamic/left/right), and absolute position (x_mm/y_mm) of an existing image or text frame by name.",
      "inputSchema": _schema({"name": _STR,
@@ -4821,6 +5234,39 @@ TOOL_DEFS = [
      "description": "Duplicate a sheet within the document to 'new_name' at an optional 0-based position.",
      "inputSchema": _schema({"name": _STR, "new_name": _STR, "position": _INT},
                             ["name", "new_name"])},
+    # --- menu coverage: Table / Format / Style / Form / Tools ---
+    {"name": "writer_sort_table",
+     "description": "Sort a Writer table's data rows by one key column (0-based 'key_column'), ascending or 'descending'. 'has_header' (default true) keeps row 0 pinned. Numeric-aware. Target by 'name' or 0-based 'index'.",
+     "inputSchema": _schema({"name": _STR, "index": _INT,
+                             "key_column": dict(_INT, description="0-based column to sort on (default 0)"),
+                             "descending": _BOOL, "has_header": _BOOL})},
+    {"name": "writer_change_case",
+     "description": "Change letter case: mode upper/lower/title/sentence. Targets text matching 'search', else a body-paragraph range ('start'/'count', default all). Case only — no effect on Arabic.",
+     "inputSchema": _schema({"mode": dict(_STR, enum=["upper", "lower", "title", "sentence"]),
+                             "search": dict(_STR, description="change matched text; omit for paragraph range"),
+                             "match_case": _BOOL,
+                             "start": dict(_INT, description="first paragraph index (0-based)"),
+                             "count": dict(_INT, description="how many paragraphs (default: to end)")},
+                            ["mode"])},
+    {"name": "writer_apply_style",
+     "description": "Apply a named style to text. kind 'paragraph' (default): target a 'search' match or a start/count paragraph range. kind 'character': requires 'search'. The style must already exist (create it with set_style).",
+     "inputSchema": _schema({"style": _STR,
+                             "kind": dict(_STR, enum=["paragraph", "character"]),
+                             "search": dict(_STR, description="apply to matches; paragraph kind may use start/count instead"),
+                             "match_case": _BOOL, "start": _INT, "count": _INT},
+                            ["style"])},
+    {"name": "form_control",
+     "description": "Manage existing form controls (Writer or Calc). action 'list' returns each control's form/name/type/props; action 'set' updates a control by 'name': label, value, state (0/1/2), enabled, read_only, items (listbox).",
+     "inputSchema": _schema({"action": dict(_STR, enum=["list", "set"]),
+                             "name": dict(_STR, description="control name (set)"),
+                             "label": _STR, "value": _STR, "state": _INT,
+                             "enabled": _BOOL, "read_only": _BOOL,
+                             "items": {"type": "array", "items": _STR}})},
+    {"name": "writer_set_chapter_numbering",
+     "description": "Turn on heading (chapter) numbering: bind the first 'levels' outline levels (default 3) to a scheme so Heading 1/2/3 auto-number as 1, 1.1, 1.1.1. numbering arabic/roman_upper/roman_lower/letter_upper/letter_lower/none; 'separator' between/after numbers (default '.').",
+     "inputSchema": _schema({"levels": dict(_INT, description="how many outline levels to number (default 3)"),
+                             "numbering": dict(_STR, enum=["arabic", "roman_upper", "roman_lower", "letter_upper", "letter_lower", "none"]),
+                             "separator": dict(_STR, description="separator/suffix, default '.'")})},
 ]
 
 
