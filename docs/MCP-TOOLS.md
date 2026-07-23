@@ -20,7 +20,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `create_document` | Create and open a new empty document ('calc' spreadsheet or 'writer' text document). |
 | `open_document` | Open a document file (ods/xlsx/csv/odt/docx/...) in LibreOffice. |
 | `save_document` | Save the active document. With 'path': save-as (format from extension or explicit 'format': ods/xlsx/csv/odt/docx/txt). 'format':'pdf' exports a PDF copy. Without 'path': save in place. |
-| `close_document` | Close the active document, optionally saving it first (save=true needs an existing file location). |
+| `close_document` | Close a document, optionally saving it first (save=true needs an existing file location). Targets a SPECIFIC doc by 'index'/'title'/'url' (recommended when several are open — focus alone can close the wrong one); defaults to the active document. |
 
 ## Calc data
 
@@ -29,7 +29,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `calc_read_range` | Read a Calc cell range as a 2-D array of values. |
 | `calc_write_range` | Write a 2-D array of values into a Calc range (dimensions must match the range). |
 | `calc_get_formulas` | Read a Calc range as formulas (e.g. '=SUM(A1:A3)') instead of computed values. |
-| `calc_set_formulas` | Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. |
+| `calc_set_formulas` | Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify). |
 | `calc_clear_range` | Clear the contents of a Calc range (values, text, formulas; optionally formatting too). |
 | `calc_copy_range` | Copy a Calc range (values, formulas, formatting) to a target cell, optionally on another sheet. |
 | `calc_find_replace` | Find & replace cell text in one sheet, or in every sheet when 'sheet' is omitted. Returns the replacement count. |
@@ -77,7 +77,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `writer_insert_heading` | Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document. |
 | `writer_find_replace` | Find & replace text across the Writer document. Returns the replacement count. |
 | `writer_format_text` | Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string. |
-| `writer_insert_table` | Insert a table at the end of the Writer document, optionally filled with data (rows of strings/numbers). |
+| `writer_insert_table` | Insert a table, optionally filled with data (rows of strings/numbers). By default appends at the document end; give 'search' to place it right after the first paragraph containing that text, or 'after_index' to place it after a 0-based body-paragraph index. |
 | `writer_insert_image` | Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size). |
 | `writer_insert_page_break` | Insert a page break at the end of the Writer document. |
 | `writer_get_outline` | List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs. |
@@ -148,7 +148,7 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `writer_insert_field` | Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes. |
 | `writer_insert_toc` | Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings. |
 | `writer_update_indexes` | Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits. |
-| `writer_apply_list` | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by applying the 'List Bullet'/'List Number' paragraph style. Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. |
+| `writer_apply_list` | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. Errors if the range matches no paragraph or none could be changed. |
 
 ## Cross-cutting (calc & writer)
 

@@ -296,3 +296,79 @@ so the harness is always self-isolating.
 Covered by `check_doc_activation_tools`. Deliberately NOT built (genuinely
 low-value / external-resource-bound / dialog-only — build on demand): bibliography
 DB, thesaurus, autotext, digital-signature creation, form data-binding.
+
+---
+
+# Session 7 field report (2026-07-23) — full-tool field test: 12 fixes + 2 expansions
+
+Drove **every** Writer, Calc and shared tool by building a real Writer status
+report + a 3-sheet Calc dashboard (RTL Arabic profile), then diffing observed vs
+expected. Surfaced 10 bugs (several of the dangerous "silent-success" / wrong-
+target class), a few rough edges, and two discovery gaps. All fixed and covered by
+`check_fieldtest_fixes` in `tests/integration/test_mcp_tools_extended.py`.
+
+## Root-cause themes (each fixed once, in a shared place)
+1. **Plain tuple vs typed UNO sequence** — a bare Python tuple handed to a UNO API
+   that wants `[]com.sun.star...` is silently marshalled as the wrong type: the
+   call no-ops or throws. New helper `_any_seq(type_name, items)` →
+   `uno.Any("[]"+type, tuple)`; applied to `calc_sort_range` (SortFields) and
+   `bind_document_event` (Events). (`writer_set_chapter_numbering` already did it.)
+2. **Silent success** — tools reported OK while doing nothing or leaving error
+   cells. `calc_set_formulas` now scans for `Err:`/`#NAME?` and returns them;
+   `writer_apply_list` errors when its range matches no paragraph; `calc_sort_range`
+   really sorts now.
+3. **`doc.createInstance` returns `None`** where the office **service manager** is
+   required — `ShapeCollection` in `calc_group_shapes`.
+4. **Locale sensitivity** — the function-argument separator (`;` not `,`) and the
+   absence of English list-STYLE names. `calc_set_formulas` detects the separator
+   at runtime; `writer_apply_list` drives bullets via `NumberingRules`.
+5. **Focus-based active-doc resolution** — `getCurrentComponent()` lags MCP-driven
+   creation, so `close_document` once closed the **wrong** document.
+
+## Bugs fixed
+1. **`close_document` closed the WRONG doc** (data-loss risk). Repro: open proposal
+   → `create_document(calc)` → `close_document` closed the proposal, not the calc.
+   Fix: optional `index`/`title`/`url` target (shared `_select_doc`); `create_document`
+   /`open_document` now `activate()` the new doc.
+2. **`calc_set_formulas` — comma formulas silently `#NAME?`/`Err:508`** on ';'
+   locales. Fix: runtime separator detection (`_arg_separator`, probed on a
+   throwaway temp sheet, cached) + quote-aware `_normalize_formula` + error scan.
+3. **`calc_sort_range` — silent no-op.** Fix: typed-`uno.Any` SortFields.
+4. **`bind_document_event` — `IllegalArgumentException`.** Fix: typed-`uno.Any`
+   via `uno.invoke`.
+5. **`writer_apply_list` — silent no-op on localized builds** (styles `List 1`/
+   `Numbering 1`, not `List Bullet`). Fix: apply `NumberingRules` directly.
+6. **`calc_group_shapes` — `AttributeError: 'NoneType'...add`.** Fix: create the
+   `ShapeCollection` from `smgr.createInstanceWithContext(...)`.
+7. **`set_view_zoom` — `AttributeError: ZoomValue`.** Fix: zoom target is the
+   controller for Calc, `ctrl.ViewSettings` for Writer (`_zoom_target`).
+8. **`writer_clear_formatting` (search) — uncaught UNO crash** when a match is in
+   the header/footer. Fix: use each match's own `getText()`.
+9. **`writer_add_conditional_section visible=false` didn't hide.** Fix: set
+   `Condition`/`IsVisible` after insertion, on the section fetched by name.
+10. **`calc_multiple_operations` — `Err:522`** when the layout puts the formula
+    inside the filled range. Fix: reject an overlapping `formula_range` with a
+    clear message + error scan.
+
+## Rough edges fixed
+- **Enum reprs leaked** (`<Enum instance …('CENTER')>`) from `_jsonable` →
+  now `.value` (`"CENTER"`/`"LIST"`); fixes `calc_get_cell_format`,
+  `calc_get_validation`, `calc_get_conditional_formats`.
+- **`calc_get_conditional_formats`** omitted the range — the entry exposes it via
+  the `Range` property (no `getRange()` on this build).
+- **`get_signatures`** masked a `CannotConvertException` (URL string ≠ `XStorage`)
+  — now opens the doc storage first.
+
+## Expansions (closed gaps)
+- **`writer_list_objects`** now lists draw shapes (rectangle/ellipse/line/text) —
+  previously creatable + deletable-by-name but invisible to discovery.
+- **`writer_insert_table`** gained a `search`/`after_index` anchor for positional
+  insert (was append-at-end only; `convert_table` was the only workaround).
+
+## Verified already-closed
+- **`_resolve_sheet`** already handles integer indices, exact names, and bilingual
+  `english | عربي` tabs (Session-1 bug). Added an Arabic-sheet assertion to lock it.
+
+All of the above are asserted against a real LibreOffice in `check_fieldtest_fixes`
+(run with `LO_UNO_PIPE=0` alongside a live agent-acceptor office). `set_view_zoom`
+is verified where a view exists (skipped only if the harness office is viewless).
