@@ -1,0 +1,43 @@
+# Builds the installable bundles and attaches them to the GitHub Release when a
+# version tag (v*) is pushed. Building is pure Python stdlib — no Node, no
+# LibreOffice, no third-party packages — so it runs anywhere in seconds.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write        # needed to upload assets to the release
+
+jobs:
+  bundles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      # Stamp the tag's version into every manifest so the .mcpb / .oxt / server
+      # all report the tag version, regardless of what's committed.
+      - name: Stamp version from tag
+        run: python scripts/stamp_version.py "${GITHUB_REF_NAME#v}"
+
+      - name: Build the .mcpb and .oxt bundles
+        run: |
+          python scripts/build_mcpb.py
+          python scripts/build_oxt.py
+          ls -l dist
+
+      # Attaches to the release for this tag; creates the release if the tag was
+      # pushed without one. Does not touch release notes.
+      - name: Attach bundles to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.mcpb
+            dist/*.oxt
+          fail_on_unmatched_files: true

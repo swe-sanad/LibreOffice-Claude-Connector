@@ -5,6 +5,18 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — release automation
+- **`.github/workflows/release.yml`** — pushing a `v*` tag now builds the
+  `.mcpb` and `.oxt` bundles (pure-Python, no Node/LibreOffice) and attaches
+  them to the GitHub Release, so both are one download away.
+- **`scripts/stamp_version.py`** — stamps one version across `SERVER_VERSION`,
+  `mcpb/manifest.json`, and `ext/description.xml`; the CI runs it with the tag.
+- **`docs/BUILDING.md`** — how to build/verify both bundles locally and cut a release.
+
+### Changed
+- Unified the bundle versions to the release version (`.mcpb` 0.9.0 → 0.10.0,
+  `.oxt` 0.2.0 → 0.10.0) so every artifact of a release reports the same number.
+
 ## [0.10.0] — 2026-07-23
 
 MCP server **154 → 161 tools** (inspection/AI-menu work) plus a full-tool
