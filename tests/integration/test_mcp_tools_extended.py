@@ -744,6 +744,170 @@ def check_inspection_tools(tmpdir):
     server.tool_close_document({})
 
 
+def check_fieldtest_fixes(tmpdir):
+    """Regression checks for the 2026-07-23 full-tool field-test batch:
+    formula-separator/error-scan, sort typed-Any, list NumberingRules, shape
+    grouping, view zoom, header/footer clear-formatting, enum serialization,
+    conditional-section hide, close-the-right-doc, list_objects shapes,
+    anchored table insert, and Arabic sheet names."""
+    # --- separator normalization is pure + locale-independent ---
+    _assert(server._normalize_formula("=SUM(1,2)", ";") == "=SUM(1;2)",
+            "separator not normalized")
+    _assert(server._normalize_formula('=IF(A1,"a,b","c")', ";")
+            == '=IF(A1;"a,b";"c")', "quote-aware normalize failed")
+    _assert(server._normalize_formula("=SUM(1,2)", ",") == "=SUM(1,2)",
+            "comma locale must be a no-op")
+    print("PASS: _normalize_formula (top-level, quote-aware)")
+
+    # ================= Calc =================
+    server.tool_create_document({"type": "calc"})
+    doc = server._current_doc()
+
+    # comma-separated multi-arg formula computes; no error cells surfaced.
+    server.tool_calc_write_range({"range": "A1:A3", "cells": [[2], [3], [4]]})
+    sf = server.tool_calc_set_formulas({"range": "A4",
+                                        "formulas": [["=SUM(A1,A2,A3)"]]})
+    _assert("errors" not in sf, "clean formula reported errors: %r" % sf)
+    _assert(server.tool_calc_read_range({"range": "A4"})["cells"] == [[9.0]],
+            "comma SUM did not compute")
+    # a genuinely bad formula IS surfaced (no more silent success).
+    bad = server.tool_calc_set_formulas({"range": "A5",
+                                         "formulas": [["=NOSUCHFN(1)"]]})
+    _assert(bad.get("errors"), "bad formula not surfaced: %r" % bad)
+    print("PASS: calc_set_formulas (locale separator + error scan)")
+
+    # sort actually reorders (typed-Any SortFields).
+    server.tool_calc_write_range({"range": "D1:D4",
+                                  "cells": [["n"], [3], [1], [2]]})
+    server.tool_calc_sort_range({"range": "D1:D4", "has_header": True,
+                                 "keys": [{"column": 0, "descending": True}]})
+    s = server.tool_calc_read_range({"range": "D1:D4"})
+    _assert(s["cells"] == [["n"], [3.0], [2.0], [1.0]],
+            "sort was a no-op: %r" % s)
+    print("PASS: calc_sort_range (rows actually reordered)")
+
+    # shape grouping (ShapeCollection from the service manager).
+    server.tool_calc_add_shape({"kind": "rectangle", "name": "R1",
+                                "position_cell": "F1", "width_mm": 20,
+                                "height_mm": 10})
+    server.tool_calc_add_shape({"kind": "ellipse", "name": "R2",
+                                "position_cell": "F5", "width_mm": 20,
+                                "height_mm": 10})
+    g = server.tool_calc_group_shapes({"names": ["R1", "R2"], "group": "G1"})
+    _assert(g["grouped"] == 2, g)
+    dp = doc.getSheets().getByIndex(0).DrawPage
+    _assert(any("GroupShape" in dp.getByIndex(i).ShapeType
+                for i in range(dp.getCount())), "no GroupShape on the draw page")
+    print("PASS: calc_group_shapes (real group created)")
+
+    # view zoom: Calc = controller, Writer = ViewSettings (see _zoom_target).
+    # A headless office may have no view at all — tolerate that.
+    try:
+        z = server.tool_set_view_zoom({"percent": 120})
+        _assert(z["zoom_value"] == 120, "zoom not applied: %r" % z)
+        print("PASS: set_view_zoom (zoom applied)")
+    except RuntimeError as e:
+        _assert("no zoom settings" in str(e), "unexpected zoom error: %r" % e)
+        print("SKIP: set_view_zoom (headless: no view)")
+
+    # enum getters return clean strings, not '<Enum instance ...>'.
+    server.tool_calc_format_range({"range": "A1", "horizontal_align": "center"})
+    cf = server.tool_calc_get_cell_format({"cell": "A1"})
+    _assert(cf["h_align"] == "CENTER", "h_align enum leaked: %r" % cf["h_align"])
+    server.tool_calc_set_validation({"range": "B1", "list": ["x", "y"]})
+    vt = server.tool_calc_get_validation({"range": "B1"})["validation"]["Type"]
+    _assert(vt == "LIST", "validation Type leaked: %r" % vt)
+    print("PASS: enum serialization (h_align / validation Type)")
+
+    # conditional-format range is reported (Range property, not getRange()).
+    server.tool_calc_add_conditional_format(
+        {"range": "A1:A3", "operator": ">", "value": 1,
+         "background_color": "#C6EFCE"})
+    gcf = server.tool_calc_get_conditional_formats({})["conditional_formats"]
+    _assert(any("A1:A3" in (e.get("range") or []) for e in gcf),
+            "CF range not reported: %r" % gcf)
+    print("PASS: calc_get_conditional_formats (range reported)")
+
+    # Arabic sheet name resolves by name AND index (C3).
+    server.tool_calc_add_sheet({"name": "ملخص"})
+    server.tool_calc_write_range({"sheet": "ملخص", "range": "A1",
+                                  "cells": [["س"]]})
+    _assert(server.tool_calc_read_range({"sheet": "ملخص",
+                                         "range": "A1"})["cells"] == [["س"]],
+            "arabic sheet by name failed")
+    idx = server.tool_calc_list_sheets({})["sheets"].index("ملخص")
+    _assert(server.tool_calc_read_range({"sheet": idx,
+                                         "range": "A1"})["cells"] == [["س"]],
+            "arabic sheet by index failed")
+    print("PASS: _resolve_sheet (Arabic name + index)")
+    server.tool_close_document({"save": False})
+
+    # ================= Writer =================
+    server.tool_create_document({"type": "writer"})
+    wdoc = server._current_doc()
+    for t in ("item one", "item two", "item three"):
+        server.tool_writer_append_text({"text": t})
+    al = server.tool_writer_apply_list({"start": 0, "count": 3, "ordered": True})
+    _assert(al["paragraphs_changed"] == 3, al)
+    first = None
+    en = wdoc.getText().createEnumeration()
+    while en.hasMoreElements():
+        el = en.nextElement()
+        if el.supportsService("com.sun.star.text.Paragraph"):
+            first = el
+            break
+    _assert(first is not None and first.NumberingRules is not None,
+            "apply_list did not attach NumberingRules")
+    print("PASS: writer_apply_list (NumberingRules, locale-proof)")
+
+    # clear_formatting on a term that also lives in the footer must not throw.
+    server.tool_writer_set_header_footer({"which": "footer",
+                                          "text": "CONFIDENTIAL footer"})
+    server.tool_writer_format_text({"search": "CONFIDENTIAL", "bold": True})
+    cfmt = server.tool_writer_clear_formatting({"search": "CONFIDENTIAL"})
+    _assert(cfmt["scope"] == "search", cfmt)      # reaching here == no crash
+    print("PASS: writer_clear_formatting (header/footer match, no crash)")
+
+    # conditional section: explicit visible=false hides.
+    sec = server.tool_writer_add_conditional_section(
+        {"name": "Hidden1", "condition": "", "text": "secret", "visible": False})
+    _assert(sec["is_visible"] is False and sec["currently_visible"] is False,
+            "visible=false did not hide: %r" % sec)
+    print("PASS: writer_add_conditional_section (visible=false hides)")
+
+    # draw shape now discoverable via writer_list_objects.
+    server.tool_writer_insert_shape({"kind": "rectangle", "name": "Box1",
+                                     "width_mm": 30, "height_mm": 10})
+    objs = server.tool_writer_list_objects({})["objects"]
+    _assert(any(o.get("kind") == "shape" and o.get("name") == "Box1"
+                for o in objs), "draw shape not listed: %r" % objs)
+    print("PASS: writer_list_objects (draw shapes)")
+
+    # anchored table lands right after body paragraph 0, not at the end.
+    server.tool_writer_insert_table({"rows": 2, "columns": 2, "after_index": 0,
+                                     "data": [["a", "b"], ["c", "d"]]})
+    els = list(wdoc.getText().createEnumeration())
+    _assert(els[1].supportsService("com.sun.star.text.TextTable"),
+            "anchored table not placed after paragraph 0")
+    print("PASS: writer_insert_table (anchored/positional)")
+    server.tool_close_document({"save": False})
+
+    # ============ close-the-right-doc safety ============
+    base = len(server._open_docs())
+    server.tool_create_document({"type": "writer"})
+    a_title = server._current_doc().getTitle()
+    server.tool_create_document({"type": "calc"})      # calc is now focused
+    b_title = server._current_doc().getTitle()
+    _assert(len(server._open_docs()) == base + 2, "two docs should be open")
+    # close the WRITER explicitly while the CALC is focused.
+    server.tool_close_document({"title": a_title, "save": False})
+    titles = [server._doc_info(d)["title"] for d in server._open_docs()]
+    _assert(a_title not in titles and b_title in titles,
+            "close_document closed the wrong doc: %r" % titles)
+    server.tool_close_document({"title": b_title, "save": False})
+    print("PASS: close_document (targets the named doc, not GUI focus)")
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -764,6 +928,8 @@ def main():
     check_doc_activation_tools(tmpdir)
     print()
     check_inspection_tools(tmpdir)
+    print()
+    check_fieldtest_fixes(tmpdir)
     print("\nALL EXTENDED MCP TOOL CHECKS PASSED (161-tool server drives real "
           "LibreOffice)")
     return 0
