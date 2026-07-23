@@ -332,6 +332,280 @@ def check_writer(tmpdir):
     print("PASS: writer save (docx + pdf export) + close")
 
 
+def check_writer_paragraph_ops(_tmpdir):
+    """writer_delete_paragraphs, writer_set_text_direction, and
+    writer_format_paragraph's by-index targeting."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+    text = doc.getText()
+
+    # Build exactly six paragraphs P0..P5 with real paragraph breaks.
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    text.setString("")
+    cur = text.createTextCursor()
+    cur.gotoStart(False)
+    for i, t in enumerate(["P0", "P1", "P2", "P3", "P4", "P5"]):
+        text.insertString(cur, t, False)
+        if i < 5:
+            text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+    got = [p["text"] for p in server.tool_writer_get_paragraphs({})["paragraphs"]]
+    _assert(got == ["P0", "P1", "P2", "P3", "P4", "P5"], "setup: %r" % got)
+    print("PASS(setup): six body paragraphs")
+
+    # Delete a MIDDLE range (P1, P2) — paras[end] survives and shifts up.
+    res = server.tool_writer_delete_paragraphs({"start": 1, "count": 2})
+    _assert(res["deleted"] == 2, res)
+    got = [p["text"] for p in server.tool_writer_get_paragraphs({})["paragraphs"]]
+    _assert(got == ["P0", "P3", "P4", "P5"], "middle delete: %r" % got)
+    print("PASS: writer_delete_paragraphs (middle range)")
+
+    # Delete THROUGH the last paragraph, with count over-clamped.
+    res = server.tool_writer_delete_paragraphs({"start": 2, "count": 9})
+    _assert(res["deleted"] == 2, res)
+    got = [p["text"] for p in server.tool_writer_get_paragraphs({})["paragraphs"]]
+    _assert(got == ["P0", "P3"], "tail delete: %r" % got)
+    print("PASS: writer_delete_paragraphs (through last, count clamped)")
+
+    # A 2x2 table so whole-doc RTL also flips table-cell paragraphs.
+    server.tool_writer_insert_table({"rows": 2, "columns": 2,
+                                     "data": [["a", "b"], ["c", "d"]]})
+    d = server.tool_writer_set_text_direction({"direction": "rtl"})
+    _assert(d["scope"] == "document" and d["paragraphs"] >= 2, d)
+    _assert(d["table_cell_paragraphs"] >= 4, d)
+    _assert(d["page_style_set"] is True, d)
+    # Verify via UNO: first body paragraph RL_TB(1) + right-aligned(RIGHT=1).
+    en = doc.getText().createEnumeration()
+    first = en.nextElement()
+    _assert(first.WritingMode == 1, "para WritingMode: %r" % first.WritingMode)
+    _assert(first.ParaAdjust == 1, "para not right-aligned: %r" % first.ParaAdjust)
+    _assert(server._page_style(doc).WritingMode == 1, "page style not RTL")
+    tbl = doc.getTextTables().getByIndex(0)
+    cell = tbl.getCellByName(tbl.getCellNames()[0])
+    _assert(cell.createEnumeration().nextElement().WritingMode == 1,
+            "table cell paragraph not RTL")
+    print("PASS: writer_set_text_direction (rtl: paragraphs + cells + page)")
+
+    # Targeted range flips ONLY body paragraph 0 back to ltr.
+    r = server.tool_writer_set_text_direction(
+        {"direction": "ltr", "start": 0, "count": 1})
+    _assert(r["scope"] == "range" and r["paragraphs"] == 1, r)
+    p0 = doc.getText().createEnumeration().nextElement()
+    _assert(p0.WritingMode == 0 and p0.ParaAdjust == 0,
+            "targeted ltr: %r/%r" % (p0.WritingMode, p0.ParaAdjust))
+    print("PASS: writer_set_text_direction (targeted range ltr)")
+
+    # writer_format_paragraph targeting by index (start/count).
+    fp = server.tool_writer_format_paragraph(
+        {"start": 0, "count": 1, "style_name": "Heading 1"})
+    _assert(fp["paragraphs_formatted"] == 1, fp)
+    p0 = doc.getText().createEnumeration().nextElement()
+    _assert(p0.ParaStyleName == "Heading 1", "index restyle: %r" % p0.ParaStyleName)
+    print("PASS: writer_format_paragraph (by index start/count)")
+
+    server.tool_close_document({})
+
+
+def check_menu_coverage_tools(_tmpdir):
+    """writer_set_chapter_numbering, writer_apply_style, writer_change_case,
+    writer_sort_table, writer_edit_table (cell text), form_control."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+
+    # Tools menu: heading (chapter) numbering bound to ARABIC for 2 levels.
+    server.tool_writer_insert_heading({"text": "Alpha", "level": 1})
+    server.tool_writer_insert_heading({"text": "Beta", "level": 2})
+    cn = server.tool_writer_set_chapter_numbering({"levels": 2, "numbering": "arabic"})
+    _assert(cn["levels"] == 2, cn)
+    from com.sun.star.style.NumberingType import ARABIC
+    lvl0 = {p.Name: p.Value for p in doc.getChapterNumberingRules().getByIndex(0)}
+    _assert(lvl0["NumberingType"] == ARABIC,
+            "chapter numbering not set: %r" % lvl0.get("NumberingType"))
+    print("PASS: writer_set_chapter_numbering (levels bound to ARABIC)")
+
+    # Styles menu: create + apply a paragraph style and a character style.
+    server.tool_writer_append_text({"text": "quote this line"})
+    server.tool_writer_append_text({"text": "make bold word here"})
+    server.tool_set_style({"family": "paragraph", "name": "ProposalQuote",
+                           "italic": True, "font_size": 13})
+    ap = server.tool_writer_apply_style(
+        {"style": "ProposalQuote", "kind": "paragraph", "search": "quote this line"})
+    _assert(ap["applied"] >= 1, ap)
+    d = doc.createSearchDescriptor()
+    d.SearchString = "quote this line"
+    _assert(doc.findFirst(d).ParaStyleName == "ProposalQuote", "para style not applied")
+    print("PASS: writer_apply_style (paragraph style via search)")
+    server.tool_set_style({"family": "character", "name": "HotWord",
+                           "bold": True, "font_color": "#CC0000"})
+    ac = server.tool_writer_apply_style(
+        {"style": "HotWord", "kind": "character", "search": "bold word"})
+    _assert(ac["applied"] >= 1, ac)
+    d2 = doc.createSearchDescriptor()
+    d2.SearchString = "bold word"
+    _assert(doc.findFirst(d2).CharStyleName == "HotWord", "char style not applied")
+    print("PASS: writer_apply_style (character style via search)")
+
+    # Format menu: upper-case a matched phrase.
+    cc = server.tool_writer_change_case({"mode": "upper", "search": "quote this line"})
+    _assert(cc["ranges_changed"] >= 1, cc)
+    _assert("QUOTE THIS LINE" in server.tool_writer_get_text({})["text"],
+            "upper-case not applied")
+    print("PASS: writer_change_case (upper via search)")
+
+    # Table menu: sort rows (numeric then string), and edit a cell after insert.
+    server.tool_writer_insert_table(
+        {"rows": 4, "columns": 2,
+         "data": [["name", "qty"], ["Charlie", "3"], ["alice", "10"], ["Bob", "1"]]})
+    st = server.tool_writer_sort_table({"index": 0, "key_column": 1})
+    _assert(st["rows_sorted"] == 3, st)
+    tbl = doc.getTextTables().getByIndex(0)
+    col0 = [tbl.getCellByPosition(0, r).getString() for r in range(1, 4)]
+    _assert(col0 == ["Bob", "Charlie", "alice"], "numeric sort: %r" % col0)
+    print("PASS: writer_sort_table (numeric key, header pinned)")
+    server.tool_writer_sort_table({"index": 0, "key_column": 0})
+    col0 = [tbl.getCellByPosition(0, r).getString() for r in range(1, 4)]
+    _assert(col0 == ["alice", "Bob", "Charlie"], "string sort: %r" % col0)
+    print("PASS: writer_sort_table (string key, case-insensitive)")
+    server.tool_writer_edit_table({"index": 0, "cell": "A1", "text": "Name"})
+    _assert(tbl.getCellByName("A1").getString() == "Name", "cell text not set")
+    print("PASS: writer_edit_table (set cell text after insert)")
+
+    # Form menu: insert a checkbox, list it, then update its label + state.
+    server.tool_insert_form_control(
+        {"kind": "checkbox", "label": "Old", "name": "cbTest",
+         "x_mm": 20, "y_mm": 20, "width_mm": 40, "height_mm": 8})
+    names = [c["name"] for c in server.tool_form_control({"action": "list"})["controls"]]
+    _assert("cbTest" in names, "control not listed: %r" % names)
+    server.tool_form_control(
+        {"action": "set", "name": "cbTest", "label": "Approved", "state": 1})
+    forms = doc.getDrawPage().getForms()
+    model = None
+    for fi in range(forms.getCount()):
+        f = forms.getByIndex(fi)
+        for ci in range(f.getCount()):
+            m = f.getByIndex(ci)
+            if getattr(m, "Name", None) == "cbTest":
+                model = m
+    _assert(model is not None and model.Label == "Approved",
+            "form label not updated: %r" % (model and model.Label))
+    print("PASS: form_control (list + set label/state)")
+
+    server.tool_close_document({})
+
+
+def check_structural_tools(_tmpdir):
+    """writer_move_paragraphs, writer_convert_table (both directions),
+    writer_insert_caption, and set_style follow_style."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+    text = doc.getText()
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+
+    def build(items):
+        text.setString("")
+        cur = text.createTextCursor()
+        cur.gotoStart(False)
+        for i, s in enumerate(items):
+            text.insertString(cur, s, False)
+            if i < len(items) - 1:
+                text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+
+    def bodies():
+        return [p["text"] for p in server.tool_writer_get_paragraphs({})["paragraphs"]]
+
+    # move a paragraph down, then up
+    build(["P0", "P1", "P2", "P3", "P4"])
+    server.tool_writer_move_paragraphs({"start": 1, "count": 1, "to": 4})
+    _assert(bodies() == ["P0", "P2", "P3", "P1", "P4"], "move down: %r" % bodies())
+    print("PASS: writer_move_paragraphs (down)")
+    build(["P0", "P1", "P2", "P3", "P4"])
+    server.tool_writer_move_paragraphs({"start": 3, "count": 1, "to": 1})
+    _assert(bodies() == ["P0", "P3", "P1", "P2", "P4"], "move up: %r" % bodies())
+    print("PASS: writer_move_paragraphs (up)")
+
+    # text -> table (rows 1..2 become a 2x2 table; keeps flank paragraphs)
+    build(["keep0", "a,b", "c,d", "keep3"])
+    r = server.tool_writer_convert_table(
+        {"direction": "to_table", "start": 1, "count": 2, "separator": ","})
+    _assert(r["rows"] == 2 and r["columns"] == 2, r)
+    _assert(bodies() == ["keep0", "keep3"], "to_table paras: %r" % bodies())
+    tbl = doc.getTextTables().getByIndex(0)
+    _assert(tbl.getCellByName("A1").getString() == "a"
+            and tbl.getCellByName("B2").getString() == "d", "to_table cells")
+    print("PASS: writer_convert_table (text -> table)")
+
+    # table -> text (round-trip the table back to rows)
+    server.tool_writer_convert_table({"direction": "to_text", "index": 0})
+    _assert(doc.getTextTables().getCount() == 0, "table not removed")
+    b = bodies()
+    _assert("a\tb" in b and "c\td" in b, "to_text paras: %r" % b)
+    print("PASS: writer_convert_table (table -> text)")
+    server.tool_close_document({})
+
+    # caption: two auto-numbered captions in the same category
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+    c1 = server.tool_writer_insert_caption({"category": "Figure", "text": "First"})
+    c2 = server.tool_writer_insert_caption({"category": "Figure", "text": "Second"})
+    _assert(c1["number"] == "1" and c2["number"] == "2",
+            "caption numbers: %r / %r" % (c1.get("number"), c2.get("number")))
+    txt = server.tool_writer_get_text({})["text"]
+    _assert("Figure 1" in txt and "Figure 2" in txt, "caption text: %r" % txt[:120])
+    print("PASS: writer_insert_caption (auto-numbering sequence)")
+
+    # set_style follow_style (next paragraph style)
+    server.tool_set_style({"family": "paragraph", "name": "IntroHead",
+                           "bold": True, "follow_style": "Standard"})
+    st = doc.getStyleFamilies().getByName("ParagraphStyles").getByName("IntroHead")
+    _assert(st.FollowStyle == "Standard", "follow_style not set: %r" % st.FollowStyle)
+    print("PASS: set_style (follow_style / next style)")
+
+    server.tool_close_document({})
+
+
+def check_niche_tools(_tmpdir):
+    """writer_table_formula, writer_split_cells, writer_clear_formatting,
+    writer_set_line_numbering."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+
+    # in-cell table formula
+    server.tool_writer_insert_table({"rows": 3, "columns": 1})
+    tbl = doc.getTextTables().getByIndex(0)
+    tbl.getCellByName("A1").setValue(10)
+    tbl.getCellByName("A2").setValue(5)
+    r = server.tool_writer_table_formula(
+        {"index": 0, "cell": "A3", "formula": "=<A1>+<A2>"})
+    _assert(r["value"] == 15.0, "formula value: %r" % r)
+    _assert(tbl.getCellByName("A3").getValue() == 15.0, "cell not computed")
+    print("PASS: writer_table_formula")
+
+    # split a cell into 2 columns
+    before = list(tbl.getCellNames())
+    server.tool_writer_split_cells(
+        {"index": 0, "cell": "A1", "into": 2, "direction": "columns"})
+    after = list(doc.getTextTables().getByIndex(0).getCellNames())
+    _assert(len(after) == len(before) + 1, "split: %r -> %r" % (before, after))
+    print("PASS: writer_split_cells")
+
+    # clear direct formatting
+    server.tool_writer_append_text({"text": "formatted line"})
+    server.tool_writer_format_text({"search": "formatted line", "bold": True})
+    d = doc.createSearchDescriptor()
+    d.SearchString = "formatted line"
+    _assert(doc.findFirst(d).CharWeight == 150.0, "precondition: should be bold")
+    server.tool_writer_clear_formatting({"search": "formatted line"})
+    _assert(doc.findFirst(d).CharWeight == 100.0, "formatting not cleared")
+    print("PASS: writer_clear_formatting")
+
+    # line numbering
+    ln = server.tool_writer_set_line_numbering({"enable": True, "interval": 5})
+    _assert(ln["enabled"] is True and ln["interval"] == 5, ln)
+    _assert(doc.getLineNumberingProperties().IsOn is True, "line numbering off")
+    print("PASS: writer_set_line_numbering")
+
+    server.tool_close_document({})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -340,7 +614,15 @@ def main():
     check_calc(tmpdir)
     print()
     check_writer(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (50-tool server drives real "
+    print()
+    check_writer_paragraph_ops(tmpdir)
+    print()
+    check_menu_coverage_tools(tmpdir)
+    print()
+    check_structural_tools(tmpdir)
+    print()
+    check_niche_tools(tmpdir)
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (151-tool server drives real "
           "LibreOffice)")
     return 0
 

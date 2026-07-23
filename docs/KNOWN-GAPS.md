@@ -167,3 +167,113 @@ signal** — ship these before more feature tools; the append-only model makes
 iterative work punishing — and (b) one genuinely missing primitive:
 `writer_delete_paragraphs(from, to)` / a range delete, which no wishlist item
 currently covers.
+
+---
+
+# Session 5 field report (2026-07-23, Arabic proposal `عرض-فني-ومالي-نسق`)
+
+Driving a 17-page bilingual RTL Writer proposal. Two of the top pains recorded
+above are now **CLOSED**, plus a paper-cut and a test-harness gotcha.
+
+## Shipped this session (137 → 151 tools)
+
+### Paragraph structure + RTL
+
+- **`writer_set_text_direction`** — sets `rtl`/`ltr`. Default flips the WHOLE
+  document in one call: every body paragraph + every table-cell paragraph + the
+  page style (`WritingMode` RL_TB/LR_TB + matching `ParaAdjust`). This retires
+  the manual `uno_exec` RTL flip that every Arabic session re-implemented by
+  hand. `start`/`count` restrict it to a paragraph range; `align=false` keeps
+  alignment (e.g. a centered title); `tables`/`page=false` narrow the scope.
+- **`writer_delete_paragraphs(start, count)`** — the "genuinely missing
+  primitive" called out under *the rebuild tax*. Deletes a paragraph range
+  including its breaks; handles the mid-document, through-the-last, and
+  delete-everything (leaves one empty paragraph) cases. Structural reordering /
+  dropping a subsection no longer means discarding and rebuilding the doc.
+- **`writer_format_paragraph` now targets by index** — new `start`/`count`
+  (0-based, the `writer_get_paragraphs` index space), taking precedence over
+  `search`. Restyling one heading by index (e.g. fixing a stray empty
+  `Heading 1`) was previously only doable via `uno_exec`.
+
+These three are covered by `check_writer_paragraph_ops` in
+`tests/integration/test_mcp_tools_extended.py` — verified end-to-end against a
+real headless office (paragraph/cell/page `WritingMode`, delete-range sequences,
+index restyle).
+
+### Menu coverage — one tool per remaining menu (Table / Format / Style / Form / Tools)
+
+- **`writer_sort_table`** (Table) — sort a table's data rows by a key column,
+  numeric-aware, header pinned. Reads the grid, sorts in Python, writes back.
+- **`writer_edit_table` now sets cell text** (Table) — `cell` + `text` edits a
+  cell after insert, closing the "can't edit an existing table cell" gap.
+- **`writer_change_case`** (Format) — upper/lower/title/sentence over a `search`
+  match or a paragraph range.
+- **`writer_apply_style`** (Style) — apply a named paragraph style (search or
+  index range) OR a named **character** style (search) — the char-style-apply
+  gap `writer_format_text` never covered. Pairs with `set_style` (create).
+- **`form_control`** (Form) — `list` all controls, or `set` an existing one's
+  label/value/state/enabled/read_only/items. Works on Writer + Calc.
+- **`writer_set_chapter_numbering`** (Tools) — bind the first N outline levels to
+  a numbering scheme so Heading 1/2/3 auto-number 1 / 1.1 / 1.1.1. (Impl note:
+  `ChapterNumberingRules.replaceByIndex` must be called via `uno.invoke` with an
+  explicit `[]com.sun.star.beans.PropertyValue` Any, mutating the level's
+  existing structs in place — a plain tuple or `_pv`-rebuilt structs both throw
+  `IllegalArgumentException`.)
+
+All six covered by `check_menu_coverage_tools` in the same test file.
+
+### Structural editing — finishing the set
+
+- **`writer_move_paragraphs`** (start, count, to) — reorder a paragraph block via
+  `.uno:MoveUp`/`.uno:MoveDown` (preserves content + formatting; works headless).
+- **`writer_convert_table`** (`to_text`/`to_table`) — table → rows-of-paragraphs
+  (cells joined by a separator), or paragraphs → table (split on a separator).
+  Both done Python-side (read/parse → insert → delete) rather than via a dialog
+  dispatch, so they're deterministic.
+- **`writer_insert_caption`** — auto-numbering caption ("Figure 1 — …") backed by
+  a per-category `SetExpression` SEQUENCE field, so numbers increment across
+  captions of the same category (verified 1, 2).
+- **`set_style` gained `follow_style`** — set a paragraph style's next-paragraph
+  style (e.g. a heading followed by body), so style chains can be built.
+
+Covered by `check_structural_tools` in the test file.
+
+### Niche tools (Table / Format / Tools)
+
+- **`writer_table_formula`** — set a formula in a table cell (`=<A1>+<A2>`,
+  `sum <A1:A5>`) and return the computed value (XCell.setFormula).
+- **`writer_split_cells`** — split a cell (or `A1:B1` range) into N cells along
+  columns or rows (table cursor `splitRange`).
+- **`writer_clear_formatting`** — reset direct char/para formatting to the
+  underlying style (`setAllPropertiesToDefault`) over a match or paragraph range.
+- **`writer_set_line_numbering`** — turn document line numbering on/off with
+  interval/options (`getLineNumberingProperties`).
+
+Covered by `check_niche_tools` in the test file.
+
+## Still open (Writer)
+
+- Deeper table ops: repeat-heading-rows across page breaks.
+- Format: autoformat/autocorrect-apply. Tools: autotext, bibliography,
+  hyphenation/thesaurus config, digital-signature *creation*.
+- Form authoring: data binding, design-mode toggle, form navigator.
+- These are the genuinely low-value / high-complexity long tail — build on demand.
+
+## Still open (Calc / cross-cutting)
+
+- The `sheet` param rejects Arabic/non-ASCII names + integer indices, and errors
+  come back empty (Session-1 bugs 1–3) — still unfixed; bites bilingual work.
+- Version-sensitive tools implemented best-effort, never verified live:
+  `calc_create_pivot`, `calc_add_scale_format`, `calc_add_sparkline`,
+  `calc_multiple_operations`, `writer_mail_merge` — need a live-office pass.
+
+## Test-harness gotcha (not a server bug, but bit this session)
+
+`scripts/run_integration.ps1` launches an isolated office on port 2002, but the
+server's **pipe-first** `_connect()` ladder will hijack onto a *live*
+agent-acceptor office if one is running (its pipe wins over the harness socket).
+Symptom: the test printed `connected over pipe 'lo-claude-sanad'` and a
+pre-existing `check_writer` assertion failed on contaminated live-office state.
+Fix when running the harness alongside a live session: set **`LO_UNO_PIPE=0`**
+to force the socket rung. Worth having `run_integration.ps1` export that itself
+so the harness is always self-isolating.

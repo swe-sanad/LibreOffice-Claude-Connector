@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **137 tools** of the `libreoffice` MCP server (v0.8.0), generated from
+All **151 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -94,7 +94,7 @@ All **137 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 
 | Tool | Description |
 |---|---|
-| `writer_format_paragraph` | Paragraph formatting for Writer. Targets paragraphs matching 'search', or ALL body paragraphs if 'search' is omitted. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title'). |
+| `writer_format_paragraph` | Paragraph formatting for Writer. Targets body paragraphs by 0-based 'start'/'count' (the index space writer_get_paragraphs reports), else paragraphs matching 'search', else ALL body paragraphs. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title') — e.g. restyle one heading by index with start + style_name. |
 | `writer_set_page_style` | Page styling for Writer: paper size (a4/a5/a3/letter/legal, or width_mm+height_mm), orientation (portrait/landscape), page margins (mm), and column count. Applies to the document's page style. |
 | `writer_set_header_footer` | Enable/disable and set the text of the Writer page header or footer. |
 | `writer_format_table` | Format a Writer table (by name or 0-based index): draw a full-grid border (width in pt + color) and/or style the header row (bold, background color, font color). |
@@ -143,6 +143,8 @@ All **137 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 |---|---|
 | `writer_list_objects` | Enumerate floating objects in the active Writer doc — graphics, text frames, and embedded/OLE objects — with name, anchor type, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs. |
 | `writer_set_paragraph_text` | Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks. |
+| `writer_set_text_direction` | Set text writing direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Default flips the WHOLE document: every body paragraph, every table-cell paragraph (tables=false to skip), and the page style (page=false to skip). Give 'start'/'count' to flip only a body-paragraph range instead. Also sets paragraph alignment to match (align=false to keep alignment, e.g. a centered title). |
+| `writer_delete_paragraphs` | Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports. Deleting every paragraph leaves one empty paragraph (Writer requires at least one). |
 | `writer_insert_field` | Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes. |
 | `writer_insert_toc` | Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings. |
 | `writer_update_indexes` | Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits. |
@@ -156,7 +158,7 @@ All **137 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `export_document` | Store to a path with filter options. format 'pdf' (page_range, pdfa, quality 0-100, password) or 'csv' (delimiter, quote). Format defaults to the path extension. |
 | `set_document_properties` | Set document metadata: title/author/subject/description, keywords (array), and 'custom' user-defined properties ({name: value}; value null removes). |
 | `list_styles` | List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied. |
-| `set_style` | Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background and optional parent. Reusable across cells/paragraphs. |
+| `set_style` | Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background, optional 'parent' (inherit-from) and 'follow_style' (next-paragraph style, e.g. a heading followed by body text). Reusable across cells/paragraphs. |
 | `protect_document` | Set/remove protection. Calc: a 'sheet' protects that sheet, else the workbook structure; optional 'password'. Writer: toggles IsProtected on all text sections. protect=false unprotects. |
 | `dispatch_uno` | Execute an arbitrary .uno: command against the active frame (e.g. '.uno:Undo', '.uno:GoToCell', '.uno:InsertPagebreak') with optional named args. Escape hatch when no dedicated tool fits. |
 | `document_undo` | Undo/redo/clear the active document's undo stack, or just query it (action 'status'). Returns whether undo/redo are possible and the next undo title. |
@@ -171,7 +173,7 @@ All **137 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | Tool | Description |
 |---|---|
 | `writer_delete_object` | Delete a graphic, text frame, embedded object, draw shape, or text section by name. |
-| `writer_edit_table` | Edit an existing Writer table (by 'name' or 0-based 'index'): insert/delete rows/columns (at_row/at_column), merge a cell range ('A1:B2'), and set a cell background color. |
+| `writer_edit_table` | Edit an existing Writer table (by 'name' or 0-based 'index'): insert/delete rows/columns (at_row/at_column), merge a cell range ('A1:B2'), and set a cell's background color and/or text ('cell' + 'background_color'/'text') — editing a cell after insert. |
 | `writer_set_image_layout` | Set anchor (as_char/char/paragraph/page/frame), text wrap (none/through/parallel/dynamic/left/right), and absolute position (x_mm/y_mm) of an existing image or text frame by name. |
 | `writer_add_section` | Insert a named text section at the end, optionally multi-column and/or write-protected, wrapping optional text. |
 | `writer_bookmarks` | Bookmark lifecycle: action 'list', 'insert' (at a 'search' match or the end), 'delete', 'get' (anchored text), or 'set' (replace anchored text). |
@@ -220,3 +222,20 @@ All **137 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `calc_add_sparkline` | Add in-cell sparklines driven by a data range (LibreOffice 7.5+). |
 | `calc_add_scale_format` | Add a color-scale or data-bar conditional format to a range (kind colorscale\|databar), with default thresholds/colors. |
 | `calc_copy_sheet` | Duplicate a sheet within the document to 'new_name' at an optional 0-based position. |
+
+## Menu coverage: table / format / style / form / tools
+
+| Tool | Description |
+|---|---|
+| `writer_sort_table` | Sort a Writer table's data rows by one key column (0-based 'key_column'), ascending or 'descending'. 'has_header' (default true) keeps row 0 pinned. Numeric-aware. Target by 'name' or 0-based 'index'. |
+| `writer_change_case` | Change letter case: mode upper/lower/title/sentence. Targets text matching 'search', else a body-paragraph range ('start'/'count', default all). Case only — no effect on Arabic. |
+| `writer_apply_style` | Apply a named style to text. kind 'paragraph' (default): target a 'search' match or a start/count paragraph range. kind 'character': requires 'search'. The style must already exist (create it with set_style). |
+| `form_control` | Manage existing form controls (Writer or Calc). action 'list' returns each control's form/name/type/props; action 'set' updates a control by 'name': label, value, state (0/1/2), enabled, read_only, items (listbox). |
+| `writer_set_chapter_numbering` | Turn on heading (chapter) numbering: bind the first 'levels' outline levels (default 3) to a scheme so Heading 1/2/3 auto-number as 1, 1.1, 1.1.1. numbering arabic/roman_upper/roman_lower/letter_upper/letter_lower/none; 'separator' between/after numbers (default '.'). |
+| `writer_move_paragraphs` | Reorder body paragraphs: move the block of 'count' (default 1) paragraphs starting at 0-based 'start' to index 'to' (the block lands before the paragraph currently there; to == paragraph count appends at the end). Preserves content and formatting. Indices are the writer_get_paragraphs space. |
+| `writer_convert_table` | Convert between a table and text. direction 'to_text': turn a table (by 'name' or 0-based 'index') into rows of paragraphs, cells joined by 'separator' (default tab). direction 'to_table': turn body paragraphs [start, start+count) into a table, splitting each on 'separator' (default tab) into columns. |
+| `writer_insert_caption` | Insert an auto-numbering caption on a new paragraph, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/... ; numbers increment across captions sharing a category). 'text' is the label, 'separator' joins number and label (default ' — '), 'numbering' the number style. With 'search', the caption is placed after the matched paragraph. |
+| `writer_table_formula` | Set a formula in a Writer table cell and return the computed value. Writer cell-reference syntax, e.g. '=<A1>+<A2>', '=<A1>*2', 'sum <A1:A5>'. Target the table by 'name' or 0-based 'index'. |
+| `writer_split_cells` | Split a table cell (or an 'A1:B1' range) into 'into' cells (default 2) along 'columns' (default) or 'rows'. Target the table by 'name' or 0-based 'index'. |
+| `writer_clear_formatting` | Remove direct character/paragraph formatting (reset to the underlying style) from text matching 'search', or a body-paragraph range ('start'/'count', default all). |
+| `writer_set_line_numbering` | Turn document line numbering on ('enable', default true) or off, and set 'interval' (number every Nth line), 'count_empty_lines', and left 'distance_mm' (Tools > Line Numbering). |
