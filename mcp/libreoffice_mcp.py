@@ -830,16 +830,29 @@ def _arg_separator(doc):
     try:
         sheets = doc.getSheets()
         probe = "__lo_mcp_sep_probe__"
-        if not sheets.hasByName(probe):
-            sheets.insertNewByName(probe, sheets.getCount())
+        if sheets.hasByName(probe):
+            # Name already taken (real sheet / stale crashed run) — never touch
+            # or delete it; fall back to the safe default.
+            _state["arg_sep"] = sep
+            return sep
+        was_modified = doc.isModified()
+        sheets.insertNewByName(probe, sheets.getCount())
         try:
             cell = sheets.getByName(probe).getCellByPosition(0, 0)
             cell.setFormula("=SUM(1,2)")
             if cell.getError() != 0:      # comma rejected -> ';' locale
                 sep = ";"
         finally:
-            if sheets.hasByName(probe):
+            # Cleanup must NOT clobber a successful detection, and a probe should
+            # not leave the document dirty.
+            try:
                 sheets.removeByName(probe)
+            except Exception:
+                pass
+            try:
+                doc.setModified(was_modified)
+            except Exception:
+                pass
     except Exception:
         sep = ","                         # conservative on any probe failure
     _state["arg_sep"] = sep
@@ -847,30 +860,46 @@ def _arg_separator(doc):
 
 
 def _normalize_formula(s, sep):
-    """Rewrite TOP-LEVEL ',' argument separators to `sep`, leaving commas inside
-    "..." string literals untouched. No-op when the doc already uses ','."""
+    """Rewrite TOP-LEVEL ',' argument separators to `sep`, skipping commas inside
+    "..." string literals AND {...} array constants (whose separators follow a
+    different locale convention). No-op when the doc already uses ','."""
     if sep == "," or "," not in s:
         return s
-    out, in_str = [], False
+    out, in_str, brace = [], False, 0
     for ch in s:
         if ch == '"':
             in_str = not in_str
             out.append(ch)
-        elif ch == "," and not in_str:
+        elif in_str:
+            out.append(ch)
+        elif ch == "{":
+            brace += 1
+            out.append(ch)
+        elif ch == "}":
+            brace = max(0, brace - 1)
+            out.append(ch)
+        elif ch == "," and brace == 0:
             out.append(sep)
         else:
             out.append(ch)
     return "".join(out)
 
 
-def _range_errors(rng):
+def _range_errors(rng, max_cells=4096):
     """Cells in a range holding an error value (Err:5xx / #NAME? / #REF! ...),
-    as [{cell, code, text}] — so formula writes can't silently 'succeed'."""
-    errs = []
+    as ([{cell, code, text}], incomplete). Each cell is a cross-process read, so
+    ranges above `max_cells` are NOT scanned (incomplete=True) rather than stall a
+    large write; a scan that itself fails partway also reports incomplete — so a
+    partial/skipped scan is never mistaken for 'no errors'."""
+    errs, incomplete = [], False
     try:
         addr = rng.getRangeAddress()
-        for r in range(addr.EndRow - addr.StartRow + 1):
-            for c in range(addr.EndColumn - addr.StartColumn + 1):
+        rows = addr.EndRow - addr.StartRow + 1
+        cols = addr.EndColumn - addr.StartColumn + 1
+        if rows * cols > max_cells:
+            return errs, True
+        for r in range(rows):
+            for c in range(cols):
                 cell = rng.getCellByPosition(c, r)
                 code = cell.getError()
                 if code:
@@ -878,8 +907,8 @@ def _range_errors(rng):
                                                    addr.StartRow + r + 1),
                                  "code": int(code), "text": cell.getString()})
     except Exception:
-        pass
-    return errs
+        incomplete = True
+    return errs, incomplete
 
 
 def tool_calc_set_formulas(args):
@@ -895,9 +924,11 @@ def tool_calc_set_formulas(args):
     out = {"written": args["range"], "rows": rows, "columns": cols}
     if sep != ",":
         out["arg_separator"] = sep
-    errors = _range_errors(rng)
+    errors, incomplete = _range_errors(rng)
     if errors:
         out["errors"] = errors
+    if incomplete:
+        out["error_scan"] = "skipped (range too large to verify cell-by-cell)"
     return out
 
 
@@ -1213,10 +1244,13 @@ def tool_calc_add_conditional_format(args):
     if args.get("replace_existing"):
         conditions.clear()
     op = _uno_enum("com.sun.star.sheet.ConditionOperator", _COND_OPERATORS[op_key])
+    sep = _arg_separator(doc)     # a 'formula'-operator value may contain commas
     entry = (
         _pv("Operator", op),
-        _pv("Formula1", str(args.get("value", args.get("formula1", "")))),
-        _pv("Formula2", str(args.get("value2", args.get("formula2", "")))),
+        _pv("Formula1", _normalize_formula(
+            str(args.get("value", args.get("formula1", ""))), sep)),
+        _pv("Formula2", _normalize_formula(
+            str(args.get("value2", args.get("formula2", ""))), sep)),
         _pv("StyleName", style_name),
     )
     conditions.addNew(entry)
@@ -1392,7 +1426,11 @@ def tool_writer_insert_table(args):
                                      args.get("match_case", False))
             if rng is None:
                 raise RuntimeError("Search text %r not found." % args["search"])
-            cursor = text.createTextCursorByRange(rng.getEnd())
+            # The match may live in a header/footer/table cell — anchor to ITS
+            # text object, not the body (body text here throws "End of content
+            # node doesn't have the proper start node").
+            anchor_text = rng.getText()
+            cursor = anchor_text.createTextCursorByRange(rng.getEnd())
             cursor.gotoEndOfParagraph(False)
         else:
             idx = int(args["after_index"])
@@ -1400,9 +1438,10 @@ def tool_writer_insert_table(args):
             if idx < 0 or idx >= len(paras):
                 raise RuntimeError("No body paragraph at index %d (document "
                                    "has %d)." % (idx, len(paras)))
-            cursor = text.createTextCursorByRange(paras[idx].getEnd())
-        text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
-        text.insertTextContent(cursor, table, False)
+            anchor_text = text
+            cursor = anchor_text.createTextCursorByRange(paras[idx].getEnd())
+        anchor_text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+        anchor_text.insertTextContent(cursor, table, False)
     else:
         text, cursor = _writer_end_cursor(doc)
         text.insertTextContent(cursor, table, False)
@@ -2728,6 +2767,7 @@ def tool_writer_apply_list(args):
     end = start + int(count) - 1 if count is not None else None
     rules = _make_numbering_rules(doc, ordered)
     changed = matched = 0
+    last_err = None
     for i, para in _writer_paragraphs(doc):
         if i >= start and (end is None or i <= end):
             matched += 1
@@ -2735,11 +2775,17 @@ def tool_writer_apply_list(args):
                 para.NumberingRules = rules
                 para.NumberingLevel = 0
                 changed += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                last_err = exc
     if matched == 0:
         raise RuntimeError("No body paragraphs in range (start=%d, count=%s)."
                            % (start, count))
+    if changed == 0:
+        # matched paragraphs but none took the list — surface, don't no-op.
+        raise RuntimeError("Matched %d paragraph(s) but could not apply the list"
+                           "%s." % (matched,
+                                    " (%s)" % type(last_err).__name__ if last_err
+                                    else ""))
     return {"ordered": ordered, "paragraphs_changed": changed,
             "paragraphs_matched": matched}
 
@@ -3110,7 +3156,7 @@ def tool_get_signatures(_args):
             from com.sun.star.embed.ElementModes import READ
             sf = state["smgr"].createInstanceWithContext(
                 "com.sun.star.embed.StorageFactory", state["ctx"])
-            storage = sf.openStorageFromURL(url, READ)
+            storage = sf.createInstanceWithArguments((url, READ))
             infos = dds.verifyDocumentContentSignatures(storage, None)
         except Exception:
             infos = dds.verifyDocumentContentSignatures(url, None)  # legacy overload
@@ -4281,9 +4327,11 @@ def tool_calc_multiple_operations(args):
     target.setTableOperation(formulas, mode, col_in, row_in)
     out = {"table_operation": args["range"],
            "mode": str(args.get("mode", "column"))}
-    errs = _range_errors(target)
+    errs, incomplete = _range_errors(target)
     if errs:
         out["errors"] = errs
+    if incomplete:
+        out["error_scan"] = "skipped (range too large to verify cell-by-cell)"
     return out
 
 
@@ -5425,7 +5473,7 @@ TOOL_DEFS = [
      "description": "Read a Calc range as formulas (e.g. '=SUM(A1:A3)') instead of computed values.",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET}, ["range"])},
     {"name": "calc_set_formulas",
-     "description": "Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match.",
+     "description": "Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify).",
      "inputSchema": _schema({"range": _RANGE,
                              "formulas": dict(_GRID, description="rows of formula strings, e.g. [['=A1*2'], ['=A2*2']]"),
                              "sheet": _SHEET}, ["range", "formulas"])},
@@ -5770,7 +5818,7 @@ TOOL_DEFS = [
      "description": "Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits.",
      "inputSchema": _schema()},
     {"name": "writer_apply_list",
-     "description": "Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by applying the 'List Bullet'/'List Number' paragraph style. Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end.",
+     "description": "Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. Errors if the range matches no paragraph or none could be changed.",
      "inputSchema": _schema({"ordered": dict(_BOOL, description="numbered list (default false = bulleted)"),
                              "start": dict(_INT, description="first paragraph index (default 0)"),
                              "count": dict(_INT, description="how many paragraphs (default: to end)")})},

@@ -840,6 +840,46 @@ def check_fieldtest_fixes(tmpdir):
                                          "range": "A1"})["cells"] == [["س"]],
             "arabic sheet by index failed")
     print("PASS: _resolve_sheet (Arabic name + index)")
+
+    # calc_multiple_operations: overlap guard raises; correct layout computes.
+    server.tool_calc_set_formulas({"range": "H1", "formulas": [["=Z1*Z1"]]})
+    server.tool_calc_write_range({"range": "G2:G4", "cells": [[2], [3], [4]]})
+    raised = False
+    try:
+        # formula H1 is INSIDE G1:H4 -> would self-reference (Err:522)
+        server.tool_calc_multiple_operations(
+            {"range": "G1:H4", "formula_range": "H1", "column_input": "Z1",
+             "mode": "column"})
+    except RuntimeError:
+        raised = True
+    _assert(raised, "overlap guard did not reject an in-range formula cell")
+    # formula H1 OUTSIDE the filled range G2:H4 -> computes input^2
+    server.tool_calc_multiple_operations(
+        {"range": "G2:H4", "formula_range": "H1", "column_input": "Z1",
+         "mode": "column"})
+    server.tool_calc_recalculate({})
+    res = server.tool_calc_read_range({"range": "H2:H4"})["cells"]
+    _assert(res == [[4.0], [9.0], [16.0]], "multiple_operations wrong: %r" % res)
+    print("PASS: calc_multiple_operations (overlap guard + correct layout)")
+
+    # bind_document_event round-trips (typed uno.Any).
+    server.tool_bind_document_event(
+        {"event": "OnSave",
+         "script": "vnd.sun.star.script:Standard.Nope.Nope?language=Basic&location=document"})
+    ev = server._current_doc().getEvents().getByName("OnSave")
+    bound = {pv.Name: pv.Value for pv in ev}
+    _assert(bound.get("EventType") == "Script" and "Nope" in bound.get("Script", ""),
+            "event not bound: %r" % bound)
+    server.tool_bind_document_event({"event": "OnSave"})   # clear
+    print("PASS: bind_document_event (bind + clear)")
+
+    # get_signatures: unsigned doc reads cleanly (no swallowed exception note).
+    ods = os.path.join(tmpdir, "sig_probe.ods")
+    server.tool_save_document({"path": ods, "format": "ods"})
+    sig = server.tool_get_signatures({})
+    _assert(sig["signed"] is False and "note" not in sig,
+            "get_signatures should read an unsigned doc without a note: %r" % sig)
+    print("PASS: get_signatures (unsigned doc, no error note)")
     server.tool_close_document({"save": False})
 
     # ================= Writer =================
@@ -858,15 +898,30 @@ def check_fieldtest_fixes(tmpdir):
             break
     _assert(first is not None and first.NumberingRules is not None,
             "apply_list did not attach NumberingRules")
-    print("PASS: writer_apply_list (NumberingRules, locale-proof)")
+    # Prove it used DIRECT NumberingRules, not a paragraph-style swap (the old,
+    # locale-fragile mechanism would set ParaStyleName to 'List Number').
+    _assert(first.ParaStyleName == "Standard",
+            "apply_list swapped the paragraph style instead of NumberingRules: %r"
+            % first.ParaStyleName)
+    # ordered=True must yield ARABIC numbering, not a bullet char.
+    from com.sun.star.style.NumberingType import ARABIC
+    lvl0 = {pv.Name: pv.Value for pv in first.NumberingRules.getByIndex(0)}
+    _assert(lvl0.get("NumberingType") == ARABIC,
+            "ordered list is not ARABIC: %r" % lvl0.get("NumberingType"))
+    print("PASS: writer_apply_list (direct NumberingRules, ARABIC when ordered)")
 
-    # clear_formatting on a term that also lives in the footer must not throw.
+    # clear_formatting on a term that also lives in the footer must not throw AND
+    # must actually clear the footer's bold (proves it reached the footer text).
     server.tool_writer_set_header_footer({"which": "footer",
                                           "text": "CONFIDENTIAL footer"})
     server.tool_writer_format_text({"search": "CONFIDENTIAL", "bold": True})
     cfmt = server.tool_writer_clear_formatting({"search": "CONFIDENTIAL"})
     _assert(cfmt["scope"] == "search", cfmt)      # reaching here == no crash
-    print("PASS: writer_clear_formatting (header/footer match, no crash)")
+    ft = server._page_style(wdoc).FooterText
+    portion = ft.createEnumeration().nextElement().createEnumeration().nextElement()
+    _assert(portion.CharWeight == 100.0,
+            "footer bold not cleared: %r" % portion.CharWeight)
+    print("PASS: writer_clear_formatting (clears header/footer match)")
 
     # conditional section: explicit visible=false hides.
     sec = server.tool_writer_add_conditional_section(
@@ -889,7 +944,23 @@ def check_fieldtest_fixes(tmpdir):
     els = list(wdoc.getText().createEnumeration())
     _assert(els[1].supportsService("com.sun.star.text.TextTable"),
             "anchored table not placed after paragraph 0")
-    print("PASS: writer_insert_table (anchored/positional)")
+    # search-anchored insert: lands after the matched paragraph, and the cursor
+    # uses the match's own text so a header/footer match wouldn't crash.
+    server.tool_writer_insert_table({"rows": 2, "columns": 2,
+                                     "search": "item two",
+                                     "data": [["x", "y"], ["z", "w"]]})
+    seen_item_two, table_after = False, False
+    en2 = wdoc.getText().createEnumeration()
+    while en2.hasMoreElements():
+        el = en2.nextElement()
+        if (el.supportsService("com.sun.star.text.Paragraph")
+                and "item two" in el.getString()):
+            seen_item_two = True
+        elif seen_item_two and el.supportsService("com.sun.star.text.TextTable"):
+            table_after = True
+            break
+    _assert(table_after, "search-anchored table not placed after 'item two'")
+    print("PASS: writer_insert_table (anchored: after_index + search)")
     server.tool_close_document({"save": False})
 
     # ============ close-the-right-doc safety ============
