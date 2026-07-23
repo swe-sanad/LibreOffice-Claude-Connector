@@ -11,6 +11,10 @@ The connector ships as two installable bundles, both attached to every
 Most people just grab these from the release. If you'd rather build them
 yourself — to audit exactly what you install — it takes one command each.
 
+> Using the server from a **non-Claude agent** (Codex, Antigravity, Cursor, …)?
+> The `.mcpb` is Claude Desktop's format; point other clients at the server
+> command directly — see [`docs/CROSS-AGENT.md`](CROSS-AGENT.md).
+
 ## Prerequisites
 
 - **Python 3.8+** on `PATH`. That's it. The build scripts are **standard-library

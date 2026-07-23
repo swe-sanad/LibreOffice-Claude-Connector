@@ -5,6 +5,12 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Documentation
+- **`docs/CROSS-AGENT.md`** — the server is standard stdio MCP and works in any
+  MCP client (Codex, Antigravity, Cursor, …); starting-point config + a list of
+  cross-platform / cross-agent **expansion opportunities** to tackle after real
+  testing on macOS, Linux, and non-Claude agents. Linked from `docs/BUILDING.md`.
+
 ## [0.9.0] — 2026-07-23
 
 The Writer + Calc + cross-app surface at **161 tools** (up from 137 in v0.8.0):
