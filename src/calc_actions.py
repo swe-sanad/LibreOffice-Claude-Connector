@@ -30,6 +30,10 @@ __all__ = [
     "build_user_prompt",
     "parse_grid",
     "transform_range",
+    "translate_range",
+    "fix_grammar_range",
+    "generate_formula",
+    "describe_grid",
 ]
 
 
@@ -233,3 +237,97 @@ def transform_range(
             "Claude's answer was cut off (hit max_tokens). Select a smaller range "
             "or raise max_tokens in Claude > Settings.")
     return parse_grid(result.text, nrows, ncols)
+
+
+# --------------------------------------------------------------------------- #
+# Named commands — the ".oxt" Claude menu (Translate / Fix Grammar / Generate
+# Formula / Explain Range). Grid transforms reuse transform_range; the prose /
+# formula ones return plain text. All unit-testable with a fake client.
+# --------------------------------------------------------------------------- #
+
+def translate_range(client, data, language, **kw):
+    """Translate each text cell into ``language``, leaving numbers/dates/formulas."""
+    if not language or not language.strip():
+        raise TransformError("Please specify a target language.")
+    return transform_range(
+        client, data,
+        "Translate each text cell into %s; leave numbers, dates, and formula "
+        "results unchanged." % language.strip(), **kw)
+
+
+def fix_grammar_range(client, data, **kw):
+    """Fix spelling/grammar in text cells, leaving numeric cells untouched."""
+    return transform_range(
+        client, data,
+        "Correct spelling and grammar in text cells only; leave numbers, dates, "
+        "and formula results exactly as they are.", **kw)
+
+
+def build_formula_system_prompt() -> str:
+    return (
+        "You write a single LibreOffice Calc formula from a description (and "
+        "optional sample data). Return ONLY the formula, starting with '='. No "
+        "explanation, no prose, no markdown, no code fences. Use LibreOffice "
+        "function names."
+    )
+
+
+def generate_formula(
+    client: Any,
+    description: str,
+    *,
+    sample: Optional[Sequence[Sequence[Any]]] = None,
+    model: Optional[str] = None,
+    max_tokens: int = 256,
+    temperature: Optional[float] = None,
+) -> str:
+    """Return a single Calc formula string (guaranteed to start with '=')."""
+    if not description or not description.strip():
+        raise TransformError("Describe the formula you want.")
+    user = "Description:\n%s" % description.strip()
+    if sample:
+        user += "\n\nSample data (JSON grid):\n%s" % json.dumps(
+            normalize_grid(sample), ensure_ascii=False)
+    result = client.send(
+        system=build_formula_system_prompt(), prompt=user, model=model,
+        max_tokens=max_tokens, temperature=temperature)
+    formula = _strip_fences((result.text or "").strip()).strip()
+    formula = formula.splitlines()[0].strip() if formula else ""
+    if not formula:
+        raise TransformError("Claude did not return a formula.")
+    if not formula.startswith("="):
+        formula = "=" + formula.lstrip("=")
+    return formula
+
+
+def build_describe_system_prompt(mode: str) -> str:
+    if mode == "summarize":
+        return (
+            "You summarize spreadsheet data for a person. Given a JSON grid, "
+            "return a short plain-text summary of what it contains and any "
+            "notable totals or patterns. Plain text only, no markdown.")
+    return (
+        "You explain spreadsheet data for a person. Given a JSON grid, return a "
+        "concise plain-text explanation of what the data represents, what the "
+        "columns are, and any notable values. Plain text only, no markdown.")
+
+
+def describe_grid(
+    client: Any,
+    data: Sequence[Sequence[Any]],
+    *,
+    mode: str = "explain",
+    model: Optional[str] = None,
+    max_tokens: int = 800,
+    temperature: Optional[float] = None,
+) -> str:
+    """Return a plain-text explanation ('explain') or summary ('summarize') of a
+    grid — for display in a message box, not written back to cells."""
+    grid = normalize_grid(data)
+    if not grid or not grid[0]:
+        raise TransformError("The selection is empty; nothing to describe.")
+    result = client.send(
+        system=build_describe_system_prompt(mode),
+        prompt="Data (JSON grid):\n%s" % json.dumps(grid, ensure_ascii=False),
+        model=model, max_tokens=max_tokens, temperature=temperature)
+    return (result.text or "").strip()

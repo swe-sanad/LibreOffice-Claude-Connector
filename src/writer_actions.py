@@ -24,6 +24,9 @@ __all__ = [
     "default_max_tokens",
     "rewrite_text",
     "generate_text",
+    "summarize_text",
+    "translate_text",
+    "fix_grammar_text",
 ]
 
 
@@ -151,3 +154,35 @@ def generate_text(
         temperature=temperature,
     )
     return _finish(result)
+
+
+# --------------------------------------------------------------------------- #
+# Named commands — thin wrappers over rewrite_text with a canned instruction
+# (the ".oxt" Claude menu: Summarize / Translate / Fix Grammar). Kept here so
+# the prompt wording is unit-testable with a fake client, no UNO/network.
+# --------------------------------------------------------------------------- #
+
+def summarize_text(client: Any, selected_text: str, **kw: Any) -> str:
+    """Summarize the selection (returned for insert, not replace)."""
+    return rewrite_text(
+        client, selected_text,
+        "Summarize the following text concisely in the same language, "
+        "preserving its key points.", **kw)
+
+
+def translate_text(client: Any, selected_text: str, language: str, **kw: Any) -> str:
+    """Translate the selection into ``language`` (returned for replace)."""
+    if not language or not language.strip():
+        raise WriterActionError("Please specify a target language.")
+    return rewrite_text(
+        client, selected_text,
+        "Translate the following text into %s. Output only the translation, "
+        "preserving formatting and line breaks." % language.strip(), **kw)
+
+
+def fix_grammar_text(client: Any, selected_text: str, **kw: Any) -> str:
+    """Correct spelling/grammar/punctuation without changing meaning/language."""
+    return rewrite_text(
+        client, selected_text,
+        "Correct spelling, grammar, and punctuation. Do not change the meaning, "
+        "tone, or language.", **kw)

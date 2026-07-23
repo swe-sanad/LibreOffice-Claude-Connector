@@ -88,7 +88,8 @@ def main():
         check(len(tools) >= 60, "tools/list", "%d tools" % len(tools))
         if live:
             content = replies.get(2, {}).get("result", {})
-            text = (content.get("content") or [{}])[0].get("text", "")
+            # content[0] is the human summary line; the JSON payload is content[-1].
+            text = (content.get("content") or [{}])[-1].get("text", "")
             check("connected" in text and not content.get("isError"),
                   "lo_status (live)", text[:80])
         check("[libreoffice-connector] launching:" in err,

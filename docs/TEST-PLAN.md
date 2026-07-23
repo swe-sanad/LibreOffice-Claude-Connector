@@ -37,18 +37,18 @@ Which tests need an API key?
 
 ## 1. Automated tests (no API key, no GUI)
 
-### 1a. Offline unit suite — expect **65 passing**
+### 1a. Offline unit suite — expect **83 passing**
 ```powershell
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
-PASS = `Ran 65 tests ... OK`. Covers the Claude client, Calc/Writer transform logic,
+PASS = `Ran 83 tests ... OK`. Covers the Claude client, Calc/Writer transform logic,
 config, and the DPAPI keystore (real encrypt/decrypt round-trip on Windows).
 
 ### 1b. MCP protocol smoke test (no office)
 ```powershell
 & "C:\Program Files\LibreOffice\program\python.exe" mcp\test_mcp_protocol.py
 ```
-PASS = `MCP handshake ok; tools/list has 50 tools (...); ping ok.`
+PASS = `MCP handshake ok; tools/list has 161 tools (...); ping ok.`
 
 ### 1c. Real-LibreOffice integration tests (headless, isolated profile)
 Each spins up its own throwaway headless LibreOffice, runs, and tears down. Run
@@ -64,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests
 - `test_calc_uno` — read/select/write a range; None→"" coercion.
 - `test_writer_uno` — read selection, replace, multi-paragraph, insert-at-caret.
 - `test_mcp_tools` — the core MCP tool functions drive Calc (read/write/status).
-- `test_mcp_tools_extended` — the full 50-tool set: document lifecycle
+- `test_mcp_tools_extended` — the full 161-tool set: document lifecycle
   (create/open/save-as xlsx+docx/PDF export/close), Calc formulas, structure
   (insert/delete rows+columns, copy, clear, find&replace, used range), sheets,
   formatting, merge, charts, selection, conditional formatting, cell comments,
@@ -204,7 +204,7 @@ A1:C10 of the open sheet"*, *"write a summary into E1"*. Tools available:
 ## 6. Status: verified vs. needs-human
 
 **Verified automatically (all green on LibreOffice 25.2.3.2 / Python 3.10.17):**
-- 65 offline unit tests; MCP protocol + tools; Calc/Writer UNO edits; the `.oxt`
+- 83 offline unit tests; MCP protocol + tools; Calc/Writer UNO edits; the `.oxt`
   installs and both the ProtocolHandler and the sidebar factory register; the MCP
   round-trip edits a real sheet.
 

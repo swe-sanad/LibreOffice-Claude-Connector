@@ -9,9 +9,10 @@ no external runtime, no third-party Python packages:
    written straight back into your document.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the inverse: lets Claude Code /
    Claude Desktop (or any MCP client) reach **in** and drive LibreOffice as a tool,
-   with **137 tools** covering documents, Calc data/formulas/formatting/charts, Writer
-   text/tables, embedded Basic macros, drawing shapes, window screenshots, and a raw
-   UNO escape hatch. See [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md) for the full catalog.
+   with **161 tools** covering documents, Calc data/formulas/formatting/charts, Writer
+   text/tables/styles/structure, embedded Basic macros, drawing shapes, window
+   screenshots, and a raw UNO escape hatch. See [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md)
+   for the full catalog.
 
 ## Status
 
@@ -35,7 +36,7 @@ LibreOffice's bundled Python, the Claude Messages API, and prior-art review).
 - [x] Packaged `.oxt` extension with a `Claude` menu/toolbar button (Calc + Writer)
 - [x] In-app settings (model picker, API key stored encrypted via Windows DPAPI)
 - [x] Network call runs off the UI thread, behind a modal progress dialog
-- [ ] Additional commands (summarize, translate, fix grammar, generate formula, explain range)
+- [x] Additional commands (summarize, translate, fix grammar, generate formula, explain range)
 - [ ] Public release on extensions.libreoffice.org
 
 ## The MCP server
@@ -145,6 +146,11 @@ maps the road from here to **native agent support in LibreOffice core**.
   10% to each number"); the selection is replaced with Claude's reply, same shape.
 - **Writer**: select some text and use the same command to rewrite it in place, or
   place the cursor with nothing selected to generate new text at the caret.
+- **Quick commands** (the `Claude` menu, alongside *Transform*): **Summarize
+  Selection**, **Translate Selection…** (asks for a target language), **Fix Grammar
+  & Spelling** — in both Calc and Writer — plus **Generate Formula…** and **Explain
+  Range** in Calc. Each reuses the same read → Claude → write-back plumbing with a
+  canned instruction (no free-text prompt needed).
 - A modal progress dialog appears while Claude is contacted; the document is only read
   and written on the main thread, so LibreOffice itself never blocks on the network.
 
@@ -177,8 +183,9 @@ LibreOffice install):
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 ```
 
-These **65** tests (Claude client, Calc transform logic, Writer transform/prompt
-logic, plus config + DPAPI keystore round-trip tests) mock `urllib`/use fake clients
+These **83** tests (Claude client, Calc transform + translate/fix-grammar/formula/
+explain logic, Writer transform/summarize/translate/fix-grammar/prompt logic, plus
+config + DPAPI keystore round-trip tests) mock `urllib`/use fake clients
 entirely, or use a temp directory for config/keystore — no API key, no network access,
 and no running LibreOffice needed.
 
@@ -226,7 +233,7 @@ with 🥇 good-first-tool picks to start from.
 
 ```
 LibreOffice-Claude-Connector/
-├── mcp/             libreoffice_mcp.py (stdio MCP server, 137 tools — see docs/MCP-TOOLS.md)
+├── mcp/             libreoffice_mcp.py (stdio MCP server, 161 tools — see docs/MCP-TOOLS.md)
 ├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md,
 │                    MCP-TOOLS.md (generated tool reference), TOOLS-WANTED.md (roadmap),
 │                    KNOWN-GAPS.md, TEST-PLAN.md, SECURITY.md, UPSTREAMING.md

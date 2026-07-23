@@ -52,7 +52,8 @@ def main():
 
     def tool(mid, name, args):
         resp = call(mid, "tools/call", {"name": name, "arguments": args})
-        text = resp["result"]["content"][0]["text"]
+        # content[0] is the human summary line; the structured JSON is content[-1].
+        text = resp["result"]["content"][-1]["text"]
         return json.loads(text)
 
     init = call(1, "initialize", {"protocolVersion": "2024-11-05",

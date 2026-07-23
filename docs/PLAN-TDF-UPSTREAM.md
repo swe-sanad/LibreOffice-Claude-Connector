@@ -10,7 +10,7 @@ social steps as first-class tasks.
 | # | Task | Output |
 |---|------|--------|
 | 0.1 | Ship the pipe-acceptor extension (PLAN-PIPE-ACCEPTOR.md) and get it listed on extensions.libreoffice.org with real users | the working prototype the RFC points at |
-| 0.2 | Write the evidence note: the Kahatayn case study (a complete bilingual RTL NPO workbook built agent-first through 61 MCP tools), incl. what broke (RTL form-control serialization) — proof this exercises LibreOffice in ways users care about | `docs/CASE-STUDY.md` |
+| 0.2 | Write the evidence note: the Kahatayn case study (a complete bilingual RTL NPO workbook built agent-first through the MCP tool set, now 161 tools), incl. what broke (RTL form-control serialization) — proof this exercises LibreOffice in ways users care about | `docs/CASE-STUDY.md` |
 | 0.3 | Each contributor sends the **TDF license statement** to the dev list ("all my past & future contributions are under MPL-2.0/LGPLv3+") — required before any gerrit patch is merged | archived email |
 | 0.4 | Land 1–2 **EasyHacks** (bugs.documentfoundation.org, keyword `easyHack`, `difficultyBeginner`) to learn the gerrit workflow and become a known name | merged trivial patches |
 

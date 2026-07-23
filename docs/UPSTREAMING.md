@@ -54,7 +54,7 @@ endpoint** — essentially Rung 1 living in core with a real UI:
 1. **RFC first, code second.** Post the proposal to the developer list
    (`libreoffice@lists.freedesktop.org`) and bring it to an **ESC call**
    (Engineering Steering Committee, weekly). Reference this repo as the working
-   prototype with real-world usage — a working MCP server with 61 tools and a
+   prototype with real-world usage — a working MCP server with 161 tools and a
    production workbook built through it is strong evidence.
 2. **Start with the smallest reviewable patch**: the Options toggle + in-process
    acceptor (Rung 1's logic in `desktop/`/`sfx2/`, C++). Submit via

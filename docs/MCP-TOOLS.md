@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **154 tools** of the `libreoffice` MCP server (v0.8.0), generated from
+All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -80,7 +80,7 @@ All **154 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `writer_insert_table` | Insert a table at the end of the Writer document, optionally filled with data (rows of strings/numbers). |
 | `writer_insert_image` | Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size). |
 | `writer_insert_page_break` | Insert a page break at the end of the Writer document. |
-| `writer_get_outline` | List the document's headings as an outline: [{level, text}, ...]. |
+| `writer_get_outline` | List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs. |
 
 ## Writer comments & conditional sections
 
@@ -242,3 +242,10 @@ All **154 tools** of the `libreoffice` MCP server (v0.8.0), generated from
 | `set_active_document` | Focus a specific open document so subsequent reads/writes target it — select by 'title' (substring, case-insensitive), 'url' (substring), or 0-based 'index' over the open docs (see list_documents). Fixes focus-stealing that silently redirects writes to the wrong document. |
 | `writer_replace_image` | Replace an existing image by 'name': swap its graphic (new 'path') and/or resize it (width_mm/height_mm) in place — e.g. update a logo without rebuilding. Use writer_list_objects to find image names. |
 | `writer_repeat_heading_rows` | Make a table's first 'rows' (default 1) repeat as a header on every page the table spans, or turn it off with repeat=false. Target the table by 'name' or 0-based 'index'. |
+| `writer_find` | Locate text WITHOUT changing it: returns each matching body paragraph's 0-based index, occurrence count, a snippet, and its style — so you can then target it by index (writer_set_paragraph_text, writer_format_paragraph, writer_delete_paragraphs, ...). Read-only companion to writer_find_replace. |
+| `writer_list_tables` | List every table with 0-based index, name, row/column counts, and a header-row preview — discovery for writer_edit_table / writer_sort_table / writer_convert_table / writer_table_formula. |
+| `writer_list_figures` | List images/figures with name, size (mm), anchor type, and the anchoring paragraph's text (often the caption/context) — discovery for writer_replace_image / writer_set_image_layout. |
+| `writer_set_document_defaults` | Set the document's base typography via the 'Standard' paragraph style: font_name and/or font_size, applied to Western + Complex (RTL/CTL) + Asian scripts so an Arabic base font actually takes effect document-wide. |
+| `writer_insert_tab_stops` | Set paragraph tab stops (positions_mm = list of mm) on matched paragraphs ('search') or a body-paragraph range (start/count, default all). align left/right/center/decimal; optional 'fill' char (e.g. '.' for dotted signature lines). |
+| `calc_export_range` | Export a cell 'range' (or the sheet's used range if omitted) to a CSV or JSON file at 'path'. format defaults to the path extension; CSV is UTF-8-BOM with an optional 'delimiter'. |
+| `batch` | Run several tool calls in one round-trip. 'operations' is a list of {tool, args}; returns each result/error in order. stop_on_error (default true) halts on the first failure. Cuts latency on long multi-step document builds. |

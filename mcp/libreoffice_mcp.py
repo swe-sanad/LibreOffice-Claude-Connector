@@ -1291,6 +1291,7 @@ def tool_writer_get_outline(_args):
     doc = _require_writer()
     outline = []
     enum = doc.getText().createEnumeration()
+    idx = 0
     while enum.hasMoreElements():
         para = enum.nextElement()
         try:
@@ -1299,8 +1300,13 @@ def tool_writer_get_outline(_args):
             level = int(para.getPropertyValue("OutlineLevel"))
         except Exception:
             continue
+        # 'idx' is the body-paragraph index — matches writer_get_paragraphs and
+        # the start/index params of writer_format_paragraph / _apply_style / etc.
         if level > 0:
-            outline.append({"level": level, "text": para.getString()})
+            outline.append({"level": level, "text": para.getString(),
+                            "index": idx,
+                            "style": para.getPropertyValue("ParaStyleName")})
+        idx += 1
     return {"outline": outline}
 
 
@@ -4693,6 +4699,220 @@ def tool_writer_repeat_heading_rows(args):
             "header_rows": table.HeaderRowCount}
 
 
+def tool_writer_find(args):
+    """Locate text (does NOT change it): scans body paragraphs and returns, for
+    each paragraph that contains 'search', its 0-based index, occurrence count, a
+    snippet, and its paragraph style — so callers can then target it by index."""
+    doc = _require_writer()
+    search = args["search"]
+    if not search:
+        raise RuntimeError("Give a non-empty 'search'.")
+    mc = bool(args.get("match_case", False))
+    limit = int(args.get("limit", 100))
+    needle = search if mc else search.lower()
+    out = []
+    for i, para in _writer_paragraphs(doc):
+        s = para.getString()
+        hay = s if mc else s.lower()
+        pos = hay.find(needle)
+        if pos == -1:
+            continue
+        a = max(0, pos - 20)
+        b = min(len(s), pos + len(search) + 20)
+        snippet = ("…" if a > 0 else "") + s[a:b] + ("…" if b < len(s) else "")
+        out.append({"paragraph": i, "occurrences": hay.count(needle),
+                    "snippet": snippet,
+                    "style": para.getPropertyValue("ParaStyleName")})
+        if len(out) >= limit:
+            break
+    return {"matches": out, "paragraphs_matched": len(out),
+            "total_occurrences": sum(m["occurrences"] for m in out)}
+
+
+def tool_writer_list_tables(_args):
+    """List every table with 0-based index, name, dimensions, and a header-row
+    preview — the discovery companion to writer_edit_table/sort/convert."""
+    doc = _require_writer()
+    tables = doc.getTextTables()
+    out = []
+    for i in range(tables.getCount()):
+        t = tables.getByIndex(i)
+        nr, nc = t.getRows().getCount(), t.getColumns().getCount()
+        try:
+            header = [t.getCellByPosition(c, 0).getString() for c in range(min(nc, 8))]
+        except Exception:
+            header = []
+        out.append({"index": i, "name": t.Name, "rows": nr,
+                    "columns": nc, "header": header})
+    return {"tables": out, "count": len(out)}
+
+
+def tool_writer_list_figures(_args):
+    """List images/figures with name, size (mm), anchor type, and the text of the
+    paragraph they anchor to (often the caption or surrounding context)."""
+    doc = _require_writer()
+    graphics = doc.getGraphicObjects()
+    out = []
+    for nm in graphics.getElementNames():
+        g = graphics.getByName(nm)
+        entry = {"name": nm}
+        try:
+            entry["size_mm"] = [round(g.Size.Width / 100.0, 1),
+                                round(g.Size.Height / 100.0, 1)]
+        except Exception:
+            pass
+        try:
+            entry["anchor"] = _enum_value(g.AnchorType)
+        except Exception:
+            pass
+        try:
+            entry["context"] = g.getAnchor().getString()[:80]
+        except Exception:
+            pass
+        out.append(entry)
+    return {"figures": out, "count": len(out)}
+
+
+def tool_writer_set_document_defaults(args):
+    """Set the document's base typography by editing the 'Standard' paragraph
+    style — font_name and/or font_size, applied to Western + Complex (RTL/CTL) +
+    Asian scripts so an Arabic base font actually takes effect."""
+    doc = _require_writer()
+    std = doc.getStyleFamilies().getByName("ParagraphStyles").getByName("Standard")
+    changed = []
+    if args.get("font_name"):
+        name = args["font_name"]
+        std.CharFontName = name
+        std.CharFontNameComplex = name
+        std.CharFontNameAsian = name
+        changed.append("font_name")
+    if args.get("font_size") is not None:
+        sz = float(args["font_size"])
+        std.CharHeight = sz
+        std.CharHeightComplex = sz
+        std.CharHeightAsian = sz
+        changed.append("font_size")
+    if not changed:
+        raise RuntimeError("Give font_name and/or font_size.")
+    return {"style": "Standard", "changed": changed}
+
+
+_TAB_ALIGN = {"left": "LEFT", "right": "RIGHT", "center": "CENTER",
+              "decimal": "DECIMAL"}
+
+
+def tool_writer_insert_tab_stops(args):
+    """Set paragraph tab stops (positions in mm) on matched paragraphs ('search')
+    or a body-paragraph range (start/count, default all) — for aligned columns /
+    signature lines. align: left/right/center/decimal; optional 'fill' char."""
+    doc = _require_writer()
+    positions = args.get("positions_mm")
+    if not positions:
+        raise RuntimeError("Give 'positions_mm' — a list of tab-stop positions in mm.")
+    align = str(args.get("align", "left")).lower()
+    if align not in _TAB_ALIGN:
+        raise RuntimeError("align must be one of %s." % sorted(_TAB_ALIGN))
+    fill = args.get("fill")
+    fillchar = ord(fill[0]) if fill else 32
+    stops = []
+    for p in positions:
+        ts = _uno_struct("com.sun.star.style.TabStop")
+        ts.Position = _mm100(p)
+        ts.Alignment = _uno_enum("com.sun.star.style.TabAlign", _TAB_ALIGN[align])
+        ts.FillChar = fillchar
+        stops.append(ts)
+    stops = tuple(stops)
+
+    def _apply(para):
+        para.ParaTabStops = stops
+
+    n = 0
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        for i in range(found.getCount()):
+            _apply(found.getByIndex(i))
+            n += 1
+        return {"tab_stops": len(stops), "paragraphs": n, "scope": "search"}
+    start = int(args.get("start", 0))
+    cnt = args.get("count")
+    for i, para in _writer_paragraphs(doc):
+        if i < start:
+            continue
+        if cnt is not None and i >= start + int(cnt):
+            break
+        _apply(para)
+        n += 1
+    return {"tab_stops": len(stops), "paragraphs": n, "scope": "range"}
+
+
+def tool_calc_export_range(args):
+    """Export a cell range (or the used range) to a CSV or JSON file. format
+    defaults to the path extension; CSV uses UTF-8-BOM + optional 'delimiter'."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng_name = args.get("range")
+    if rng_name:
+        rng = sheet.getCellRangeByName(rng_name)
+    else:
+        cur = sheet.createCursor()               # default: the sheet's used range
+        cur.gotoStartOfUsedArea(False)
+        cur.gotoEndOfUsedArea(True)
+        rng = cur
+    data = rng.getDataArray()
+    grid = [list(row) for row in data]
+    path = args["path"]
+    fmt = (args.get("format")
+           or os.path.splitext(path)[1].lstrip(".") or "csv").lower()
+    if fmt == "json":
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(grid, fh, ensure_ascii=False, indent=2)
+    elif fmt == "csv":
+        import csv
+        delim = (args.get("delimiter") or ",")[0]
+        with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+            csv.writer(fh, delimiter=delim).writerows(grid)
+    else:
+        raise RuntimeError("format must be 'csv' or 'json', got %r." % fmt)
+    return {"exported": path, "format": fmt, "rows": len(grid),
+            "columns": len(grid[0]) if grid else 0}
+
+
+def tool_batch(args):
+    """Run several tool calls in one round-trip. 'operations' is a list of
+    {tool, args}; returns each result/error in order. stop_on_error (default
+    true) halts on the first failure. Nesting 'batch' is rejected."""
+    ops = args.get("operations") or []
+    stop = bool(args.get("stop_on_error", True))
+    results = []
+    for op in ops:
+        name = op.get("tool")
+        a = op.get("args") or {}
+        if name == "batch":
+            results.append({"tool": name, "ok": False, "error": "batch cannot nest"})
+            if stop:
+                break
+            continue
+        fn = TOOLS.get(name)
+        if fn is None:
+            results.append({"tool": name, "ok": False, "error": "unknown tool"})
+            if stop:
+                break
+            continue
+        try:
+            results.append({"tool": name, "ok": True, "result": fn(a)})
+        except Exception as exc:  # surface, don't abort the whole batch silently
+            results.append({"tool": name, "ok": False,
+                            "error": "%s: %s" % (type(exc).__name__, exc)})
+            if stop:
+                break
+    return {"results": results, "count": len(results),
+            "ok": all(r["ok"] for r in results)}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -4835,6 +5055,14 @@ TOOLS = {
     "set_active_document": tool_set_active_document,
     "writer_replace_image": tool_writer_replace_image,
     "writer_repeat_heading_rows": tool_writer_repeat_heading_rows,
+    # inspection / navigation / export / batch
+    "writer_find": tool_writer_find,
+    "writer_list_tables": tool_writer_list_tables,
+    "writer_list_figures": tool_writer_list_figures,
+    "writer_set_document_defaults": tool_writer_set_document_defaults,
+    "writer_insert_tab_stops": tool_writer_insert_tab_stops,
+    "calc_export_range": tool_calc_export_range,
+    "batch": tool_batch,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -5070,7 +5298,7 @@ TOOL_DEFS = [
      "description": "Insert a page break at the end of the Writer document.",
      "inputSchema": _schema()},
     {"name": "writer_get_outline",
-     "description": "List the document's headings as an outline: [{level, text}, ...].",
+     "description": "List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs.",
      "inputSchema": _schema()},
     # --- writer comments & conditional sections ---
     {"name": "writer_add_comment",
@@ -5659,6 +5887,42 @@ TOOL_DEFS = [
      "inputSchema": _schema({"name": _STR, "index": _INT,
                              "rows": dict(_INT, description="how many header rows (default 1)"),
                              "repeat": dict(_BOOL, description="on (default) or off")})},
+    {"name": "writer_find",
+     "description": "Locate text WITHOUT changing it: returns each matching body paragraph's 0-based index, occurrence count, a snippet, and its style — so you can then target it by index (writer_set_paragraph_text, writer_format_paragraph, writer_delete_paragraphs, ...). Read-only companion to writer_find_replace.",
+     "inputSchema": _schema({"search": _STR, "match_case": _BOOL,
+                             "limit": dict(_INT, description="max matching paragraphs (default 100)")},
+                            ["search"])},
+    {"name": "writer_list_tables",
+     "description": "List every table with 0-based index, name, row/column counts, and a header-row preview — discovery for writer_edit_table / writer_sort_table / writer_convert_table / writer_table_formula.",
+     "inputSchema": _schema()},
+    {"name": "writer_list_figures",
+     "description": "List images/figures with name, size (mm), anchor type, and the anchoring paragraph's text (often the caption/context) — discovery for writer_replace_image / writer_set_image_layout.",
+     "inputSchema": _schema()},
+    {"name": "writer_set_document_defaults",
+     "description": "Set the document's base typography via the 'Standard' paragraph style: font_name and/or font_size, applied to Western + Complex (RTL/CTL) + Asian scripts so an Arabic base font actually takes effect document-wide.",
+     "inputSchema": _schema({"font_name": _STR, "font_size": _NUM})},
+    {"name": "writer_insert_tab_stops",
+     "description": "Set paragraph tab stops (positions_mm = list of mm) on matched paragraphs ('search') or a body-paragraph range (start/count, default all). align left/right/center/decimal; optional 'fill' char (e.g. '.' for dotted signature lines).",
+     "inputSchema": _schema({"positions_mm": {"type": "array", "items": _NUM,
+                                              "description": "tab-stop positions in mm"},
+                             "align": dict(_STR, enum=["left", "right", "center", "decimal"]),
+                             "fill": dict(_STR, description="fill character, e.g. '.'"),
+                             "search": _STR, "match_case": _BOOL,
+                             "start": _INT, "count": _INT},
+                            ["positions_mm"])},
+    {"name": "calc_export_range",
+     "description": "Export a cell 'range' (or the sheet's used range if omitted) to a CSV or JSON file at 'path'. format defaults to the path extension; CSV is UTF-8-BOM with an optional 'delimiter'.",
+     "inputSchema": _schema({"path": _STR, "range": _RANGE, "sheet": _SHEET,
+                             "format": dict(_STR, enum=["csv", "json"]),
+                             "delimiter": dict(_STR, description="CSV delimiter (default ',')")},
+                            ["path"])},
+    {"name": "batch",
+     "description": "Run several tool calls in one round-trip. 'operations' is a list of {tool, args}; returns each result/error in order. stop_on_error (default true) halts on the first failure. Cuts latency on long multi-step document builds.",
+     "inputSchema": _schema({"operations": {"type": "array",
+                                            "items": {"type": "object"},
+                                            "description": "list of {tool, args}"},
+                             "stop_on_error": _BOOL},
+                            ["operations"])},
 ]
 
 
@@ -5672,6 +5936,61 @@ def _result(mid, result):
 
 def _error(mid, code, message):
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": code, "message": message}}
+
+
+_SCOPE_NAMES = {"writer": "Writer", "calc": "Calc", "lo": "LibreOffice"}
+
+# Args worth showing the operator, in priority order (what the action targets).
+_SUMMARY_ARG_KEYS = ("action", "direction", "mode", "range", "cell", "sheet",
+                     "name", "title", "index", "start", "count", "to", "search",
+                     "language", "category", "style", "kind", "which", "field",
+                     "command", "path", "positions_mm")
+# Result fields worth showing (what the action produced/affected).
+_SUMMARY_RESULT_KEYS = ("appended", "cells_filled", "paragraphs",
+                        "paragraphs_matched", "table_cell_paragraphs", "deleted",
+                        "moved", "rows_sorted", "cleared", "applied", "changed",
+                        "rows", "columns", "count", "matches", "number",
+                        "exported", "table", "created", "inserted", "enabled",
+                        "header_rows", "scope", "page_style_set",
+                        "connected", "transport", "direction")
+
+
+def _summary_preview(value, limit=48):
+    s = str(value).replace("\n", " ").replace("\r", " ").strip()
+    return s if len(s) <= limit else s[:limit - 1] + "…"
+
+
+def _action_summary(name, args, payload):
+    """A one-line, human-readable narration of a tool call, so an operator
+    watching Claude's CLI/Desktop understands what happened in the document
+    without opening it. Purely derived from the tool name + salient args/result."""
+    parts = name.split("_")
+    scope = _SCOPE_NAMES.get(parts[0], "LibreOffice")
+    verb = " ".join(parts[1:] if parts[0] in _SCOPE_NAMES else parts) or name
+    arg_bits, res_bits = [], []
+    if isinstance(args, dict):
+        if args.get("text"):
+            arg_bits.append("“%s”" % _summary_preview(args["text"]))
+        for k in _SUMMARY_ARG_KEYS:
+            v = args.get(k)
+            if v not in (None, "") and not isinstance(v, dict):
+                if isinstance(v, list):
+                    v = "[%d]" % len(v)
+                arg_bits.append("%s=%s" % (k, _summary_preview(v, 40)))
+    if isinstance(payload, dict):
+        for k in _SUMMARY_RESULT_KEYS:
+            if k in payload:
+                v = payload[k]
+                if isinstance(v, list):
+                    v = len(v)
+                if not isinstance(v, (dict, list)):
+                    res_bits.append("%s=%s" % (k, _summary_preview(v, 40)))
+    line = "%s: %s" % (scope, verb)
+    if arg_bits:
+        line += "  ·  " + " ".join(arg_bits)
+    if res_bits:
+        line += "  →  " + " ".join(res_bits)
+    return line
 
 
 def handle(message):
@@ -5701,8 +6020,15 @@ def handle(message):
             return _error(mid, -32602, "Unknown tool: %s" % name)
         try:
             payload = _call_with_reconnect(func, args)
+            # Two blocks: a human-readable narration first (so an operator
+            # watching Claude's CLI/Desktop sees WHAT was done in the document),
+            # then the structured JSON (the model chains on content[-1]).
+            summary = _action_summary(name, args, payload)
             text = json.dumps(payload, ensure_ascii=False)
-            return _result(mid, {"content": [{"type": "text", "text": text}]})
+            return _result(mid, {"content": [
+                {"type": "text", "text": summary},
+                {"type": "text", "text": text},
+            ]})
         except Exception as exc:  # tool errors are reported in-band, not as JSON-RPC errors
             # UNO exceptions often have an EMPTY str() — always name the type
             msg = str(exc).strip() or "(no message)"

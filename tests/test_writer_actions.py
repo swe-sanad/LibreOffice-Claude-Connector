@@ -99,5 +99,28 @@ class TestDefaults(unittest.TestCase):
         self.assertTrue(512 <= wa.default_max_tokens("a" * 400) <= 8192)
 
 
+class TestNamedCommands(unittest.TestCase):
+    def test_summarize_sends_instruction_and_returns_reply(self):
+        c = _FakeClient("A short summary.")
+        out = wa.summarize_text(c, "A long passage of text to condense.")
+        self.assertEqual(out, "A short summary.")
+        self.assertIn("summarize", c.last_kwargs["prompt"].lower())
+
+    def test_translate_requires_language(self):
+        c = _FakeClient("...")
+        with self.assertRaises(wa.WriterActionError):
+            wa.translate_text(c, "hello", "")
+
+    def test_translate_puts_language_in_prompt(self):
+        c = _FakeClient("Bonjour")
+        out = wa.translate_text(c, "Hello", "French")
+        self.assertEqual(out, "Bonjour")
+        self.assertIn("French", c.last_kwargs["prompt"])
+
+    def test_fix_grammar_returns_cleaned(self):
+        c = _FakeClient("```\nCorrected text.\n```")
+        self.assertEqual(wa.fix_grammar_text(c, "corected txt"), "Corrected text.")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

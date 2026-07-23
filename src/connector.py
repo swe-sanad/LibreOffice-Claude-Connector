@@ -79,6 +79,16 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
         try:
             if command == "Transform":
                 self._do_transform()
+            elif command == "Summarize":
+                self._do_summarize()
+            elif command == "Translate":
+                self._do_translate()
+            elif command == "FixGrammar":
+                self._do_fix_grammar()
+            elif command == "GenerateFormula":
+                self._do_generate_formula()
+            elif command == "ExplainRange":
+                self._do_explain_range()
             elif command == "Settings":
                 self._do_settings()
         except uno_bridge.SelectionError as exc:
@@ -201,6 +211,165 @@ class ClaudeHandler(unohelper.Base, XDispatchProvider, XDispatch,
             uno_bridge.replace_writer_selection(doc, out)      # main thread
         else:
             uno_bridge.insert_writer_at_caret(doc, out)        # main thread
+
+    # -- additional commands (canned-instruction convenience wrappers) --- #
+    def _wrong_doc(self, msg="Open a Calc spreadsheet or a Writer document first."):
+        uno_ui.error_box(self.ctx, self._win(), msg)
+
+    def _writer_selection(self, need_msg):
+        """Return (text, has_selection) or (None, None) after showing an error."""
+        text, has_sel = uno_bridge.get_writer_selection(self._doc())
+        if not (text and text.strip()):
+            uno_ui.error_box(self.ctx, self._win(), need_msg)
+            return None, None
+        return text, has_sel
+
+    def _calc_grid(self):
+        """Return (cell_range, grid) or (None, None) after showing an error."""
+        win = self._win()
+        cell_range = uno_bridge.get_calc_selection_range(self._doc())
+        if cell_range is None:
+            uno_ui.error_box(self.ctx, win, "Select one or more cells first.")
+            return None, None
+        count = uno_bridge.range_cell_count(cell_range)
+        if count > calc_actions.MAX_CELLS:
+            uno_ui.error_box(self.ctx, win, "Selection is too large (%d cells; "
+                             "limit is %d)." % (count, calc_actions.MAX_CELLS))
+            return None, None
+        return cell_range, uno_bridge.read_range_grid(cell_range)
+
+    def _run(self, message, work):
+        """Run ``work`` on the worker thread behind the progress dialog; returns
+        its result, or the CANCELLED sentinel."""
+        return uno_ui.run_with_progress(self.ctx, self._win(), "Claude", message, work)
+
+    def _do_summarize(self):
+        doc = self._doc()
+        if uno_bridge.is_writer(doc):
+            text, _ = self._writer_selection("Select the text to summarize first.")
+            if text is None:
+                return
+            client, cfg = self._make_client()
+            out = self._run("Summarizing…", lambda: writer_actions.summarize_text(
+                client, text, max_tokens=cfg.get("max_tokens"),
+                temperature=cfg.get("temperature")))
+            if out is uno_ui.CANCELLED:
+                return
+            uno_bridge.insert_writer_at_caret(doc, "\n" + out)
+        elif uno_bridge.is_calc(doc):
+            _, grid = self._calc_grid()
+            if grid is None:
+                return
+            client, cfg = self._make_client()
+            out = self._run("Summarizing…", lambda: calc_actions.describe_grid(
+                client, grid, mode="summarize", temperature=cfg.get("temperature")))
+            if out is uno_ui.CANCELLED:
+                return
+            uno_ui.info_box(self.ctx, self._win(), out, "Summary")
+        else:
+            self._wrong_doc()
+
+    def _do_translate(self):
+        doc = self._doc()
+        if not (uno_bridge.is_writer(doc) or uno_bridge.is_calc(doc)):
+            self._wrong_doc()
+            return
+        language = uno_ui.prompt_instruction(
+            self.ctx, self._win(), "Translate", "Translate to which language?")
+        if not language:
+            return
+        if uno_bridge.is_writer(doc):
+            text, _ = self._writer_selection("Select the text to translate first.")
+            if text is None:
+                return
+            client, cfg = self._make_client()
+            out = self._run("Translating…", lambda: writer_actions.translate_text(
+                client, text, language, max_tokens=cfg.get("max_tokens"),
+                temperature=cfg.get("temperature")))
+            if out is uno_ui.CANCELLED:
+                return
+            uno_bridge.replace_writer_selection(doc, out)
+        else:
+            cell_range, grid = self._calc_grid()
+            if grid is None:
+                return
+            client, cfg = self._make_client()
+            new = self._run("Translating…", lambda: calc_actions.translate_range(
+                client, grid, language, max_tokens=cfg.get("max_tokens"),
+                temperature=cfg.get("temperature")))
+            if new is uno_ui.CANCELLED:
+                return
+            uno_bridge.write_range_grid(cell_range, new)
+
+    def _do_fix_grammar(self):
+        doc = self._doc()
+        if uno_bridge.is_writer(doc):
+            text, _ = self._writer_selection("Select the text to correct first.")
+            if text is None:
+                return
+            client, cfg = self._make_client()
+            out = self._run("Fixing grammar…", lambda: writer_actions.fix_grammar_text(
+                client, text, max_tokens=cfg.get("max_tokens"),
+                temperature=cfg.get("temperature")))
+            if out is uno_ui.CANCELLED:
+                return
+            uno_bridge.replace_writer_selection(doc, out)
+        elif uno_bridge.is_calc(doc):
+            cell_range, grid = self._calc_grid()
+            if grid is None:
+                return
+            client, cfg = self._make_client()
+            new = self._run("Fixing grammar…", lambda: calc_actions.fix_grammar_range(
+                client, grid, max_tokens=cfg.get("max_tokens"),
+                temperature=cfg.get("temperature")))
+            if new is uno_ui.CANCELLED:
+                return
+            uno_bridge.write_range_grid(cell_range, new)
+        else:
+            self._wrong_doc()
+
+    def _do_generate_formula(self):
+        doc = self._doc()
+        if not uno_bridge.is_calc(doc):
+            self._wrong_doc("Generate Formula works in Calc — open a spreadsheet "
+                            "and select the target cell.")
+            return
+        cell_range = uno_bridge.get_calc_selection_range(doc)
+        if cell_range is None:
+            uno_ui.error_box(self.ctx, self._win(),
+                             "Select the cell where the formula should go.")
+            return
+        desc = uno_ui.prompt_instruction(
+            self.ctx, self._win(), "Generate Formula",
+            "Describe the formula you want:")
+        if not desc:
+            return
+        try:
+            sample = uno_bridge.read_range_grid(cell_range)
+        except Exception:
+            sample = None
+        client, cfg = self._make_client()
+        formula = self._run("Generating formula…", lambda: calc_actions.generate_formula(
+            client, desc, sample=sample, temperature=cfg.get("temperature")))
+        if formula is uno_ui.CANCELLED:
+            return
+        cell_range.getCellByPosition(0, 0).setFormula(formula)   # main thread
+
+    def _do_explain_range(self):
+        doc = self._doc()
+        if not uno_bridge.is_calc(doc):
+            self._wrong_doc("Explain Range works in Calc — open a spreadsheet and "
+                            "select a range.")
+            return
+        _, grid = self._calc_grid()
+        if grid is None:
+            return
+        client, cfg = self._make_client()
+        out = self._run("Explaining…", lambda: calc_actions.describe_grid(
+            client, grid, mode="explain", temperature=cfg.get("temperature")))
+        if out is uno_ui.CANCELLED:
+            return
+        uno_ui.info_box(self.ctx, self._win(), out, "Explanation")
 
     def _do_settings(self):
         win = self._win()
