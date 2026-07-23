@@ -9,9 +9,9 @@ human (you) can do.
 | Field | Answer |
 |---|---|
 | Extension name | LibreOffice Connector |
-| Bundle (the file the form asks you to UPLOAD) | local: `E:\SWE-Pioneers\LibreOffice-Claude-Connector\dist\libreoffice-connector-0.7.0.mcpb` — also on the release: https://github.com/swe-sanad/LibreOffice-Claude-Connector/releases/latest |
-| One-line description | Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 61 tools, auto-launches LibreOffice. |
-| Long description | Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 61 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. Requires a local LibreOffice installation — the server runs under LibreOffice's own bundled Python, so there are no other dependencies and no telemetry. |
+| Bundle (the file the form asks you to UPLOAD) | local: `E:\SWE-Pioneers\LibreOffice-Claude-Connector\dist\libreoffice-connector-0.9.0.mcpb` — also on the release: https://github.com/swe-sanad/LibreOffice-Claude-Connector/releases/latest |
+| One-line description | Drive LibreOffice from Claude: read/write Calc sheets, run macros, take window screenshots — 161 tools, auto-launches LibreOffice. |
+| Long description | Connects Claude to a running (or auto-launched) LibreOffice via the UNO API. 161 tools: document lifecycle, Calc data/formulas/formatting/charts/validation, Writer text and tables, drawing shapes, embedded Basic macros (run/inspect/replace), saved-file XML inspection, real window screenshots, and a raw UNO escape hatch. Requires a local LibreOffice installation — the server runs under LibreOffice's own bundled Python, so there are no other dependencies and no telemetry. |
 | Category | Productivity |
 | Platforms | Windows (full), macOS/Linux (all tools except `lo_screenshot`) |
 | Author / contact | Sanad Arousi · sanad.arousi@gmail.com |

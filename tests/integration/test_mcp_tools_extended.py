@@ -200,8 +200,9 @@ def check_writer(tmpdir):
     server.tool_writer_append_text({"text": "More text\nSecond paragraph."})
 
     outline = server.tool_writer_get_outline({})
-    _assert(outline["outline"] == [{"level": 1, "text": "Report"},
-                                   {"level": 2, "text": "Details"}], outline)
+    pairs = [(h["level"], h["text"]) for h in outline["outline"]]
+    _assert(pairs == [(1, "Report"), (2, "Details")], outline)
+    _assert(all("index" in h and "style" in h for h in outline["outline"]), outline)
     print("PASS: writer_insert_heading + writer_get_outline")
 
     hits = server.tool_writer_find_replace({"search": "beta", "replace": "BETA"})
@@ -657,6 +658,92 @@ def check_doc_activation_tools(tmpdir):
     server.tool_close_document({})
 
 
+def check_inspection_tools(tmpdir):
+    """writer_find, writer_get_outline (levels + index), writer_list_tables,
+    writer_list_figures, writer_set_document_defaults, writer_insert_tab_stops,
+    calc_export_range, batch."""
+    server.tool_create_document({"type": "writer"})
+    doc = server._current_doc()
+    server.tool_writer_insert_heading({"text": "Chapter One", "level": 1})
+    server.tool_writer_append_text({"text": "alpha beta gamma target here"})
+    server.tool_writer_insert_heading({"text": "Sub A", "level": 2})
+    server.tool_writer_append_text({"text": "more content"})
+
+    f = server.tool_writer_find({"search": "target"})
+    _assert(f["paragraphs_matched"] == 1, f)
+    _assert("target" in f["matches"][0]["snippet"], f)
+    print("PASS: writer_find (locate by paragraph)")
+
+    o = server.tool_writer_get_outline({})["outline"]
+    _assert(any(h["level"] == 1 and h["text"] == "Chapter One" and "index" in h
+                for h in o), o)
+    _assert(any(h["level"] == 2 and h["text"] == "Sub A" for h in o), o)
+    print("PASS: writer_get_outline (levels + index)")
+
+    server.tool_writer_insert_table(
+        {"rows": 2, "columns": 3, "data": [["a", "b", "c"], [1, 2, 3]]})
+    lt = server.tool_writer_list_tables({})
+    _assert(lt["count"] == 1 and lt["tables"][0]["rows"] == 2
+            and lt["tables"][0]["columns"] == 3, lt)
+    _assert(lt["tables"][0]["header"][:3] == ["a", "b", "c"], lt)
+    print("PASS: writer_list_tables")
+
+    png = os.path.join(tmpdir, "fig.png")
+    with open(png, "wb") as fh:
+        fh.write(_PNG)
+    server.tool_writer_insert_image({"path": png, "width_mm": 10, "height_mm": 10})
+    lf = server.tool_writer_list_figures({})
+    _assert(lf["count"] >= 1 and "name" in lf["figures"][0], lf)
+    print("PASS: writer_list_figures")
+
+    server.tool_writer_set_document_defaults({"font_name": "Amiri", "font_size": 13})
+    std = doc.getStyleFamilies().getByName("ParagraphStyles").getByName("Standard")
+    _assert(std.CharFontName == "Amiri" and std.CharFontNameComplex == "Amiri"
+            and std.CharHeight == 13.0, "document defaults not applied")
+    print("PASS: writer_set_document_defaults (incl. Complex/RTL)")
+
+    ts = server.tool_writer_insert_tab_stops(
+        {"positions_mm": [40, 90], "align": "right", "start": 1, "count": 1})
+    _assert(ts["tab_stops"] == 2 and ts["paragraphs"] == 1, ts)
+    paras = []
+    en = doc.getText().createEnumeration()
+    while en.hasMoreElements():
+        p = en.nextElement()
+        if p.supportsService("com.sun.star.text.Paragraph"):
+            paras.append(p)
+    _assert(len(paras[1].ParaTabStops) == 2, "tab stops not applied to paragraph 1")
+    print("PASS: writer_insert_tab_stops")
+    server.tool_close_document({})
+
+    # Calc: export range (csv + json) and the batch runner.
+    server.tool_create_document({"type": "calc"})
+    server.tool_calc_write_range(
+        {"range": "A1:B2", "cells": [["name", "qty"], ["nails", 10]]})
+    csvp = os.path.join(tmpdir, "out.csv")
+    jsonp = os.path.join(tmpdir, "out.json")
+    server.tool_calc_export_range({"range": "A1:B2", "path": csvp, "format": "csv"})
+    with open(csvp, encoding="utf-8-sig") as fh:
+        csvtext = fh.read()
+    _assert("name" in csvtext and "nails" in csvtext, "csv: %r" % csvtext[:80])
+    server.tool_calc_export_range({"range": "A1:B2", "path": jsonp, "format": "json"})
+    import json as _json
+    with open(jsonp, encoding="utf-8") as fh:
+        jgrid = _json.load(fh)
+    _assert(jgrid[0][0] == "name" and jgrid[1][1] == 10.0, "json: %r" % jgrid)
+    print("PASS: calc_export_range (csv + json)")
+
+    b = server.tool_batch({"operations": [
+        {"tool": "calc_write_range", "args": {"range": "D1:D1", "cells": [["x"]]}},
+        {"tool": "calc_read_range", "args": {"range": "D1:D1"}},
+    ]})
+    _assert(b["ok"] is True and b["count"] == 2, b)
+    _assert(b["results"][1]["result"]["cells"] == [["x"]], b)
+    b2 = server.tool_batch({"operations": [{"tool": "nope", "args": {}}]})
+    _assert(b2["ok"] is False and b2["results"][0]["ok"] is False, b2)
+    print("PASS: batch (run + error surfaced)")
+    server.tool_close_document({})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -675,7 +762,9 @@ def main():
     check_niche_tools(tmpdir)
     print()
     check_doc_activation_tools(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (154-tool server drives real "
+    print()
+    check_inspection_tools(tmpdir)
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (161-tool server drives real "
           "LibreOffice)")
     return 0
 

@@ -12,11 +12,11 @@ produces something observable before the next adds complexity.*
 | 2 — Calc rewrite-selection | ✅ done | `calc_actions.py` + `uno_bridge.py`; UNO integration test passes on real LO |
 | 3 — Writer rewrite/generate | ✅ done | `writer_actions.py` + Writer UNO helpers; integration test passes |
 | 4 — Package as `.oxt` | ✅ done | `ext/` + `connector.py` + `scripts/build_oxt.py`; installs & dispatch RESOLVES in real LO |
-| 5 — Config & DPAPI key | ✅ done | `config.py` + `keystore.py`; 65 offline tests incl. real DPAPI round-trip |
-| 6 — Feature depth & polish | ⏳ next | sidebar panel, streaming, more commands, style-preserving replace |
+| 5 — Config & DPAPI key | ✅ done | `config.py` + `keystore.py`; 83 offline tests incl. real DPAPI round-trip |
+| 6 — Feature depth & polish | ⏳ next | Summarize/Translate/Fix Grammar/Generate Formula/Explain Range menu commands ✅ done; sidebar panel, streaming, style-preserving replace still open |
 | 7 — Distribution | ⏳ next | publish to extensions.libreoffice.org, update feed |
 
-**Verified so far:** 65 offline unit tests pass on bundled Python 3.10.17; Calc + Writer
+**Verified so far:** 83 offline unit tests pass on bundled Python 3.10.17; Calc + Writer
 document edits pass against real headless LibreOffice; the built `.oxt` installs and its
 ProtocolHandler resolves in LibreOffice 25.2.3.2. Not yet exercised: a live end-to-end
 Claude call from inside LibreOffice (needs an `ANTHROPIC_API_KEY`) and the interactive
@@ -87,8 +87,10 @@ LibreOffice (Calc / Writer)  ── in-process ──►  Python .oxt extension
 - **Exit:** no key in source; user configures model + key in-app.
 
 ### Phase 6 — Feature depth & polish (ongoing)
-- More commands: summarize, translate, fix grammar, generate formula, explain range.
-- Sidebar chat panel (`Sidebar.xcu` + `XUIElementFactory`); streaming for long generations;
+- ✅ Done: Summarize, Translate, Fix Grammar & Spelling (Calc + Writer), Generate
+  Formula, Explain Range (Calc only) — shipped as Claude-menu commands reusing the
+  read → Claude → write-back path.
+- Still open: sidebar chat panel (`Sidebar.xcu` + `XUIElementFactory`); streaming for long generations;
   style-preserving "surgical" replace; progress/cancel UX; token/cost display.
 
 ### Phase 7 — Distribution

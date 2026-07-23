@@ -37,7 +37,8 @@ def main():
     # 2) reset drops the cached connection
     srv._state.update(ctx="x", smgr="y", desktop="z")
     srv._reset_connection()
-    assert srv._state == {"ctx": None, "smgr": None, "desktop": None}
+    assert srv._state == {"ctx": None, "smgr": None, "desktop": None,
+                          "transport": None}
 
     # 3) a disposed bridge is reset + retried ONCE, and the retry succeeds
     calls = {"n": 0}
@@ -52,7 +53,8 @@ def main():
     srv.TOOLS["_probe_flaky"] = flaky
     try:
         resp = _call("_probe_flaky")
-        payload = json.loads(resp["result"]["content"][0]["text"])
+        # content[0] is the human summary; the JSON payload is content[-1].
+        payload = json.loads(resp["result"]["content"][-1]["text"])
         assert calls["n"] == 2, "expected one retry, got %d calls" % calls["n"]
         assert payload["reset_before_retry"] is True, "must reset the dead conn before retrying"
         assert not resp["result"].get("isError"), "retry should succeed"

@@ -150,5 +150,42 @@ class TestDefaults(unittest.TestCase):
         self.assertTrue(512 <= ca.default_max_tokens(10, 5) <= 8192)
 
 
+class TestNamedCommands(unittest.TestCase):
+    def test_translate_range_preserves_shape_and_language(self):
+        c = _FakeClient('{"cells": [["bonjour", "monde"]]}')
+        out = ca.translate_range(c, [["hello", "world"]], "French")
+        self.assertEqual(out, [["bonjour", "monde"]])
+        self.assertIn("French", c.last_kwargs["prompt"])
+
+    def test_translate_range_requires_language(self):
+        with self.assertRaises(ca.TransformError):
+            ca.translate_range(_FakeClient("{}"), [["x"]], "  ")
+
+    def test_fix_grammar_range(self):
+        c = _FakeClient('{"cells": [["Corrected"]]}')
+        self.assertEqual(ca.fix_grammar_range(c, [["corected"]]), [["Corrected"]])
+
+    def test_generate_formula_strips_fences_and_prefixes_equals(self):
+        c = _FakeClient("```\nSUM(A1:A10)\n```")
+        self.assertEqual(ca.generate_formula(c, "total of A1:A10"), "=SUM(A1:A10)")
+
+    def test_generate_formula_keeps_leading_equals(self):
+        c = _FakeClient("=AVERAGE(B1:B5)")
+        self.assertEqual(ca.generate_formula(c, "avg"), "=AVERAGE(B1:B5)")
+
+    def test_generate_formula_requires_description(self):
+        with self.assertRaises(ca.TransformError):
+            ca.generate_formula(_FakeClient("=1"), "  ")
+
+    def test_describe_grid_returns_prose(self):
+        c = _FakeClient("This is a sales table by month.")
+        out = ca.describe_grid(c, [["Jan", 100], ["Feb", 120]], mode="explain")
+        self.assertEqual(out, "This is a sales table by month.")
+
+    def test_describe_grid_empty_raises(self):
+        with self.assertRaises(ca.TransformError):
+            ca.describe_grid(_FakeClient("x"), [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

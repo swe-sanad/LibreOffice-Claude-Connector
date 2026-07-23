@@ -55,6 +55,66 @@
               <value>com.sun.star.sheet.SpreadsheetDocument,com.sun.star.text.TextDocument</value>
             </prop>
           </node>
+          <node oor:name="mSummarize" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
+              <value>com.swepioneers.claudeconnector:Summarize</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value xml:lang="en-US">Summarize Selection</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+            <prop oor:name="Context" oor:type="xs:string">
+              <value>com.sun.star.sheet.SpreadsheetDocument,com.sun.star.text.TextDocument</value>
+            </prop>
+          </node>
+          <node oor:name="mTranslate" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
+              <value>com.swepioneers.claudeconnector:Translate</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value xml:lang="en-US">Translate Selection…</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+            <prop oor:name="Context" oor:type="xs:string">
+              <value>com.sun.star.sheet.SpreadsheetDocument,com.sun.star.text.TextDocument</value>
+            </prop>
+          </node>
+          <node oor:name="mFixGrammar" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
+              <value>com.swepioneers.claudeconnector:FixGrammar</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value xml:lang="en-US">Fix Grammar &amp; Spelling</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+            <prop oor:name="Context" oor:type="xs:string">
+              <value>com.sun.star.sheet.SpreadsheetDocument,com.sun.star.text.TextDocument</value>
+            </prop>
+          </node>
+          <node oor:name="mGenFormula" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
+              <value>com.swepioneers.claudeconnector:GenerateFormula</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value xml:lang="en-US">Generate Formula… (Calc)</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+            <prop oor:name="Context" oor:type="xs:string">
+              <value>com.sun.star.sheet.SpreadsheetDocument</value>
+            </prop>
+          </node>
+          <node oor:name="mExplainRange" oor:op="replace">
+            <prop oor:name="URL" oor:type="xs:string">
+              <value>com.swepioneers.claudeconnector:ExplainRange</value>
+            </prop>
+            <prop oor:name="Title" oor:type="xs:string">
+              <value xml:lang="en-US">Explain Range (Calc)</value>
+            </prop>
+            <prop oor:name="Target" oor:type="xs:string"><value>_self</value></prop>
+            <prop oor:name="Context" oor:type="xs:string">
+              <value>com.sun.star.sheet.SpreadsheetDocument</value>
+            </prop>
+          </node>
           <node oor:name="m2" oor:op="replace">
             <prop oor:name="URL" oor:type="xs:string">
               <value>private:separator</value>

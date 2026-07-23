@@ -210,13 +210,17 @@ ClaudeError
 
 [src/connector.py](../src/connector.py) is the **single registered UNO component** in
 the packaged extension: a `com.sun.star.frame.ProtocolHandler` implementing
-`XDispatchProvider` + `XDispatch` + `XInitialization` + `XServiceInfo`. It owns two
-command URLs, wired from the menu/toolbar via [ext/Addons.xcu](../ext/Addons.xcu) and
-registered against the protocol in [ext/ProtocolHandler.xcu](../ext/ProtocolHandler.xcu):
+`XDispatchProvider` + `XDispatch` + `XInitialization` + `XServiceInfo`. It owns the
+command URLs wired from the "Claude" menu/toolbar via [ext/Addons.xcu](../ext/Addons.xcu)
+and registered against the protocol in [ext/ProtocolHandler.xcu](../ext/ProtocolHandler.xcu):
 
 - `com.swepioneers.claudeconnector:Transform` — transform the Calc selection, or
   rewrite/generate the Writer selection/caret.
 - `com.swepioneers.claudeconnector:Settings` — open the settings dialog.
+- Five additional commands reusing the same read → Claude → write-back path:
+  Summarize, Translate (prompts for a target language), and Fix Grammar & Spelling
+  (Calc + Writer), plus Generate Formula and Explain Range (Calc only) — backed by
+  new pure/testable action functions in `calc_actions`/`writer_actions`.
 
 `queryDispatch` claims any URL under its own protocol; `dispatch()` looks at the
 document type (`uno_bridge.is_calc`/`is_writer`) and routes to the matching Calc or
