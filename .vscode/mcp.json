@@ -1,0 +1,15 @@
+{
+	"servers": {
+		"libreoffice": {
+			"type": "stdio",
+			"command": "node",
+			"args": [
+				"${workspaceFolder}/mcpb/index.js"
+			],
+			"env": {
+				"LO_UNO_PORT": "2002"
+			}
+		},
+	},
+	"inputs": []
+}
