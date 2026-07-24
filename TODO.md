@@ -1,28 +1,85 @@
 # TODO
 
-## Upstream repo borrow backlog
+## Upstream borrow backlog — triaged against our current surface
 
-### High priority
+GitHub Copilot enumerated the tool surfaces of three sibling LibreOffice-MCP
+projects (sandraschi, patrup, waterpistolai). Triaged below against what this
+repo already ships — **161 tools** (Writer 62 / Calc 67 / cross-app 32). Most of
+what was enumerated we already have; the genuine gaps are called out separately.
 
-- [ ] Add a portmanteau-style dispatcher in [mcp/libreoffice_mcp.py](mcp/libreoffice_mcp.py) so agents can call a single entrypoint with operation-specific arguments.
-- [ ] Add bridge/proxy support for extension-hosted LibreOffice MCP tools so this repo can talk to a local in-LO bridge as well as its own server.
-- [ ] Add a lightweight local HTTP bridge for non-stdio integrations and easier desktop/web client usage.
-- [ ] Add document conversion, merge, and batch-pack helpers that complement the existing live Calc/Writer editing tools.
+### Already covered — no action
 
-### Medium priority
+- **patrup/mcp-libre** (whole set): `create_document_live`, `insert_text_live`,
+  `format_text_live`, `save_document_live`, `export_document_live`,
+  `get_document_info_live`, `get_text_content_live`, `list_open_documents` →
+  already ours as `create_document`, `writer_append_text`, `writer_format_text`,
+  `save_document`, `export_document`, `get_document_properties`,
+  `writer_get_text`, `list_documents`. Nothing to borrow.
+- **waterpistolai Calc/Writer core**: `open/new/save/close_document`,
+  `get_sheet_names`, `get/set_cell_value`, `create_new_sheet`,
+  `create_pivot_table`, `sort_range`, `create_chart`, `conditional_format`,
+  `format_cell_range`, `apply_style`, `insert_text`, `insert_form_control`,
+  `run_macro` → all shipped (`calc_list_sheets`, `calc_read/write_range`,
+  `calc_add_sheet`, `calc_create_pivot`, `calc_sort_range`, `calc_create_chart`,
+  `calc_add_conditional_format`, `calc_format_range`, `writer_apply_style`, …).
+- **sandraschi**: `document_info` → `get_document_properties`, `status` →
+  `lo_status`, `help` → MCP `tools/list`, `run_macro` → `run_macro` /
+  `basic_module`. Covered.
+- "Richer Calc helpers (formatting / conditional formatting / charts / pivots)" —
+  already shipped in full.
 
-- [ ] Evaluate an OooDev-style abstraction layer for future helper code so we can reduce repetitive UNO boilerplate.
-- [ ] Add richer Calc helpers for formatting, conditional formatting, charts, and pivot-style workflows.
-- [ ] Improve packaging/distribution ergonomics for MCPB and VS Code/Copilot integration.
+### Genuine gaps — opportunities (prioritized)
 
-### Comparison findings from upstream repos
+> Gated on real cross-platform (macOS/Linux) + cross-agent testing — build from
+> feedback, not speculation. Regression-test each before merging.
 
-- [ ] From sandraschi/libreoffice-mcp: capture the operation-dispatch pattern around status, convert, convert_batch, document_info, merge, list_templates, batch_pack, pdf_merge, watch_start/watch_stop/watch_status, live_write/live_type, run_macro/run_python_macro/list_macros, bridge_discover/bridge_call, read_spreadsheet, and help.
-- [ ] From patrup/mcp-libre: capture the lightweight live-extension tool set for create_document_live, insert_text_live, get_document_info_live, format_text_live, save_document_live, export_document_live, get_text_content_live, and list_open_documents.
-- [ ] From waterpistolai/libreoffice-mcp: capture the richer Calc/Writer/Base helper set for open_document, new_document, save_document, close_document, get_sheet_names, get_cell_value, set_cell_value, create_new_sheet, create_pivot_table, sort_range, calculate_statistics, run_query, list_tables, create_table, insert_data, create_form, create_report, insert_text, apply_style, run_macro, insert_form_control, format_cell_range, conditional_format, and create_chart.
-- [ ] Adopt a hybrid approach: keep our current live UNO server as the core, but borrow the best ideas from each upstream repo instead of copying one wholesale.
+**P1 — new capability, clear value**
+- [ ] **LibreOffice Base (database) support** — a whole app we don't cover:
+  `run_query`, `list_tables`, `create_table`, `insert_data`, `create_report`,
+  `create_form` (waterpistolai). Scope a `base_*` tool family.
+- [ ] **Headless conversion** — `convert` / `convert_batch` (any→any via a
+  headless soffice/UNO filter), beyond today's save/export to a few formats.
+- [ ] **Merge** — document merge + `pdf_merge` (+ `batch_pack`) (sandraschi).
 
-### Validation
+**P2 — useful**
+- [ ] **Templates** — `list_templates` + create-from-template.
+- [ ] **Python macros** — `run_python_macro` + a general `list_macros`
+  (we have Basic only, via `run_macro` / `basic_module`).
+- [ ] **Impress / Draw** — the other unsupported apps (no upstream covers them
+  either); a future frontier once Base lands.
+- [ ] **Optional dispatcher facade (tool-count relief)** — 161 tools exceeds some
+  clients' tool caps; an OPTIONAL portmanteau tool that fans out to the existing
+  tools would help those agents WITHOUT replacing the discrete tools. Confirm the
+  real per-client limits first (see `docs/CROSS-AGENT.md`).
 
-- [ ] Add regression tests for each new capability before merging.
+**P3 — convenience / niche**
+- [ ] `calculate_statistics` — one-shot descriptive stats on a range.
+- [ ] `read_spreadsheet` — dump all sheets at once (today: per-sheet
+  `calc_get_used_range`).
+- [ ] `watch_start/stop/status` (document/file watching) and `live_type`
+  (simulated typing for demos) — novelty, low value.
+- [ ] `bridge_discover/bridge_call` — talk to other in-LO MCP bridges; our
+  pipe-first `_connect` already reaches an extension-hosted office, so mostly moot.
+
+### Already tracked elsewhere (dedupe)
+
+- **HTTP/SSE transport**, **per-client config recipes**, and a
+  **layout-independent launcher** → see `docs/CROSS-AGENT.md` "Opportunities".
+- **Packaging / distribution** (MCPB build, `.vscode/mcp.json` for Copilot) —
+  largely done; remainder is the per-client recipe matrix above.
+
+### Not planned
+
+- **OooDev-style abstraction layer** — we already have targeted helpers
+  (`_pv`, `_any_seq`, `_resolve_sheet`, `_uno_enum/_uno_struct`, …). A heavy
+  abstraction layer is boilerplate we don't need; revisit only if UNO repetition
+  becomes a real maintenance cost.
+- **Replacing discrete tools with a single dispatcher** — discrete tools give
+  clearer per-tool schemas; keep them. (See the optional facade under P2 for the
+  tool-count concern.)
+
+### Validation (applies to every item above)
+
+- [ ] Add regression tests (extend `tests/integration/test_mcp_tools_extended.py`)
+  for each new capability before merging.
 - [ ] Re-run the live Calc/Writer MCP verification flow after implementation.
