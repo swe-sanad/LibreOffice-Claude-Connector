@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
+All **170 tools** of the `libreoffice` MCP server (v0.9.2), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -249,3 +249,17 @@ All **161 tools** of the `libreoffice` MCP server (v0.9.0), generated from
 | `writer_insert_tab_stops` | Set paragraph tab stops (positions_mm = list of mm) on matched paragraphs ('search') or a body-paragraph range (start/count, default all). align left/right/center/decimal; optional 'fill' char (e.g. '.' for dotted signature lines). |
 | `calc_export_range` | Export a cell 'range' (or the sheet's used range if omitted) to a CSV or JSON file at 'path'. format defaults to the path extension; CSV is UTF-8-BOM with an optional 'delimiter'. |
 | `batch` | Run several tool calls in one round-trip. 'operations' is a list of {tool, args}; returns each result/error in order. stop_on_error (default true) halts on the first failure. Cuts latency on long multi-step document builds. |
+
+## Upstream-parity: document ops, macros, dispatcher, calc convenience
+
+| Tool | Description |
+|---|---|
+| `convert` | Headlessly convert document(s) to another format via LibreOffice filters (docx/xlsx->pdf, odt->docx, ...). Give 'path' (one) or 'paths' (many) + target 'to'; outputs land beside each source or in 'output_dir'. Each file is loaded hidden, stored, and closed — the active document is untouched. |
+| `merge` | Merge several Writer/text documents into one, in order, with a page break between them; save to 'output'. Text documents only (Calc/PDF merge out of scope). |
+| `list_templates` | List document templates under LibreOffice's configured Template paths: [{name, path}] plus the directories scanned. |
+| `create_from_template` | Create a new untitled document from a template file (.ott/.ots/...). |
+| `run_python_macro` | Invoke a PYTHON macro via the script provider (complements run_macro's Basic). 'name' is a full vnd.sun.star.script: URI, or 'file.py$function' resolved at 'location' (user/share/document; default user). Returns the macro's return value. |
+| `list_macros` | Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable). |
+| `dispatch` | Portmanteau facade for MCP clients with a tool-count cap: run ANY of this server's tools by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the catalog of names + one-line usage. Fans out to the same handlers as the discrete tools; does not replace them. |
+| `calc_statistics` | Descriptive statistics over the NUMERIC cells in a Calc range: count, sum, mean, min, max, median, and population stdev. Text/empty cells ignored. |
+| `read_spreadsheet` | Read every sheet's used range at once: {sheet_name: 2-D values} — a whole workbook in one call instead of one calc_read_range per sheet. |

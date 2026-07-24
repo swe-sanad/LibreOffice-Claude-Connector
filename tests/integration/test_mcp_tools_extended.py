@@ -979,6 +979,119 @@ def check_fieldtest_fixes(tmpdir):
     print("PASS: close_document (targets the named doc, not GUI focus)")
 
 
+def check_upstream_parity(tmpdir):
+    """The tools pruned from sibling LibreOffice-MCP projects: convert, merge,
+    dispatch, list/create-from templates, python macros, calc_statistics,
+    read_spreadsheet."""
+    def _p(name):
+        return os.path.join(tmpdir, name)
+
+    # --- convert (single + batch + error) ---
+    server.tool_create_document({"type": "writer"})
+    server.tool_writer_append_text({"text": "Convert me to PDF."})
+    src = _p("conv_src.odt")
+    server.tool_save_document({"path": src, "format": "odt"})
+    server.tool_close_document({"save": False})
+    r = server.tool_convert({"path": src, "to": "pdf"})
+    _assert(r["count"] == 1 and os.path.getsize(r["converted"][0]["output"]) > 0,
+            "convert->pdf produced nothing: %r" % r)
+    _assert(r["converted"][0]["output"].lower().endswith(".pdf"), r)
+    r2 = server.tool_convert({"path": src, "to": "docx", "output_dir": tmpdir})
+    _assert(os.path.getsize(r2["converted"][0]["output"]) > 0, "convert->docx")
+    raised = False
+    try:
+        server.tool_convert({"path": src, "to": "nosuchfmt"})
+    except RuntimeError:
+        raised = True
+    _assert(raised, "convert to a bogus format should raise")
+    print("PASS: convert (pdf + docx + bad-format error)")
+
+    # --- merge two text docs ---
+    a, b = _p("merge_a.odt"), _p("merge_b.odt")
+    server.tool_create_document({"type": "writer"})
+    server.tool_writer_append_text({"text": "AlphaDoc"})
+    server.tool_save_document({"path": a, "format": "odt"})
+    server.tool_close_document({"save": False})
+    server.tool_create_document({"type": "writer"})
+    server.tool_writer_append_text({"text": "BravoDoc"})
+    server.tool_save_document({"path": b, "format": "odt"})
+    server.tool_close_document({"save": False})
+    merged = _p("merged.odt")
+    m = server.tool_merge({"paths": [a, b], "output": merged})
+    _assert(m["sources"] == 2 and os.path.getsize(merged) > 0, "merge output")
+    server.tool_open_document({"path": merged})
+    txt = server.tool_writer_get_text({})["text"]
+    _assert("AlphaDoc" in txt and "BravoDoc" in txt, "merge lost content: %r" % txt)
+    server.tool_close_document({"save": False})
+    print("PASS: merge (two text docs, both bodies present)")
+
+    # --- create_from_template (AsTemplate on a saved doc) ---
+    tmpl = _p("tmpl.odt")
+    server.tool_create_document({"type": "writer"})
+    server.tool_writer_append_text({"text": "TemplateBody"})
+    server.tool_save_document({"path": tmpl, "format": "odt"})
+    server.tool_close_document({"save": False})
+    ct = server.tool_create_from_template({"path": tmpl})
+    _assert(ct["created"]["url"] == "", "template instance should be untitled: %r" % ct)
+    _assert("TemplateBody" in server.tool_writer_get_text({})["text"],
+            "template body not carried into the new doc")
+    server.tool_close_document({"save": False})
+    print("PASS: create_from_template (untitled copy carries body)")
+
+    # --- list_templates (structure, may be empty on a fresh profile) ---
+    lt = server.tool_list_templates({})
+    _assert(isinstance(lt.get("templates"), list) and isinstance(lt.get("dirs"), list),
+            "list_templates shape: %r" % lt)
+    print("PASS: list_templates (%d found)" % lt["count"])
+
+    # --- calc_statistics + read_spreadsheet + dispatch (on a calc doc) ---
+    server.tool_create_document({"type": "calc"})
+    server.tool_calc_write_range({"range": "A1:A5",
+                                  "cells": [[2], [4], [6], [8], [10]]})
+    st = server.tool_calc_statistics({"range": "A1:A5"})
+    _assert(st == {**st, "count": 5, "sum": 30.0, "mean": 6.0, "min": 2.0,
+                   "max": 10.0, "median": 6.0} and abs(st["stdev"] - 8 ** 0.5) < 1e-9,
+            "calc_statistics wrong: %r" % st)
+    print("PASS: calc_statistics")
+
+    server.tool_calc_add_sheet({"name": "Two"})
+    server.tool_calc_write_range({"sheet": "Two", "range": "A1:B1",
+                                  "cells": [["x", "y"]]})
+    rs = server.tool_read_spreadsheet({})
+    _assert("Two" in rs["sheets"] and rs["sheets"]["Two"][0] == ["x", "y"],
+            "read_spreadsheet missing sheet data: %r" % rs["sheets"].get("Two"))
+    print("PASS: read_spreadsheet (all sheets)")
+
+    # dispatch: catalog, fan-out, and error
+    cat = server.tool_dispatch({"tool": "list"})
+    _assert(len(cat["tools"]) == len(server.TOOL_DEFS), "dispatch catalog size")
+    fan = server.tool_dispatch({"tool": "calc_list_sheets", "args": {}})
+    _assert("Two" in fan["sheets"], "dispatch fan-out failed: %r" % fan)
+    raised = False
+    try:
+        server.tool_dispatch({"tool": "no_such_tool"})
+    except RuntimeError:
+        raised = True
+    _assert(raised, "dispatch to unknown tool should raise")
+    print("PASS: dispatch (catalog + fan-out + unknown-tool error)")
+
+    # --- list_macros sees a document Basic module; run_python_macro wiring ---
+    server.tool_basic_module({"action": "set", "library": "Standard",
+                              "module": "ParityMod",
+                              "source": "Sub Noop\nEnd Sub\n"})
+    lm = server.tool_list_macros({})
+    _assert("ParityMod" in lm.get("basic", {}).get("Standard", []),
+            "list_macros missed the doc Basic module: %r" % lm.get("basic"))
+    raised = False
+    try:
+        server.tool_run_python_macro({"name": "definitely_missing.py$nope"})
+    except Exception:
+        raised = True
+    _assert(raised, "run_python_macro should raise on a missing script")
+    print("PASS: list_macros (doc Basic) + run_python_macro (error wiring)")
+    server.tool_close_document({"save": False})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -1001,7 +1114,9 @@ def main():
     check_inspection_tools(tmpdir)
     print()
     check_fieldtest_fixes(tmpdir)
-    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (161-tool server drives real "
+    print()
+    check_upstream_parity(tmpdir)
+    print("\nALL EXTENDED MCP TOOL CHECKS PASSED (170-tool server drives real "
           "LibreOffice)")
     return 0
 

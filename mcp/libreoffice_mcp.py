@@ -27,7 +27,7 @@ import os
 import sys
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.9.1"
+SERVER_VERSION = "0.9.2"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 _SRC = os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "src")
@@ -1950,6 +1950,258 @@ def tool_run_macro(args):
     except Exception:
         ret = str(ret)
     return {"invoked": uri, "returned": ret}
+
+
+# --------------------------------------------------------------------------- #
+# Tools borrowed/pruned from sibling LibreOffice-MCP projects (see TODO.md).
+# All fit the existing Writer/Calc/cross-app model; new-app stuff (Base, Impress,
+# Draw) is intentionally NOT here — see docs/UPSTREAM-PARITY.md.
+# --------------------------------------------------------------------------- #
+
+def tool_run_python_macro(args):
+    """Invoke a PYTHON macro via the script provider (complements run_macro's
+    Basic). 'name' is a full vnd.sun.star.script: URI, or 'file.py$function'
+    resolved at 'location' (user/share/document; default user). Returns the value."""
+    doc = _current_doc()
+    name = str(args["name"])
+    if name.startswith("vnd.sun.star.script:"):
+        uri = name
+    else:
+        loc = str(args.get("location", "user"))
+        uri = "vnd.sun.star.script:%s?language=Python&location=%s" % (name, loc)
+    script = doc.getScriptProvider().getScript(uri)
+    invoked = script.invoke(tuple(args.get("args") or ()), (), ())
+    ret = invoked[0] if isinstance(invoked, tuple) and invoked else None
+    try:
+        json.dumps(ret)
+    except Exception:
+        ret = str(ret)
+    return {"invoked": uri, "returned": ret}
+
+
+def tool_list_macros(_args):
+    """Discover macros: document Basic libraries -> modules, and user Python
+    script files. Best-effort (application Basic isn't always enumerable)."""
+    out = {"basic": {}, "python": []}
+    doc = _current_doc()
+    libs = getattr(doc, "BasicLibraries", None)
+    if libs is not None:
+        try:
+            for lib in libs.getElementNames():
+                try:
+                    if not libs.isLibraryLoaded(lib):
+                        libs.loadLibrary(lib)
+                    out["basic"][lib] = list(libs.getByName(lib).getElementNames())
+                except Exception:
+                    out["basic"][lib] = []
+        except Exception:
+            pass
+    try:
+        import unohelper
+        state = _connect()
+        ps = state["smgr"].createInstanceWithContext(
+            "com.sun.star.util.PathSettings", state["ctx"])
+        for u in (getattr(ps, "Basic", "") or "").split(";"):
+            u = u.strip()
+            if not u:
+                continue
+            d = unohelper.fileUrlToSystemPath(u) if u.startswith("file:") else u
+            pyd = os.path.join(d, "..", "Scripts", "python")
+            if os.path.isdir(pyd):
+                for f in os.listdir(pyd):
+                    if f.lower().endswith(".py"):
+                        out["python"].append(os.path.join(os.path.normpath(pyd), f))
+    except Exception:
+        pass
+    return out
+
+
+def tool_convert(args):
+    """Headlessly convert document(s) to another format via LibreOffice filters
+    (e.g. docx/xlsx -> pdf, odt -> docx). Give 'path' (one) or 'paths' (many) and
+    'to' (target format). Outputs land beside each source, or in 'output_dir'.
+    Each file is loaded hidden, stored, and closed — the active doc is untouched."""
+    to = str(args.get("to", "pdf")).lower()
+    paths = list(args.get("paths") or ([args["path"]] if args.get("path") else []))
+    if not paths:
+        raise RuntimeError("Give 'path' or 'paths'.")
+    out_dir = args.get("output_dir")
+    desktop = _desktop()
+    hidden = (_pv("Hidden", True),)
+    ext = {"pdf": "pdf", "odt": "odt", "docx": "docx", "txt": "txt",
+           "ods": "ods", "xlsx": "xlsx", "csv": "csv"}.get(to, to)
+    results = []
+    for p in paths:
+        if not os.path.exists(p):
+            raise RuntimeError("File not found: %s" % p)
+        doc = desktop.loadComponentFromURL(_to_url(p), "_blank", 0, hidden)
+        if doc is None:
+            raise RuntimeError("Could not open: %s" % p)
+        try:
+            kind = _doc_kind(doc)
+            filt = _FILTERS.get((kind, to))
+            if filt is None:
+                raise RuntimeError("Cannot convert a %s document to %r. Options: %s"
+                                   % (kind, to,
+                                      sorted(f for k, f in _FILTERS if k == kind)))
+            base = os.path.splitext(os.path.basename(p))[0]
+            dest_dir = out_dir or os.path.dirname(os.path.abspath(p))
+            out_path = os.path.join(dest_dir, base + "." + ext)
+            doc.storeToURL(_to_url(out_path), (_pv("FilterName", filt),))
+            results.append({"input": p, "output": os.path.abspath(out_path)})
+        finally:
+            try:
+                doc.close(False)
+            except Exception:
+                pass
+    return {"converted": results, "to": to, "count": len(results)}
+
+
+def tool_merge(args):
+    """Merge several Writer/text documents into one, in order, with a page break
+    between them; save to 'output'. Text documents only — Calc/PDF merging is out
+    of scope (see docs/UPSTREAM-PARITY.md)."""
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    paths = list(args.get("paths") or [])
+    if len(paths) < 2:
+        raise RuntimeError("Give 'paths': at least two documents to merge.")
+    output = args.get("output")
+    if not output:
+        raise RuntimeError("Give 'output': the merged file path.")
+    for p in paths:
+        if not os.path.exists(p):
+            raise RuntimeError("File not found: %s" % p)
+    base = _desktop().loadComponentFromURL(
+        "private:factory/swriter", "_blank", 0, (_pv("Hidden", True),))
+    try:
+        text = base.getText()
+        for i, p in enumerate(paths):
+            # Re-fetch the end cursor each time — insertDocumentFromURL leaves the
+            # prior cursor stale, so a single reused cursor drops earlier docs.
+            cursor = text.createTextCursorByRange(text.getEnd())
+            if i > 0:
+                text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+                try:
+                    cursor.BreakType = _uno_enum(
+                        "com.sun.star.style.BreakType", "PAGE_BEFORE")
+                except Exception:
+                    pass
+            cursor.insertDocumentFromURL(_to_url(p), ())
+        ext = os.path.splitext(output)[1].lstrip(".").lower()
+        fmt = ext if ("writer", ext) in _FILTERS else "odt"
+        base.storeToURL(_to_url(output),
+                        (_pv("FilterName", _FILTERS[("writer", fmt)]),
+                         _pv("Overwrite", True)))
+    finally:
+        try:
+            base.close(False)
+        except Exception:
+            pass
+    return {"merged": os.path.abspath(output), "sources": len(paths)}
+
+
+def tool_list_templates(_args):
+    """List document templates under LibreOffice's configured Template paths.
+    Returns [{name, path}] plus the directories scanned."""
+    import unohelper
+    state = _connect()
+    ps = state["smgr"].createInstanceWithContext(
+        "com.sun.star.util.PathSettings", state["ctx"])
+    dirs, out = [], []
+    for u in (getattr(ps, "Template", "") or "").split(";"):
+        u = u.strip()
+        if not u:
+            continue
+        d = unohelper.fileUrlToSystemPath(u) if u.startswith("file:") else u
+        dirs.append(d)
+        if not os.path.isdir(d):
+            continue
+        for root, _dd, files in os.walk(d):
+            for f in files:
+                if f.lower().endswith((".ott", ".ots", ".otp", ".otg",
+                                       ".stw", ".stc")):
+                    out.append({"name": os.path.splitext(f)[0],
+                                "path": os.path.join(root, f)})
+    return {"templates": out, "count": len(out), "dirs": dirs}
+
+
+def tool_create_from_template(args):
+    """Create a new untitled document from a template file (.ott/.ots/…)."""
+    path = args["path"]
+    if not os.path.exists(path):
+        raise RuntimeError("Template not found: %s" % path)
+    doc = _desktop().loadComponentFromURL(
+        _to_url(path), "_blank", 0, (_pv("AsTemplate", True),))
+    if doc is None:
+        raise RuntimeError("Could not create from template: %s" % path)
+    _activate(doc)
+    return {"created": _doc_info(doc), "from_template": os.path.abspath(path)}
+
+
+def tool_dispatch(args):
+    """Portmanteau facade: run ANY of this server's tools by name — for MCP
+    clients with a tool-count cap. args: {"tool": "<name>", "args": {...}}. Omit
+    'tool' (or use 'list'/'help') for the catalog of names + one-line usage. Does
+    NOT replace the discrete tools; it fans out to the very same handlers."""
+    name = args.get("tool") or args.get("name")
+    if not name or str(name).lower() in ("list", "help", "?"):
+        return {"tools": [{"name": d["name"], "description": d["description"]}
+                          for d in TOOL_DEFS]}
+    name = str(name)
+    if name == "dispatch":
+        raise RuntimeError("Refusing to dispatch to 'dispatch' (recursion).")
+    fn = TOOLS.get(name)
+    if fn is None:
+        raise RuntimeError("No tool named %r — use tool='list' for the catalog."
+                           % name)
+    return fn(args.get("args") or {})
+
+
+def tool_calc_statistics(args):
+    """Descriptive statistics over the NUMERIC cells in a Calc range: count, sum,
+    mean, min, max, median, and population stdev. Text/empty cells are ignored."""
+    from com.sun.star.table.CellContentType import VALUE, FORMULA
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    rng = sheet.getCellRangeByName(args["range"])
+    addr = rng.getRangeAddress()
+    nums = []
+    for r in range(addr.EndRow - addr.StartRow + 1):
+        for c in range(addr.EndColumn - addr.StartColumn + 1):
+            cell = rng.getCellByPosition(c, r)
+            t = cell.getType()
+            if t == VALUE or (t == FORMULA and not cell.getError()):
+                nums.append(cell.getValue())
+    if not nums:
+        return {"range": args["range"], "count": 0}
+    n = len(nums)
+    total = sum(nums)
+    mean = total / n
+    srt = sorted(nums)
+    median = srt[n // 2] if n % 2 else (srt[n // 2 - 1] + srt[n // 2]) / 2.0
+    stdev = (sum((x - mean) ** 2 for x in nums) / n) ** 0.5
+    return {"range": args["range"], "count": n, "sum": total, "mean": mean,
+            "min": min(nums), "max": max(nums), "median": median, "stdev": stdev}
+
+
+def tool_read_spreadsheet(_args):
+    """Read every sheet's used range at once: {sheet_name: 2-D values}. A whole
+    workbook in one call, instead of one calc_read_range per sheet."""
+    doc = _require_calc()
+    sheets = doc.getSheets()
+    out = {}
+    for i in range(sheets.getCount()):
+        sh = sheets.getByIndex(i)
+        cur = sh.createCursor()
+        cur.gotoEndOfUsedArea(False)
+        a = cur.getRangeAddress()
+        if a.EndColumn == 0 and a.EndRow == 0 and \
+                sh.getCellByPosition(0, 0).getString() == "":
+            out[sh.getName()] = []
+            continue
+        rng = sh.getCellRangeByPosition(0, 0, a.EndColumn, a.EndRow)
+        out[sh.getName()] = [list(row) for row in rng.getDataArray()]
+    return {"sheets": out, "count": len(out)}
 
 
 def tool_calc_list_shapes(args):
@@ -5375,6 +5627,16 @@ TOOLS = {
     "writer_insert_tab_stops": tool_writer_insert_tab_stops,
     "calc_export_range": tool_calc_export_range,
     "batch": tool_batch,
+    # upstream-parity: document ops, macros, dispatcher, calc convenience
+    "run_python_macro": tool_run_python_macro,
+    "list_macros": tool_list_macros,
+    "convert": tool_convert,
+    "merge": tool_merge,
+    "list_templates": tool_list_templates,
+    "create_from_template": tool_create_from_template,
+    "dispatch": tool_dispatch,
+    "calc_statistics": tool_calc_statistics,
+    "read_spreadsheet": tool_read_spreadsheet,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -6241,6 +6503,45 @@ TOOL_DEFS = [
                                             "description": "list of {tool, args}"},
                              "stop_on_error": _BOOL},
                             ["operations"])},
+    # --- upstream-parity: document ops, macros, dispatcher, calc convenience ---
+    {"name": "convert",
+     "description": "Headlessly convert document(s) to another format via LibreOffice filters (docx/xlsx->pdf, odt->docx, ...). Give 'path' (one) or 'paths' (many) + target 'to'; outputs land beside each source or in 'output_dir'. Each file is loaded hidden, stored, and closed — the active document is untouched.",
+     "inputSchema": _schema({"path": dict(_STR, description="a single source file"),
+                             "paths": {"type": "array", "items": {"type": "string"},
+                                       "description": "multiple source files"},
+                             "to": dict(_STR, description="target format: pdf/docx/odt/xlsx/ods/csv/txt"),
+                             "output_dir": dict(_STR, description="output directory (default: beside each source)")})},
+    {"name": "merge",
+     "description": "Merge several Writer/text documents into one, in order, with a page break between them; save to 'output'. Text documents only (Calc/PDF merge out of scope).",
+     "inputSchema": _schema({"paths": {"type": "array", "items": {"type": "string"},
+                                       "description": "ordered source files (>= 2)"},
+                             "output": dict(_STR, description="merged output path")},
+                            ["paths", "output"])},
+    {"name": "list_templates",
+     "description": "List document templates under LibreOffice's configured Template paths: [{name, path}] plus the directories scanned.",
+     "inputSchema": _schema()},
+    {"name": "create_from_template",
+     "description": "Create a new untitled document from a template file (.ott/.ots/...).",
+     "inputSchema": _schema({"path": _STR}, ["path"])},
+    {"name": "run_python_macro",
+     "description": "Invoke a PYTHON macro via the script provider (complements run_macro's Basic). 'name' is a full vnd.sun.star.script: URI, or 'file.py$function' resolved at 'location' (user/share/document; default user). Returns the macro's return value.",
+     "inputSchema": _schema({"name": _STR,
+                             "location": dict(_STR, description="user|share|document (default user)"),
+                             "args": {"type": "array", "items": {}, "description": "positional arguments"}},
+                            ["name"])},
+    {"name": "list_macros",
+     "description": "Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable).",
+     "inputSchema": _schema()},
+    {"name": "dispatch",
+     "description": "Portmanteau facade for MCP clients with a tool-count cap: run ANY of this server's tools by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the catalog of names + one-line usage. Fans out to the same handlers as the discrete tools; does not replace them.",
+     "inputSchema": _schema({"tool": dict(_STR, description="tool name to run; omit or 'list' for the catalog"),
+                             "args": {"type": "object", "description": "arguments for that tool"}})},
+    {"name": "calc_statistics",
+     "description": "Descriptive statistics over the NUMERIC cells in a Calc range: count, sum, mean, min, max, median, and population stdev. Text/empty cells ignored.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET}, ["range"])},
+    {"name": "read_spreadsheet",
+     "description": "Read every sheet's used range at once: {sheet_name: 2-D values} — a whole workbook in one call instead of one calc_read_range per sheet.",
+     "inputSchema": _schema()},
 ]
 
 

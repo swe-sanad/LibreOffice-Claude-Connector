@@ -5,19 +5,37 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added
-- **GitHub Copilot / VS Code workspace MCP support** — a new workspace config at
-  `.vscode/mcp.json` registers the server as `libreoffice` for GitHub Copilot agents
-  using the repo-native launcher in `mcpb/index.js`, so Copilot can drive LibreOffice
-  without manual command-line registration.
+## [0.9.2] — 2026-07-24
+
+Pruned nine capabilities from the sibling LibreOffice-MCP projects
+(sandraschi / patrup / waterpistolai) into this server — **161 → 170 tools** —
+plus cross-agent + GitHub Copilot support. Goal: absorb and supersede those
+projects. Full mapping in `docs/UPSTREAM-PARITY.md`.
+
+### Added — MCP server (161 → 170 tools)
+- `convert` — headless format conversion of one or many files (docx/xlsx→pdf,
+  odt→docx, …); the active document is untouched.
+- `merge` — combine Writer/text documents into one, page break between.
+- `dispatch` — portmanteau facade: run any tool by name (or list the catalog),
+  for clients with a tool-count cap; fans out to the same handlers, does not
+  replace the discrete tools.
+- `list_templates` / `create_from_template` — template discovery + new-from-template.
+- `run_python_macro` / `list_macros` — Python macros (complementing Basic
+  `run_macro`) + macro discovery.
+- `calc_statistics` — count/sum/mean/min/max/median/stdev over a range.
+- `read_spreadsheet` — dump every sheet's used range in one call.
+
+### Added — cross-agent / Copilot
+- **GitHub Copilot / VS Code** workspace MCP config at `.vscode/mcp.json`
+  (registers the server via the repo-native `mcpb/index.js` launcher).
 
 ### Documentation
-- **`docs/CROSS-AGENT.md`** — the server is standard stdio MCP and works in any
-  MCP client (Codex, Antigravity, Cursor, …); starting-point config + a list of
-  cross-platform / cross-agent **expansion opportunities** to tackle after real
-  testing on macOS, Linux, and non-Claude agents. Linked from `docs/BUILDING.md`.
-- **`README.md` / `mcp/README.md`** — added a GitHub Copilot / VS Code workflow
-  that uses the workspace MCP config in `.vscode/mcp.json`.
+- **`docs/UPSTREAM-PARITY.md`** — what was pruned in from each upstream repo,
+  what was already covered, and what's deferred (Base / Impress / Draw, pdf_merge, …).
+- **`docs/CROSS-AGENT.md`** — standard-MCP usage from any client (Codex,
+  Antigravity, Cursor, …) + cross-platform / cross-agent expansion opportunities.
+- **`TODO.md`** triaged against our real surface; `README.md` / `mcp/README.md`
+  gained a Copilot / VS Code workflow.
 
 ## [0.9.0] — 2026-07-23
 

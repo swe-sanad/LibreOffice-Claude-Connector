@@ -28,38 +28,31 @@ what was enumerated we already have; the genuine gaps are called out separately.
 - "Richer Calc helpers (formatting / conditional formatting / charts / pivots)" —
   already shipped in full.
 
-### Genuine gaps — opportunities (prioritized)
+### Pruned in — shipped (v0.9.2) → 170 tools
 
-> Gated on real cross-platform (macOS/Linux) + cross-agent testing — build from
-> feedback, not speculation. Regression-test each before merging.
+Full mapping in `docs/UPSTREAM-PARITY.md`.
 
-**P1 — new capability, clear value**
-- [ ] **LibreOffice Base (database) support** — a whole app we don't cover:
-  `run_query`, `list_tables`, `create_table`, `insert_data`, `create_report`,
-  `create_form` (waterpistolai). Scope a `base_*` tool family.
-- [ ] **Headless conversion** — `convert` / `convert_batch` (any→any via a
-  headless soffice/UNO filter), beyond today's save/export to a few formats.
-- [ ] **Merge** — document merge + `pdf_merge` (+ `batch_pack`) (sandraschi).
+- [x] **Headless conversion** — `convert` (single + batch).
+- [x] **Merge** — `merge` (Writer/text docs; `pdf_merge` deferred — see below).
+- [x] **Dispatcher facade** — `dispatch` (tool-count relief; fans out to all 170,
+  does not replace the discrete tools).
+- [x] **Templates** — `list_templates` + `create_from_template`.
+- [x] **Python macros** — `run_python_macro` + `list_macros`.
+- [x] **Calc convenience** — `calc_statistics`, `read_spreadsheet`.
 
-**P2 — useful**
-- [ ] **Templates** — `list_templates` + create-from-template.
-- [ ] **Python macros** — `run_python_macro` + a general `list_macros`
-  (we have Basic only, via `run_macro` / `basic_module`).
-- [ ] **Impress / Draw** — the other unsupported apps (no upstream covers them
-  either); a future frontier once Base lands.
-- [ ] **Optional dispatcher facade (tool-count relief)** — 161 tools exceeds some
-  clients' tool caps; an OPTIONAL portmanteau tool that fans out to the existing
-  tools would help those agents WITHOUT replacing the discrete tools. Confirm the
-  real per-client limits first (see `docs/CROSS-AGENT.md`).
+### Deferred — new apps / out-of-scope (docs for a later or someone else's session)
 
-**P3 — convenience / niche**
-- [ ] `calculate_statistics` — one-shot descriptive stats on a range.
-- [ ] `read_spreadsheet` — dump all sheets at once (today: per-sheet
-  `calc_get_used_range`).
-- [ ] `watch_start/stop/status` (document/file watching) and `live_type`
-  (simulated typing for demos) — novelty, low value.
-- [ ] `bridge_discover/bridge_call` — talk to other in-LO MCP bridges; our
-  pipe-first `_connect` already reaches an extension-hosted office, so mostly moot.
+> See `docs/UPSTREAM-PARITY.md` for the rationale on each.
+
+- [ ] **LibreOffice Base (database)** — `run_query`, `list_tables`, `create_table`,
+  `insert_data`, `create_report`, `create_form` (waterpistolai). A whole new app;
+  the highest-value next frontier. Scope a `base_*` family + DB connection model.
+- [ ] **Impress / Draw** — the other unsupported apps; no upstream to borrow from.
+- [ ] `pdf_merge` — needs a PDF library (breaks stdlib-only).
+- [ ] `batch_pack` (archive packaging), `watch_*` (doc/file watching),
+  `live_type` (simulated typing) — niche/novelty.
+- [ ] `bridge_discover/bridge_call` — mostly moot (our pipe-first `_connect`
+  already reaches an extension-hosted office).
 
 ### Already tracked elsewhere (dedupe)
 
