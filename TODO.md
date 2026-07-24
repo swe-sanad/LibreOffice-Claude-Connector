@@ -54,6 +54,36 @@ Full mapping in `docs/UPSTREAM-PARITY.md`.
 - [ ] `bridge_discover/bridge_call` — mostly moot (our pipe-first `_connect`
   already reaches an extension-hosted office).
 
+### From Nelson MCP (quazardous/nelson-mcp) — the ambitious target
+
+> HTTP-based, 100+ tools, Writer/Calc/Draw/Impress. Full triage in
+> `docs/UPSTREAM-PARITY.md`. Highest-leverage: **HTTP transport**.
+
+- [ ] **HTTP (Streamable-HTTP/SSE) transport** — parity + remote clients (also in
+  `docs/CROSS-AGENT.md`). The single most impactful item.
+- [ ] **Persistent document IDs + per-call `_document` targeting** (id/path/title).
+- [ ] **Structured errors** (`code/message/hint/retryable`) + enum "did-you-mean".
+- [ ] **Tool presets / custom endpoints** (minimal/writer-edit/calc/…) — pairs
+  with `dispatch` to tame the 170-tool count on smaller LLMs.
+- [ ] Undo-wrapped mutations; `_resolved`/`_session` in responses + `/health`;
+  batch variable-chaining; one-click client launchers; Calc `=PROMPT()` (`.oxt`).
+- [ ] Out of core scope: tunnels/SSL (deployment), AI image generation (AI-content).
+
+### From writeragent (KeithCu/writeragent) — the feature-dense target
+
+> HTTP extension, Writer/Calc/Draw/Impress, deep data-science/quant layer. Full
+> triage in `docs/UPSTREAM-PARITY.md`.
+
+- [ ] Fits us: **HTTP transport** (shared with Nelson), **per-request `_document`
+  targeting**, **MathML/LaTeX → Math object** (UNO, no lib), **format-preserving
+  replace**, undo-wrapped rewrites.
+- [ ] **Out of scope under stdlib-only** (needs NumPy/pandas/SciPy/SymPy/DuckDB/
+  embeddings): the Calc DS/quant suite (`=PY()`, regression, monte-carlo,
+  clustering, portfolio/LP, DuckDB SQL, plots), SymPy symbolic math, semantic
+  search, OCR, web search, audio, image gen, grammar backends. `calc_statistics`
+  covers the *basic* stats dependency-free. **Strategic fork:** matching this
+  layer requires deciding to bundle third-party deps — see `docs/UPSTREAM-PARITY.md`.
+
 ### Already tracked elsewhere (dedupe)
 
 - **HTTP/SSE transport**, **per-client config recipes**, and a

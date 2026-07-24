@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="LibreOffice ↔ Claude Connector" width="180">
+</p>
+
 # LibreOffice ↔ Claude Connector
 
 Two complementary open-source integrations between **LibreOffice** and Anthropic's
@@ -9,7 +13,7 @@ no external runtime, no third-party Python packages:
    written straight back into your document.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the inverse: lets Claude Code /
    Claude Desktop (or any MCP client) reach **in** and drive LibreOffice as a tool,
-   with **161 tools** covering documents, Calc data/formulas/formatting/charts, Writer
+   with **170 tools** covering documents, Calc data/formulas/formatting/charts, Writer
    text/tables/styles/structure, embedded Basic macros, drawing shapes, window
    screenshots, and a raw UNO escape hatch. See [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md)
    for the full catalog.

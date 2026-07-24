@@ -6,7 +6,9 @@ already covered, and what's intentionally left for a later (or someone else's)
 session.
 
 Sources surveyed: `sandraschi/libreoffice-mcp`, `patrup/mcp-libre`,
-`waterpistolai/libreoffice-mcp`.
+`waterpistolai/libreoffice-mcp`, `quazardous/nelson-mcp` (HTTP-based, 100+ tools,
+Writer/Calc/Draw/Impress), and `KeithCu/writeragent` (HTTP extension with a deep
+data-science/quant layer). Each has its own section below.
 
 ## Pruned in — shipped (v0.9.2)
 
@@ -56,9 +58,114 @@ or breaks a project rule, or is low-value. Contributions welcome.
 | `live_write/live_type` | sandraschi | Simulated per-character typing (for screencasts) — cosmetic. |
 | `bridge_discover/bridge_call` | sandraschi | Reach *other* in-LO MCP bridges — largely moot: our pipe-first `_connect` already reaches an extension-hosted office. |
 
+---
+
+## Nelson MCP — `quazardous/nelson-mcp` (the ambitious one)
+
+The most advanced sibling: **100+ tools** across **Writer / Calc / Draw / Impress**,
+and architecturally different — it embeds an **HTTP MCP server inside LibreOffice**
+(the extension *is* the server, at `http://localhost:8766/mcp`), whereas we run an
+**external stdio server** that drives LibreOffice over UNO (+ an optional `.oxt`
+for the agent-acceptor pipe and the Claude menu). Superseding it is a bigger lift
+than the other three; triaged below.
+
+### Already comparable
+- Tool breadth: our **170 tools** vs its "100+" — text/paragraphs/styles, tables,
+  charts, conditional formatting, hyperlinks, images/shapes, bookmarks/comments/
+  search, file lifecycle + PDF export, and batch are all covered on both sides.
+
+### Genuine gaps — adopt candidates (prioritized)
+
+**P1 — closes the architecture/ergonomics gap**
+- [ ] **HTTP (Streamable-HTTP/SSE) transport** — Nelson's core selling point;
+  already on our list (`docs/CROSS-AGENT.md`). This is now the single most
+  impactful item for parity + remote clients.
+- [ ] **Persistent document IDs + per-call `_document` targeting** — a UUID stored
+  in the file (survives save/close/reopen); every tool accepts `_document`
+  (`id:`/`path:`/`title:`) to act on any open doc, not just the focused one.
+  A more robust multi-doc model than our focus + `set_active_document`.
+- [ ] **Structured errors** — `{code, message, hint, retryable}` (e.g.
+  `unsaved_document`, `incompatible_doc_type`, `execution_timeout`) + "did-you-mean"
+  enum suggestions (Levenshtein). We currently raise typed-but-unstructured errors.
+- [ ] **Tool presets / custom endpoints** — expose only a named subset
+  (minimal / writer-edit / calc / …) to reduce tool confusion on smaller LLMs.
+  Pairs directly with our `dispatch` facade and the 170-tool count concern.
+
+**P2 — useful**
+- [ ] **Undo-wrapped mutations** — wrap each tool op in an UndoContext so one
+  Ctrl+Z reverts the whole operation (we expose `document_undo`, but don't group).
+- [ ] **Draw / Impress** — Nelson covers them; reinforces our deferred frontier.
+- [ ] **Response context** — include `_resolved` (doc id/type/title) + `_session`
+  in every result; a `/health` bootstrap endpoint (pairs with HTTP mode).
+- [ ] **Batch variable-chaining** — thread outputs between steps (our `batch`
+  runs steps but doesn't chain variables).
+- [ ] **One-click client launchers** — register the server into Claude Code /
+  Gemini CLI / OpenCode / Goose from inside LibreOffice (ties to our per-client
+  config recipes in `docs/CROSS-AGENT.md`).
+- [ ] **Calc `=PROMPT()`** — call an LLM from a cell (an `.oxt`-side feature,
+  sibling to our existing Claude-menu commands).
+
+**P3 / out of core scope**
+- [ ] Tunnels (ngrok/Cloudflare/bore/Tailscale) + auto-SSL — remote-access ops;
+  relevant only with HTTP mode, and arguably deployment-layer, not MCP-core.
+- [ ] AI **image generation** (Stable Diffusion / OpenAI / AI Horde) + AI image
+  indexation — an AI-content feature, not a document-automation primitive; belongs
+  (if anywhere) to the `.oxt` AI side, not the MCP server.
+
+---
+
+## WriterAgent — `KeithCu/writeragent` (the feature-dense one)
+
+A Python LibreOffice extension that also runs a local **HTTP MCP server**
+(default `:8765/mcp`, + stdio for agent backends), across **Writer / Calc / Draw /
+Impress**. Its standout is a deep **data-science / quant / symbolic-math** layer —
+which is exactly where it collides with our **stdlib-only** rule.
+
+### Already comparable
+- Core Writer/Calc document tools, conditional formatting, AutoFilter, batch, and
+  basic descriptive stats (`calc_statistics`) are covered on both sides.
+
+### Adopt candidates that FIT our model
+- [ ] **HTTP transport** — same conclusion as Nelson; the top item (see above).
+- [ ] **Per-request document targeting** — its `document_url` param /
+  `X-Document-URL` header ≈ Nelson's `_document`; adopt once (one multi-doc model).
+- [ ] **MathML / LaTeX → LibreOffice Math object** insertion — doable via UNO with
+  no third-party lib (the *symbolic* side below is not).
+- [ ] **Format-preserving ("surgical") replace** — keep bold/italic/size across a
+  text replacement; an upgrade to `writer_find_replace`.
+- [ ] **Undo-wrapped rewrites** — same item as Nelson's undo support.
+
+### Out of scope — needs third-party libraries (breaks stdlib-only)
+> The strategic catch: WriterAgent's differentiators mostly require
+> NumPy/pandas/SciPy/SymPy/matplotlib/DuckDB/embeddings — none installable in
+> LibreOffice's bundled Python without `pip`. Pursue **only** if the project ever
+> relaxes the stdlib-only constraint (bundled venv / optional deps).
+- Calc DS/quant suite: `=PY()`/`=PYTHON()`, `describe_data`/`kpi_summary`/
+  `detect_outliers`/`pivot_aggregate`/`correlation_matrix`/`run_regression`/
+  `cluster_numeric`/`monte_carlo`, `quick_plot`/`correlation_heatmap`/
+  `time_series_plot`, `technical_analysis`/`portfolio_tearsheet`/
+  `efficient_frontier`/`optimize_portfolio`/`linear_programming`, unit conversion,
+  DuckDB `query_folder_sql`, spreadsheet→Python (235+ functions).
+- SymPy symbolic math (`solve_equation`/`integrate`/`differentiate`).
+- Semantic cross-file search (BM25 + embeddings), OCR (Docling), web search,
+  audio capture, image generation, grammar backends (LanguageTool/Harper).
+- These overlap Nelson's AI-content features and sit outside a stdlib-only
+  document-automation MCP's core. `calc_statistics` already covers the *basic*
+  stats without any dependency.
+
 ## Status
 
 - Superseded outright: **patrup** (fully), **waterpistolai** (except Base),
   **sandraschi** (except the deferred niche/PDF/bridge items).
-- Remaining to close the gap and supersede all three entirely: **Base support**
-  (the big one), then Impress/Draw as new frontiers.
+- Remaining to fully supersede all five: **HTTP transport** and **Base support**
+  are the two highest-leverage items; then Impress/Draw, structured errors +
+  per-call `_document` targeting + tool presets to match Nelson/WriterAgent agent
+  ergonomics.
+- **Strategic fork:** Nelson's AI-image/tunnels and WriterAgent's data-science/
+  quant/symbolic layer are the features we can't match under **stdlib-only** (they
+  need NumPy/SciPy/SymPy/embeddings/etc.). Superseding those means a deliberate
+  decision to bundle third-party deps (a venv/optional-deps story) — otherwise we
+  compete on breadth (170 tools), portability (any stdio MCP client + HTTP once
+  added), zero-dependency install, and the cross-agent story, and cede the
+  heavy-AI/DS niche. Recommend: land HTTP + Base + the ergonomics items first;
+  treat the DS/AI layer as a separate, explicit product decision.
