@@ -143,6 +143,13 @@ to approve it on next start):
 a summary into E1", or "replace my Writer selection with a formal version". The
 server operates on whatever document is active in that LibreOffice session.
 
+### GitHub Copilot / VS Code
+
+If you are using GitHub Copilot in VS Code, this repo includes a workspace MCP
+configuration at `.vscode/mcp.json` that registers the server as `libreoffice` via
+`mcpb/index.js`. Open the workspace in VS Code and Copilot can discover the server
+without separate manual setup.
+
 ## Notes
 
 - The server contacts LibreOffice lazily: `initialize`/`tools/list` work with no

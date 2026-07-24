@@ -36,6 +36,21 @@ args = ["<repo>/mcp/libreoffice_mcp.py"]
 }}}
 ```
 
+**GitHub Copilot in VS Code** — this repo now ships a workspace config at
+`.vscode/mcp.json` that registers the server as `libreoffice` via the repo-native
+launcher:
+```json
+{
+  "servers": {
+    "libreoffice": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${workspaceFolder}/mcpb/index.js"]
+    }
+  }
+}
+```
+
 ## Opportunities for expansion
 
 > **Not built yet — on purpose.** These are gated on real testing across

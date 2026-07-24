@@ -154,6 +154,12 @@ maps the road from here to **native agent support in LibreOffice core**.
 - A modal progress dialog appears while Claude is contacted; the document is only read
   and written on the main thread, so LibreOffice itself never blocks on the network.
 
+### GitHub Copilot / VS Code
+
+If you are using GitHub Copilot in VS Code, this repo now includes a workspace MCP
+configuration at `.vscode/mcp.json`. Open the workspace and Copilot agents can discover
+`libreoffice` directly through the repo-native launcher in `mcpb/index.js`.
+
 ## Configuration & API key
 
 **Claude ▸ Settings…** opens a dialog to:
