@@ -5,7 +5,42 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added — deeper UNO in Writer and Calc (183 → 184 tools)
+## [0.9.6] — 2026-07-26
+
+Reaches deeper into the UNO API, and turns the server from a bag of tools into
+something that can carry a document from blank page to finished file.
+
+**188 tools, 51 advertised.** 153 offline tests; everything exercised against a
+real LibreOffice 25.2.3.2.
+
+### Added — the document lifecycle (187 → 188 tools)
+
+The session is now guided rather than a la carte, **without hiding any tool**.
+Phase-gated tool sets were the obvious design and are the wrong one: hiding the
+export tools until authoring "ends" means a user who says "just send me the PDF"
+meets a server that appears not to support it — the complaint Nelson MCP
+recorded as its issue #24 when it rejected progressive disclosure. It would also
+make the server stateful per document, which breaks across restarts that do
+happen.
+
+- **`instructions` on `initialize`** — the standard place for a server to say
+  how it wants to be used, and far cheaper than repeating guidance across 188
+  tool descriptions. Names the three phases, says to start with
+  `document_lifecycle`, tells the model to be interactive and to ask before
+  destructive edits, points at `dispatch` as the authoritative catalog, and
+  warns about the bulk-write undo trap.
+- **MCP prompts** — `start_document`, `review_document`, `finish_document`.
+  The closest thing MCP has to a shipped skill, and the client surfaces them for
+  the *user* to pick, which is what makes a session interactive instead of the
+  model guessing when a workflow begins.
+- **`document_lifecycle`** — reports SETUP / AUTHORING / CLOSING with what is
+  done, what is left, the exact tool for each step, and `ask_the_user`: the
+  question to put to the operator before proceeding. The phase is **derived from
+  the document** (title, language, headings, alt text, metadata, saved state,
+  broken formulas) and never stored, so it survives a restart and cannot go
+  stale. Every tool stays callable in every phase.
+
+### Added — deeper UNO in Writer and Calc
 
 - **Format-preserving find & replace.** `writer_find_replace` kept formatting
   only when a match sat inside ONE formatting run; a match spanning runs came
@@ -39,7 +74,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   starting. Impress first: Claude is good at presentation content and the API is
   not exotic; Base is the largest effort and narrowest audience; Draw follows
   Impress almost for free.
-### Added — document attributes, print setup, and the full Form menu (183 → 186)
+
+### Added — document attributes, print setup, and the full Form menu
 
 Everything here is UNO + stdlib; the property names were verified against a live
 LibreOffice 25.2.3.2 rather than taken from documentation.

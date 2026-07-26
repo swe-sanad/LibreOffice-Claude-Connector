@@ -13,14 +13,14 @@ no external runtime, no third-party Python packages:
    written straight back into your document.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the inverse: lets Claude Code /
    Claude Desktop (or any MCP client) reach **in** and drive LibreOffice as a tool,
-   with **174 tools** covering documents, Calc data/formulas/formatting/charts, Writer
+   with **188 tools** covering documents, Calc data/formulas/formatting/charts, Writer
    text/tables/styles/structure, embedded Basic macros, drawing shapes, window
    screenshots, and a raw UNO escape hatch. See [docs/MCP-TOOLS.md](docs/MCP-TOOLS.md)
    for the full catalog.
 
-   By default the server **advertises a focused 32-tool everyday set** and reaches the
-   other 142 on demand through the `dispatch` tool — that keeps tool choice accurate
-   and saves ~19k tokens of context in every conversation. Tick **"Advertise all 174
+   By default the server **advertises a focused 51-tool everyday set** and reaches the
+   other 137 on demand through the `dispatch` tool — that keeps tool choice accurate
+   and saves ~19k tokens of context in every conversation. Tick **"Advertise all 188
    tools"** in the extension settings (or set `LO_TOOLS=full`) for the flat surface.
 
 ## Status
@@ -248,7 +248,7 @@ with 🥇 good-first-tool picks to start from.
 
 ```
 LibreOffice-Claude-Connector/
-├── mcp/             libreoffice_mcp.py (stdio MCP server, 161 tools — see docs/MCP-TOOLS.md)
+├── mcp/             libreoffice_mcp.py (stdio MCP server, 188 tools — see docs/MCP-TOOLS.md)
 ├── docs/            RESEARCH.md, BUILD-PLAN.md, ARCHITECTURE.md, DEVELOPMENT.md, CHANGELOG.md,
 │                    MCP-TOOLS.md (generated tool reference), TOOLS-WANTED.md (roadmap),
 │                    KNOWN-GAPS.md, TEST-PLAN.md, SECURITY.md, UPSTREAMING.md
