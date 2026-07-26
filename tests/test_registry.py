@@ -60,12 +60,15 @@ class ModuleSplitTest(unittest.TestCase):
                             "no %s* module" % prefix)
 
     def test_no_module_grows_back_into_a_monolith(self):
-        # the whole point of the split; 1200 lines is generous headroom
+        # This file replaced a 9,048-line module. The cap was 2000 while the
+        # split settled; the largest module is now ~900, so 1200 is a real
+        # ratchet with room for a few more tools. Tripping it means splitting
+        # that module by sub-concern — not raising the number.
         for path in list(self.TOOLS_DIR.glob("*.py")) + [
                 ROOT / "mcp" / "loconn" / "core.py",
                 ROOT / "mcp" / "libreoffice_mcp.py"]:
             lines = len(path.read_text(encoding="utf-8").splitlines())
-            self.assertLess(lines, 2000, "%s is %d lines" % (path.name, lines))
+            self.assertLess(lines, 1200, "%s is %d lines" % (path.name, lines))
 
     def test_entry_point_is_only_the_protocol(self):
         # tools must not creep back into the entry point
