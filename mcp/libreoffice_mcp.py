@@ -185,7 +185,7 @@ lo_status lo_screenshot list_documents list_macros list_styles list_templates
 list_embedded_objects get_current_selection get_document_properties get_signatures
 read_spreadsheet inspect_ods calc_overview calc_detect_errors
 list_recent_documents print_document lo_health lo_recover checkpoint_document
-document_watch
+document_watch print_settings
 create_document open_document create_from_template close_document save_document
 export_document reload_document set_active_document convert merge
 dispatch batch document_undo
@@ -2148,13 +2148,36 @@ def tool_writer_format_table(args):
 # Tools — form controls (buttons and other UI elements)
 # --------------------------------------------------------------------------- #
 
+# Everything under Writer's Form menu that instantiates without a database
+# connection. ImageControl and GridControl (Table Control) are deliberately
+# absent: both are data-bound and need a form/data source context.
 _FORM_COMPONENTS = {
     "button": "com.sun.star.form.component.CommandButton",
+    "imagebutton": "com.sun.star.form.component.ImageButton",
     "checkbox": "com.sun.star.form.component.CheckBox",
+    "radio": "com.sun.star.form.component.RadioButton",
+    "groupbox": "com.sun.star.form.component.GroupBox",
     "textfield": "com.sun.star.form.component.TextField",
     "label": "com.sun.star.form.component.FixedText",
     "listbox": "com.sun.star.form.component.ListBox",
+    "combobox": "com.sun.star.form.component.ComboBox",
+    "formatted": "com.sun.star.form.component.FormattedField",
+    "date": "com.sun.star.form.component.DateField",
+    "time": "com.sun.star.form.component.TimeField",
+    "numeric": "com.sun.star.form.component.NumericField",
+    "currency": "com.sun.star.form.component.CurrencyField",
+    "pattern": "com.sun.star.form.component.PatternField",
+    "file": "com.sun.star.form.component.FileControl",
+    "scrollbar": "com.sun.star.form.component.ScrollBar",
+    "spinbutton": "com.sun.star.form.component.SpinButton",
+    "navbar": "com.sun.star.form.component.NavigationToolBar",
 }
+
+# kinds that carry a visible caption. NOT imagebutton — it shows a picture and
+# has no Label property at all (setting one raises AttributeError).
+_FORM_LABELLED = ("button", "checkbox", "radio", "groupbox", "label")
+_FORM_LISTED = ("listbox", "combobox")
+_FORM_DROPDOWN_DEFAULT = ("listbox", "combobox")
 
 
 def tool_insert_form_control(args):
@@ -2166,16 +2189,38 @@ def tool_insert_form_control(args):
         raise RuntimeError("kind must be one of %s" % sorted(_FORM_COMPONENTS))
 
     model = doc.createInstance(service)
-    if kind in ("button", "checkbox", "label") and "label" in args:
+    if kind in _FORM_LABELLED and "label" in args:
         model.Label = args["label"]
     if kind == "textfield" and "text" in args:
         model.DefaultText = args["text"]
-    if kind == "listbox" and args.get("items"):
+    if kind in _FORM_LISTED and args.get("items"):
         model.StringItemList = tuple(str(x) for x in args["items"])
-        model.Dropdown = True
-    if kind == "button" and args.get("url"):
+        if kind in _FORM_DROPDOWN_DEFAULT:
+            model.Dropdown = True
+    if kind in ("button", "imagebutton") and args.get("url"):
         model.ButtonType = _uno_enum("com.sun.star.form.FormButtonType", "URL")
         model.TargetURL = args["url"]
+    if kind == "imagebutton" and args.get("image"):
+        model.ImageURL = _to_url(args["image"])
+    # numeric-family defaults and bounds; each property is optional on its model
+    for arg, prop in (("value", "DefaultValue"), ("min", "ValueMin"),
+                      ("max", "ValueMax"), ("decimals", "DecimalAccuracy"),
+                      ("format", "EditMask"), ("currency", "CurrencySymbol")):
+        if args.get(arg) is not None:
+            try:
+                setattr(model, prop, args[arg])
+            except Exception:
+                pass          # not every kind carries every one of these
+    if args.get("required") is not None:
+        try:
+            model.Required = bool(args["required"])
+        except Exception:
+            pass
+    if args.get("readonly") is not None:
+        try:
+            model.ReadOnly = bool(args["readonly"])
+        except Exception:
+            pass
     if args.get("name"):
         model.Name = args["name"]
 
@@ -3453,6 +3498,33 @@ def tool_export_document(args):
         if args.get("password"):
             fd.append(_pv("EncryptFile", True))
             fd.append(_pv("DocumentOpenPassword", str(args["password"])))
+        # --- accessibility ---
+        if args.get("tagged"):
+            fd.append(_pv("UseTaggedPDF", True))
+        if args.get("pdfua"):
+            # PDF/UA-1 implies a tagged PDF; ask for both so the option cannot
+            # be silently ineffective when 'tagged' was left out
+            fd.append(_pv("PDFUACompliance", True))
+            fd.append(_pv("UseTaggedPDF", True))
+        if args.get("bookmarks") is not None:
+            fd.append(_pv("ExportBookmarks", bool(args["bookmarks"])))
+        # --- fillable forms ---
+        if args.get("form_fields"):
+            fd.append(_pv("ExportFormFields", True))
+            fd.append(_pv("FormsType", int(args.get("forms_type", 1))))
+        # --- owner password + permissions (distinct from the OPEN password) ---
+        if args.get("owner_password"):
+            fd.append(_pv("EncryptFile", True))
+            fd.append(_pv("RestrictPermissions", True))
+            fd.append(_pv("PermissionPassword", str(args["owner_password"])))
+            for arg, prop in (("can_print", "CanPrint"),
+                              ("can_modify", "CanModify"),
+                              ("can_copy", "CanCopyOrExtract"),
+                              ("can_annotate", "CanAddOrModifyAnnotations")):
+                if args.get(arg) is not None:
+                    fd.append(_pv(prop, bool(args[arg])))
+        if args.get("watermark"):
+            fd.append(_pv("Watermark", str(args["watermark"])))
         filter_name = ("writer_pdf_Export" if _doc_kind(doc) == "writer"
                        else "calc_pdf_Export")
         props = [_pv("FilterName", filter_name)]
@@ -3483,10 +3555,35 @@ def tool_set_document_properties(args):
         if args.get(key) is not None:
             setattr(props, prop, args[key])
             changed.append(prop)
-    if args.get("keywords") is not None:
-        kw = args["keywords"]
-        props.Keywords = tuple(kw) if isinstance(kw, (list, tuple)) else (str(kw),)
-        changed.append("Keywords")
+    # Dublin Core, as shown in File > Properties > Description. Five take a
+    # plain string; three are sequence<string> and raise CannotConvertException
+    # if handed a bare string (verified against 25.2.3.2) — same shape as
+    # Keywords, so they go through the same coercion.
+    for key, prop in (("coverage", "Coverage"), ("identifier", "Identifier"),
+                      ("rights", "Rights"), ("source", "Source"),
+                      ("type", "Type")):
+        if args.get(key) is not None:
+            setattr(props, prop, str(args[key]))
+            changed.append(prop)
+    for key, prop in (("keywords", "Keywords"),
+                      ("contributor", "Contributor"),
+                      ("publisher", "Publisher"), ("relation", "Relation")):
+        if args.get(key) is not None:
+            value = args[key]
+            setattr(props, prop,
+                    tuple(str(v) for v in value)
+                    if isinstance(value, (list, tuple)) else (str(value),))
+            changed.append(prop)
+    if args.get("language"):
+        # the document language: what a screen reader announces, and what
+        # spellcheck and a tagged PDF both key off
+        tag = str(args["language"]).replace("_", "-")
+        parts = tag.split("-")
+        locale = _uno_struct("com.sun.star.lang.Locale")
+        locale.Language = parts[0]
+        locale.Country = parts[1].upper() if len(parts) > 1 else ""
+        props.Language = locale
+        changed.append("Language")
     custom = args.get("custom")
     if custom:
         udp = props.UserDefinedProperties
@@ -6827,6 +6924,213 @@ def tool_lo_health(args):
     return report
 
 
+# --------------------------------------------------------------------------- #
+# Tools — print setup, accessibility, content controls
+# --------------------------------------------------------------------------- #
+
+# Writer and Calc expose different Print* switches; each list is what that
+# application's document-settings object actually carries.
+_PRINT_SETTINGS_WRITER = (
+    "PrintGraphics", "PrintTables", "PrintDrawings", "PrintControls",
+    "PrintPageBackground", "PrintBlackFonts", "PrintEmptyPages",
+    "PrintHiddenText", "PrintTextPlaceholder", "PrintLeftPages",
+    "PrintRightPages", "PrintReversed", "PrintProspect", "PrintProspectRTL",
+    "PrintPaperFromSetup", "PrintFaxName", "PrintAnnotationMode",
+)
+_PRINT_SETTINGS_CALC = (
+    "PrintAllSheets", "PrintEmptyPages", "PrintAnnotations", "PrintGrid",
+    "PrintHeaders", "PrintCharts", "PrintObjects", "PrintDrawing",
+    "PrintDownFirst", "PrintFormulas", "PrintNotes", "PrintZeroValues",
+)
+
+_PAPER_FORMATS = ("A3", "A4", "A5", "B4", "B5", "LETTER", "LEGAL", "TABLOID",
+                  "USER")
+
+
+def tool_print_settings(args):
+    """Read or change how a document prints — printer, paper, orientation, and
+    the per-application 'what to include' switches."""
+    doc = _select_doc(args) or _current_doc()
+    kind = _doc_kind(doc)
+    wanted = _PRINT_SETTINGS_CALC if kind == "calc" else _PRINT_SETTINGS_WRITER
+    changed = []
+
+    # --- printer / paper (XPrintable) ---
+    printer = []
+    if args.get("printer"):
+        printer.append(_pv("Name", str(args["printer"])))
+        changed.append("printer")
+    if args.get("orientation"):
+        value = str(args["orientation"]).upper()
+        if value not in ("PORTRAIT", "LANDSCAPE"):
+            raise RuntimeError("orientation must be portrait or landscape.")
+        printer.append(_pv("PaperOrientation",
+                           _uno_enum("com.sun.star.view.PaperOrientation", value)))
+        changed.append("orientation")
+    if args.get("paper"):
+        value = str(args["paper"]).upper()
+        if value not in _PAPER_FORMATS:
+            raise RuntimeError("paper must be one of %s" % (_PAPER_FORMATS,))
+        printer.append(_pv("PaperFormat",
+                           _uno_enum("com.sun.star.view.PaperFormat", value)))
+        changed.append("paper")
+    if printer:
+        doc.setPrinter(tuple(printer))
+
+    # --- the document's own print switches ---
+    options = args.get("options") or {}
+    settings = doc.createInstance("com.sun.star.document.Settings")
+    for name, value in options.items():
+        if name not in wanted:
+            raise RuntimeError(
+                "%r is not a print option for a %s document. Available: %s"
+                % (name, kind, ", ".join(wanted)))
+        settings.setPropertyValue(name, bool(value))
+        changed.append(name)
+
+    current = {}
+    for name in wanted:
+        try:
+            current[name] = settings.getPropertyValue(name)
+        except Exception:
+            pass
+    return {"document": _doc_info(doc), "application": kind,
+            "printer": {p.Name: str(p.Value) for p in doc.getPrinter()},
+            "options": current, "changed": changed,
+            "available_options": list(wanted)}
+
+
+def tool_set_alt_text(args):
+    """Give an image or shape alternative text. Without this a tagged PDF is
+    still inaccessible: the structure is there but every picture is silent."""
+    ub = _bridge()
+    doc = _select_doc(args) or _current_doc()
+    name = args.get("name")
+    title = args.get("title")
+    description = args.get("description")
+    decorative = args.get("decorative")
+    if title is None and description is None and decorative is None:
+        raise RuntimeError("Give 'title', 'description', or decorative=true.")
+
+    def pages():
+        if ub.is_calc(doc):
+            sheets = doc.getSheets()
+            for sheet_name in sheets.getElementNames():
+                yield sheets.getByName(sheet_name).getDrawPage()
+        else:
+            yield doc.getDrawPage()
+            try:                       # Writer images live in their own bag too
+                yield doc.getGraphicObjects()
+            except Exception:
+                pass
+
+    updated, seen = [], []
+    for page in pages():
+        for i in range(page.getCount()):
+            shape = page.getByIndex(i)
+            try:
+                shape_name = shape.Name
+            except Exception:
+                shape_name = ""
+            seen.append(shape_name)
+            if name and shape_name != name:
+                continue
+            if title is not None:
+                shape.Title = str(title)
+            if description is not None:
+                shape.Description = str(description)
+            if decorative is not None:
+                try:
+                    shape.Decorative = bool(decorative)
+                except Exception:
+                    pass       # LibreOffice < 7.5 has no Decorative flag
+            updated.append(shape_name)
+            if name:
+                break
+    if name and not updated:
+        raise RuntimeError("No image or shape named %r. Present: %s"
+                           % (name, ", ".join(x for x in seen if x) or "(none)"))
+    return {"updated": updated, "count": len(updated),
+            "title": title, "description": description,
+            "decorative": decorative}
+
+
+_CONTENT_CONTROL_KINDS = ("rich_text", "plain_text", "checkbox", "dropdown",
+                          "combobox", "date", "picture")
+
+
+def tool_writer_content_control(args):
+    """Insert a Word-compatible content control — the Form ▸ Content Controls
+    family. Unlike form controls these live IN the text flow, and can be bound
+    to an XML data source."""
+    doc = _require_writer()
+    kind = str(args.get("kind", "rich_text")).lower()
+    if kind not in _CONTENT_CONTROL_KINDS:
+        raise RuntimeError("kind must be one of %s"
+                           % (_CONTENT_CONTROL_KINDS,))
+
+    control = doc.createInstance("com.sun.star.text.ContentControl")
+    if args.get("alias"):
+        control.Alias = str(args["alias"])
+    if args.get("placeholder"):
+        control.PlaceholderDocPart = str(args["placeholder"])
+    for flag, prop in (("checkbox", "Checkbox"), ("combobox", "ComboBox"),
+                       ("date", "Date"), ("picture", "Picture")):
+        if kind == flag or (kind == "dropdown" and prop == "ComboBox"):
+            try:
+                setattr(control, prop, True)
+            except Exception:
+                pass
+    if kind == "plain_text":
+        try:
+            control.PlainText = True
+        except Exception:
+            pass
+    if kind == "dropdown":
+        try:
+            control.DropDown = True
+        except Exception:
+            pass
+    if kind == "checkbox" and args.get("checked") is not None:
+        control.Checked = bool(args["checked"])
+    if kind == "date" and args.get("date_format"):
+        control.DateFormat = str(args["date_format"])
+    if args.get("items"):
+        # list entries are (display, value) pairs on this model
+        try:
+            control.ListItems = tuple(
+                (_pv("DisplayText", str(x)), _pv("Value", str(x)))
+                for x in args["items"])
+        except Exception:
+            pass
+    for arg, prop in (("xpath", "DataBindingXpath"),
+                      ("xml_prefixes", "DataBindingPrefixMappings")):
+        if args.get(arg):
+            try:
+                setattr(control, prop, str(args[arg]))
+            except Exception:
+                pass
+
+    text = doc.getText()
+    cursor = text.createTextCursor()
+    if args.get("search"):
+        found = doc.createSearchDescriptor()
+        found.setSearchString(str(args["search"]))
+        hit = doc.findFirst(found)
+        if hit is None:
+            raise RuntimeError("Text %r not found to wrap."
+                               % args["search"])
+        cursor = text.createTextCursorByRange(hit)
+    else:
+        cursor.gotoEnd(False)
+        if args.get("text"):
+            text.insertString(cursor, str(args["text"]), False)
+            cursor.goLeft(len(str(args["text"])), True)
+    text.insertTextContent(cursor, control, True)
+    return {"inserted": kind, "alias": args.get("alias"),
+            "bound_to": args.get("xpath")}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7004,6 +7308,10 @@ TOOLS = {
     "lo_recover": tool_lo_recover,
     "checkpoint_document": tool_checkpoint_document,
     "document_watch": tool_document_watch,
+    # print setup, accessibility, content controls
+    "print_settings": tool_print_settings,
+    "set_alt_text": tool_set_alt_text,
+    "writer_content_control": tool_writer_content_control,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -7311,13 +7619,22 @@ TOOL_DEFS = [
                              "header_font_color": dict(_STR, description="'#RRGGBB'")})},
     # --- form controls (buttons and other UI elements) ---
     {"name": "insert_form_control",
-     "description": "Insert a form control (UI element) into the active Calc sheet or Writer document: a push button, checkbox, text field, label, or dropdown list box. Position and size in mm. For a button, 'url' makes it open a URL/dispatch command when clicked. For a listbox, 'items' are the dropdown entries.",
-     "inputSchema": _schema({"kind": dict(_STR, enum=["button", "checkbox", "textfield", "label", "listbox"]),
-                             "label": dict(_STR, description="caption (button/checkbox/label)"),
+     "description": "Insert a form control into the active Calc sheet or Writer document — the whole Form menu. Position and size in mm. For a button, 'url' opens a URL/dispatch command when clicked; listbox/combobox take 'items'; the numeric family (numeric, currency, formatted, date, time) takes value/min/max/decimals. 'required' and 'readonly' apply wherever the control supports them. Export with export_document form_fields=true to turn these into fillable PDF fields. (Image Control and Table Control are database-bound and need a data source, so they are not offered here.)",
+     "inputSchema": _schema({"kind": dict(_STR, enum=sorted(_FORM_COMPONENTS)),
+                             "label": dict(_STR, description="caption (button/checkbox/radio/groupbox/label)"),
                              "text": dict(_STR, description="default text (textfield)"),
-                             "items": {"type": "array", "items": _STR, "description": "dropdown entries (listbox)"},
+                             "items": {"type": "array", "items": _STR, "description": "entries (listbox/combobox)"},
                              "url": dict(_STR, description="button target URL / dispatch command"),
+                             "image": dict(_STR, description="picture file path (imagebutton)"),
                              "name": dict(_STR, description="control name"),
+                             "value": dict(_NUM, description="default value (numeric family)"),
+                             "min": dict(_NUM, description="minimum (numeric family)"),
+                             "max": dict(_NUM, description="maximum (numeric family)"),
+                             "decimals": dict(_INT, description="decimal places (numeric/currency)"),
+                             "currency": dict(_STR, description="currency symbol"),
+                             "format": dict(_STR, description="edit mask (pattern control)"),
+                             "required": dict(_BOOL, description="must be filled in"),
+                             "readonly": _BOOL,
                              "x_mm": _NUM, "y_mm": _NUM,
                              "width_mm": _NUM, "height_mm": _NUM},
                             ["kind"])},
@@ -7470,22 +7787,66 @@ TOOL_DEFS = [
                              "sheet": _SHEET, "match_case": _BOOL},
                             ["url"])},
     {"name": "export_document",
-     "description": "Store to a path with filter options. format 'pdf' (page_range, pdfa, quality 0-100, password) or 'csv' (delimiter, quote). Format defaults to the path extension.",
+     "description": "Store to a path with filter options. format 'pdf' or 'csv'; defaults to the path extension. PDF supports archival (pdfa), ACCESSIBILITY (tagged, pdfua — pair these with set_alt_text or the pictures stay silent), FILLABLE FORMS (form_fields turns Writer form controls into real AcroForm fields a browser can fill and save), and two separate passwords: 'password' locks opening, 'owner_password' restricts what a reader may do (can_print / can_modify / can_copy / can_annotate).",
      "inputSchema": _schema({"path": _STR,
                              "format": dict(_STR, enum=["pdf", "csv"]),
                              "page_range": dict(_STR, description="PDF pages, e.g. '1-3'"),
                              "pdfa": dict(_BOOL, description="PDF/A-1 archival"),
+                             "tagged": dict(_BOOL, description="tagged PDF — the basis of accessibility"),
+                             "pdfua": dict(_BOOL, description="PDF/UA-1 accessibility compliance (implies tagged)"),
+                             "bookmarks": dict(_BOOL, description="export headings as PDF bookmarks"),
+                             "form_fields": dict(_BOOL, description="export form controls as fillable PDF fields"),
+                             "forms_type": dict(_INT, description="0=FDF 1=PDF/AcroForm (default) 2=HTML 3=XML"),
+                             "watermark": dict(_STR, description="draw this text across every page"),
                              "quality": dict(_INT, description="PDF image quality 0-100"),
                              "password": dict(_STR, description="PDF open password"),
+                             "owner_password": dict(_STR, description="permissions password — restricts what a reader may do"),
+                             "can_print": _BOOL, "can_modify": _BOOL,
+                             "can_copy": _BOOL, "can_annotate": _BOOL,
                              "delimiter": dict(_STR, description="CSV field delimiter (default ',')"),
                              "quote": dict(_STR, description="CSV text delimiter (default '\"')")},
                             ["path"])},
     {"name": "set_document_properties",
-     "description": "Set document metadata: title/author/subject/description, keywords (array), and 'custom' user-defined properties ({name: value}; value null removes).",
+     "description": "Set document metadata — everything in File > Properties > Description, including the Dublin Core fields. title/author/subject/description plus coverage/identifier/rights/source/type (single values) and keywords/contributor/publisher/relation (ARRAYS — these are multi-value in ODF). 'language' is a BCP-47 tag ('ar-LY') and sets the document language a screen reader announces. 'custom' holds user-defined properties ({name: value}; null removes). Note: a PDF's own info panel only carries title/author/subject/keywords — the rest survive in ODF, and in PDF/A's XMP.",
      "inputSchema": _schema({"title": _STR, "author": _STR, "subject": _STR,
-                             "description": _STR,
+                             "description": dict(_STR, description="the 'Comments' box"),
                              "keywords": {"type": "array", "items": _STR},
+                             "contributor": {"type": "array", "items": _STR},
+                             "publisher": {"type": "array", "items": _STR},
+                             "relation": {"type": "array", "items": _STR},
+                             "coverage": _STR, "identifier": _STR,
+                             "rights": dict(_STR, description="licence / copyright, e.g. 'CC BY 4.0'"),
+                             "source": _STR,
+                             "type": dict(_STR, description="Dublin Core resource type, e.g. 'Text'"),
+                             "language": dict(_STR, description="BCP-47 document language, e.g. 'en-GB' or 'ar-LY'"),
                              "custom": {"type": "object", "description": "user-defined props"}})},
+    {"name": "print_settings",
+     "description": "Read or change how a document prints: printer name, paper size, orientation, and the per-application content switches. Writer exposes PrintGraphics/PrintTables/PrintDrawings/PrintControls/PrintPageBackground/PrintBlackFonts/PrintEmptyPages/PrintHiddenText/PrintLeftPages/PrintRightPages/PrintReversed/PrintProspect (booklet)/PrintProspectRTL/...; Calc exposes PrintGrid/PrintHeaders/PrintCharts/PrintObjects/PrintFormulas/PrintNotes/PrintZeroValues/PrintDownFirst/... Call with no arguments to read the current state and the list valid for this document.",
+     "inputSchema": _schema({"printer": dict(_STR, description="printer name"),
+                             "paper": dict(_STR, enum=list(_PAPER_FORMATS)),
+                             "orientation": dict(_STR, enum=["portrait", "landscape"]),
+                             "options": {"type": "object", "description": "{PrintOptionName: true|false} — names must match the application's own list"},
+                             "title": _STR, "url": _STR, "index": _INT})},
+    {"name": "set_alt_text",
+     "description": "Give an image or shape alternative text — the 'Alt Text' a screen reader announces, and what makes a tagged PDF genuinely accessible instead of merely structured. Set 'name' to target one object (writer_list_figures / calc_list_shapes give the names), or omit it to apply to every image and shape. decorative=true marks it as ornamental so assistive tech skips it.",
+     "inputSchema": _schema({"name": dict(_STR, description="object name; omit to apply to all"),
+                             "title": dict(_STR, description="short label"),
+                             "description": dict(_STR, description="the longer alt text"),
+                             "decorative": dict(_BOOL, description="purely ornamental — skipped by screen readers"),
+                             "index": _INT, "url": _STR})},
+    {"name": "writer_content_control",
+     "description": "Insert a Word-compatible content control (Form > Content Controls): rich_text, plain_text, checkbox, dropdown, combobox, date or picture. Unlike form controls these sit IN the text flow rather than floating over it, survive round-tripping to .docx, and can be bound to XML data via 'xpath'. Wrap existing text with 'search', or append with 'text'.",
+     "inputSchema": _schema({"kind": dict(_STR, enum=list(_CONTENT_CONTROL_KINDS)),
+                             "text": dict(_STR, description="text to insert and wrap"),
+                             "search": dict(_STR, description="wrap the first occurrence of this instead"),
+                             "alias": dict(_STR, description="the control's title/name"),
+                             "placeholder": _STR,
+                             "items": {"type": "array", "items": _STR, "description": "dropdown/combobox entries"},
+                             "checked": dict(_BOOL, description="checkbox initial state"),
+                             "date_format": dict(_STR, description="e.g. 'YYYY-MM-DD'"),
+                             "xpath": dict(_STR, description="XML data binding XPath"),
+                             "xml_prefixes": dict(_STR, description="namespace prefix mappings for xpath")},
+                            ["kind"])},
     {"name": "list_styles",
      "description": "List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied.",
      "inputSchema": _schema({"family": dict(_STR, description="style family (omit for all)"),
@@ -8090,6 +8451,8 @@ writer_get_comments writer_resolve_comment
 writer_insert_image writer_insert_caption writer_captions
 list_recent_documents print_document
 lo_health lo_recover checkpoint_document document_watch
+print_settings set_alt_text writer_content_control
+set_document_properties insert_form_control export_document
 """.split())
 
 

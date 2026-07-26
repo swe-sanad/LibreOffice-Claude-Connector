@@ -39,6 +39,42 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
   starting. Impress first: Claude is good at presentation content and the API is
   not exotic; Base is the largest effort and narrowest audience; Draw follows
   Impress almost for free.
+### Added — document attributes, print setup, and the full Form menu (183 → 186)
+
+Everything here is UNO + stdlib; the property names were verified against a live
+LibreOffice 25.2.3.2 rather than taken from documentation.
+
+- **`set_document_properties` now covers all of File ▸ Properties ▸ Description**,
+  including the Dublin Core fields: coverage, identifier, rights, source, type
+  (single values) and **contributor, publisher, relation (arrays)** — those three
+  are `sequence<string>` in ODF and raise `CannotConvertException` if handed a
+  bare string. Plus `language` (BCP-47), the document language a screen reader
+  announces. Verified round-tripping to `dc:*` elements in `meta.xml`.
+- **`print_settings`** — read or set printer, paper and orientation, plus the
+  per-application content switches. Writer and Calc expose *different* lists, so
+  the tool validates against the right one and reports it; a Writer switch on a
+  Calc document is rejected up front rather than failing at the office.
+  Includes `PrintProspectRTL` for right-to-left booklets.
+- **`set_alt_text`** — alternative text (and the `Decorative` flag) on images
+  and shapes. Without it a tagged PDF is structured but still inaccessible,
+  because every picture is silent.
+- **`writer_content_control`** — the Form ▸ Content Controls family
+  (rich_text, plain_text, checkbox, dropdown, combobox, date, picture). These
+  live in the text flow, survive a `.docx` round trip, and can be bound to XML
+  data through `xpath`.
+- **`insert_form_control` grew from 5 kinds to 19** — the whole Form menu that
+  works without a data source: radio, combobox, groupbox, formatted, date, time,
+  numeric, currency, pattern, file, imagebutton, scrollbar, spinbutton, navbar,
+  plus value/min/max/decimals and `required`/`readonly`. Image Control and Table
+  Control are deliberately excluded: both are database-bound.
+- **`export_document` gained the PDF options that matter**: `tagged`
+  (tagged PDF), `pdfua` (PDF/UA-1), `bookmarks`, `form_fields` + `forms_type`
+  (turns Writer form controls into real AcroForm fields a browser can fill and
+  save), `watermark`, and an **owner password** with `can_print` / `can_modify` /
+  `can_copy` / `can_annotate` — distinct from the existing open password.
+
+Verified in the produced PDF's own bytes: `/MarkInfo` and `/StructTreeRoot`
+(tagged), `/AcroForm` (fillable), `/Encrypt` (permissions), `/Lang` (language).
 
 ## [0.9.5] — 2026-07-26
 

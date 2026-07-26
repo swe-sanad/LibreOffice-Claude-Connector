@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **184 tools** of the `libreoffice` MCP server (v0.9.5), generated from
+All **187 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -103,7 +103,7 @@ All **184 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 
 | Tool | Description |
 |---|---|
-| `insert_form_control` | Insert a form control (UI element) into the active Calc sheet or Writer document: a push button, checkbox, text field, label, or dropdown list box. Position and size in mm. For a button, 'url' makes it open a URL/dispatch command when clicked. For a listbox, 'items' are the dropdown entries. |
+| `insert_form_control` | Insert a form control into the active Calc sheet or Writer document — the whole Form menu. Position and size in mm. For a button, 'url' opens a URL/dispatch command when clicked; listbox/combobox take 'items'; the numeric family (numeric, currency, formatted, date, time) takes value/min/max/decimals. 'required' and 'readonly' apply wherever the control supports them. Export with export_document form_fields=true to turn these into fillable PDF fields. (Image Control and Table Control are database-bound and need a data source, so they are not offered here.) |
 
 ## Automation & inspection
 
@@ -155,8 +155,11 @@ All **184 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 | Tool | Description |
 |---|---|
 | `set_hyperlink` | Attach a clickable hyperlink. Calc: give 'cell' — replaces it with a URL field. Writer: give 'search' — links every matching text range. |
-| `export_document` | Store to a path with filter options. format 'pdf' (page_range, pdfa, quality 0-100, password) or 'csv' (delimiter, quote). Format defaults to the path extension. |
-| `set_document_properties` | Set document metadata: title/author/subject/description, keywords (array), and 'custom' user-defined properties ({name: value}; value null removes). |
+| `export_document` | Store to a path with filter options. format 'pdf' or 'csv'; defaults to the path extension. PDF supports archival (pdfa), ACCESSIBILITY (tagged, pdfua — pair these with set_alt_text or the pictures stay silent), FILLABLE FORMS (form_fields turns Writer form controls into real AcroForm fields a browser can fill and save), and two separate passwords: 'password' locks opening, 'owner_password' restricts what a reader may do (can_print / can_modify / can_copy / can_annotate). |
+| `set_document_properties` | Set document metadata — everything in File > Properties > Description, including the Dublin Core fields. title/author/subject/description plus coverage/identifier/rights/source/type (single values) and keywords/contributor/publisher/relation (ARRAYS — these are multi-value in ODF). 'language' is a BCP-47 tag ('ar-LY') and sets the document language a screen reader announces. 'custom' holds user-defined properties ({name: value}; null removes). Note: a PDF's own info panel only carries title/author/subject/keywords — the rest survive in ODF, and in PDF/A's XMP. |
+| `print_settings` | Read or change how a document prints: printer name, paper size, orientation, and the per-application content switches. Writer exposes PrintGraphics/PrintTables/PrintDrawings/PrintControls/PrintPageBackground/PrintBlackFonts/PrintEmptyPages/PrintHiddenText/PrintLeftPages/PrintRightPages/PrintReversed/PrintProspect (booklet)/PrintProspectRTL/...; Calc exposes PrintGrid/PrintHeaders/PrintCharts/PrintObjects/PrintFormulas/PrintNotes/PrintZeroValues/PrintDownFirst/... Call with no arguments to read the current state and the list valid for this document. |
+| `set_alt_text` | Give an image or shape alternative text — the 'Alt Text' a screen reader announces, and what makes a tagged PDF genuinely accessible instead of merely structured. Set 'name' to target one object (writer_list_figures / calc_list_shapes give the names), or omit it to apply to every image and shape. decorative=true marks it as ornamental so assistive tech skips it. |
+| `writer_content_control` | Insert a Word-compatible content control (Form > Content Controls): rich_text, plain_text, checkbox, dropdown, combobox, date or picture. Unlike form controls these sit IN the text flow rather than floating over it, survive round-tripping to .docx, and can be bound to XML data via 'xpath'. Wrap existing text with 'search', or append with 'text'. |
 | `list_styles` | List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied. |
 | `set_style` | Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background, optional 'parent' (inherit-from) and 'follow_style' (next-paragraph style, e.g. a heading followed by body text). Reusable across cells/paragraphs. |
 | `protect_document` | Set/remove protection. Calc: a 'sheet' protects that sheet, else the workbook structure; optional 'password'. Writer: toggles IsProtected on all text sections. protect=false unprotects. |
