@@ -335,11 +335,12 @@ class MetadataPrintFormsTest(unittest.TestCase):
         self.assertEqual(sorted(enum), sorted(m._FORM_COMPONENTS))
 
     def test_print_option_lists_are_per_application(self):
-        # offering a Writer switch on a Calc doc would just raise at the office
+        # offering a Writer switch on a Calc doc just raises at the office
         self.assertIn("PrintProspectRTL", m._PRINT_SETTINGS_WRITER)
         self.assertIn("PrintFormulas", m._PRINT_SETTINGS_CALC)
-        self.assertEqual(set(m._PRINT_SETTINGS_WRITER) & set(m._PRINT_SETTINGS_CALC),
-                         {"PrintEmptyPages"})
+        # 0.9.6 believed PrintEmptyPages was common to both; it is a Writer
+        # document-setting only, and Calc's switches live on the page style
+        self.assertNotIn("PrintEmptyPages", m._PRINT_SETTINGS_CALC)
 
     def test_print_settings_rejects_a_foreign_option(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
@@ -424,6 +425,43 @@ class LifecycleTest(unittest.TestCase):
             used = set(re.findall(r"\{([a-z_]+)\}", prompt["text"]))
             self.assertEqual(used - declared, set(),
                              "%s uses undeclared placeholders" % prompt["name"])
+
+
+class CalcParityTest(unittest.TestCase):
+    """Calc counterparts of the Writer supporting tools."""
+
+    def test_new_calc_tools_registered(self):
+        for name in ("calc_find", "calc_set_document_defaults",
+                     "calc_set_header_footer"):
+            self.assertIn(name, m.TOOLS)
+            self.assertIn(name, {d["name"] for d in m.TOOL_DEFS})
+
+    def test_calc_find_is_read_only_but_the_setters_are_not(self):
+        self.assertIn("calc_find", m._NO_UNDO)
+        for name in ("calc_set_document_defaults", "calc_set_header_footer"):
+            self.assertNotIn(name, m._NO_UNDO)
+
+    def test_calc_print_options_are_the_page_style_ones(self):
+        # Calc keeps these on the PAGE STYLE; com.sun.star.document.Settings
+        # carries only PrinterName/PrinterSetup, so naming a document-settings
+        # property here raises UnknownPropertyException at the office
+        for prop in ("PrintGrid", "PrintFormulas", "PrintHeaders",
+                     "PrintCharts", "PrintZeroValues", "PrintDownFirst"):
+            self.assertIn(prop, m._PRINT_SETTINGS_CALC)
+
+    def test_calc_print_options_exclude_invented_names(self):
+        # these were guessed in 0.9.6 and do not exist on a Calc page style
+        for bogus in ("PrintAllSheets", "PrintEmptyPages", "PrintNotes"):
+            self.assertNotIn(bogus, m._PRINT_SETTINGS_CALC, bogus)
+
+    def test_writer_and_calc_print_lists_stay_disjoint(self):
+        self.assertEqual(set(m._PRINT_SETTINGS_WRITER) & set(m._PRINT_SETTINGS_CALC),
+                         set(), "an option in both lists would hide a routing bug")
+
+    def test_calc_find_advertises_both_search_modes(self):
+        props = {d["name"]: d for d in m.TOOL_DEFS}["calc_find"]["inputSchema"]["properties"]
+        for key in ("search", "style", "regex", "sheet"):
+            self.assertIn(key, props)
 
 
 class LooksNumericTest(unittest.TestCase):

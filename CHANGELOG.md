@@ -5,6 +5,40 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`print_settings` was broken for Calc** (shipped in 0.9.6). Calc keeps its
+  print switches on the **page style**, not on `com.sun.star.document.Settings`
+  — which for a spreadsheet carries only `PrinterName`/`PrinterSetup`. Every
+  Calc print option therefore raised `UnknownPropertyException` at the office.
+  The tool now routes to the page style of the active sheet, and the Calc list
+  is the set that genuinely exists there: `PrintAnnotations`, `PrintCharts`,
+  `PrintDownFirst`, `PrintDrawing`, `PrintFormulas`, `PrintGrid`,
+  `PrintHeaders`, `PrintObjects`, `PrintZeroValues`. `PrintAllSheets`,
+  `PrintEmptyPages` and `PrintNotes` were guesses and are gone.
+
+### Added — Calc counterparts of the Writer supporting tools (188 → 191)
+
+- `calc_find` — search a workbook **without changing anything**, the read-only
+  counterpart to `calc_find_replace` and the twin of `writer_find`. Text or
+  regex, or `style` to list every cell using a named cell style, which is how
+  you audit formatting. A style hit is a *range*, so every cell in it is
+  reported rather than just its first.
+- `calc_set_document_defaults` — the workbook's base font and size via the
+  `Default` cell style, applied to Western, Complex (RTL/CTL) and Asian scripts
+  together, mirroring `writer_set_document_defaults`.
+- `calc_set_header_footer` — printed page headers and footers with independent
+  left/centre/right parts, mirroring `writer_set_header_footer`.
+
+Verified against a live office: **eight** of the v0.9.6 additions already worked
+unchanged on Calc — `document_lifecycle`, `set_document_properties`,
+`set_alt_text`, `insert_form_control`, `document_watch`, `checkpoint_document`,
+`lo_health`, and `export_document` (a Calc PDF gets `/MarkInfo`,
+`/StructTreeRoot`, `/AcroForm` and `/Lang` just as a Writer one does). Content
+controls and captions stay Writer-only because LibreOffice has no Calc
+equivalent; Calc's fill-in-the-blank mechanism is cell validation, which
+`calc_set_validation` already covers.
+
 ## [0.9.6] — 2026-07-26
 
 Reaches deeper into the UNO API, and turns the server from a bag of tools into
