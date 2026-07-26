@@ -5,6 +5,41 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — deeper UNO in Writer and Calc (183 → 184 tools)
+
+- **Format-preserving find & replace.** `writer_find_replace` kept formatting
+  only when a match sat inside ONE formatting run; a match spanning runs came
+  back chopped along the OLD boundaries (`plain <b>BOLD</b> tail` →
+  `REPLA`-plain + `CEMENT`-bold). Each match is now replaced by hand and stamped
+  with the formatting of its first character. `preserve_formatting=false`
+  restores LibreOffice's raw behaviour.
+- **Regular expressions** in `writer_find_replace`, `calc_find_replace`
+  (ICU regex, `$1..$n` backreferences) and `writer_find` (Python regex). The
+  UNO flag existed all along and was simply never exposed.
+- **Search by paragraph style** — `writer_find` takes `style` (e.g.
+  `"Heading 1"`), with or without search text, so "list every heading" is one
+  call.
+- **Locale-aware number formats** — `calc_format_range` takes `number_preset`
+  (currency/percent/date/time/datetime/number/text) plus `locale` and
+  `decimals`, resolved through `getStandardFormat` for that country. `ar-LY`
+  currency really is `[$د.ل.‏-1001] #٬##0٫00`, which no hand-written format
+  string was going to get right.
+- `document_watch` — notice when a document changes underneath you, and in
+  particular **tell the user's edits from ours**: the server counts its own
+  mutating calls, so `check` reports `user_edits` separately. Start a watch
+  before a long or multi-step operation, check before overwriting.
+- `dispatch_uno`'s description now explains what it is actually for — every
+  menu item in LibreOffice is a `.uno:` command, including many with no
+  model-level API — with worked examples.
+
+### Documentation
+
+- `docs/PLAN-IMPRESS-BASE-DRAW.md` — why Impress, Base and Draw are deferred,
+  in what order they are worth doing, and the design decisions to settle before
+  starting. Impress first: Claude is good at presentation content and the API is
+  not exotic; Base is the largest effort and narrowest audience; Draw follows
+  Impress almost for free.
+
 ## [0.9.5] — 2026-07-26
 
 Everyday-user pass. Until now the surface was tuned for an expert operator

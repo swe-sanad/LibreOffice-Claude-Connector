@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **183 tools** of the `libreoffice` MCP server (v0.9.5), generated from
+All **184 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -75,7 +75,7 @@ All **183 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 | `writer_replace_selection` | Replace the current Writer selection with text (or insert at the caret if nothing is selected). |
 | `writer_append_text` | Append text at the end of the Writer document ('\n' becomes a paragraph break). new_paragraph=false continues the last paragraph. |
 | `writer_insert_heading` | Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document. |
-| `writer_find_replace` | Find & replace text across the Writer document. Returns the replacement count. |
+| `writer_find_replace` | Find & replace text across the Writer document. Keeps the formatting of what it replaced: a match spanning several formatting runs (part bold, part not) would otherwise come back chopped along the OLD run boundaries — the replacement now takes the formatting of the match's first character. Set preserve_formatting=false for LibreOffice's raw behaviour. With regex=true, 'search' is an ICU regular expression and $1..$n backreferences work in 'replace'. |
 | `writer_format_text` | Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string. |
 | `writer_insert_table` | Insert a table, optionally filled with data (rows of strings/numbers). By default appends at the document end; give 'search' to place it right after the first paragraph containing that text, or 'after_index' to place it after a 0-based body-paragraph index. |
 | `writer_insert_image` | Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size). |
@@ -160,7 +160,7 @@ All **183 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 | `list_styles` | List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied. |
 | `set_style` | Create or modify a named style in a family (paragraph/character/cell/page/frame). Sets font/size/color/background, optional 'parent' (inherit-from) and 'follow_style' (next-paragraph style, e.g. a heading followed by body text). Reusable across cells/paragraphs. |
 | `protect_document` | Set/remove protection. Calc: a 'sheet' protects that sheet, else the workbook structure; optional 'password'. Writer: toggles IsProtected on all text sections. protect=false unprotects. |
-| `dispatch_uno` | Execute an arbitrary .uno: command against the active frame (e.g. '.uno:Undo', '.uno:GoToCell', '.uno:InsertPagebreak') with optional named args. Escape hatch when no dedicated tool fits. |
+| `dispatch_uno` | Execute an arbitrary .uno: command against the active frame. This is the widest escape hatch there is: EVERY menu item and toolbar button in LibreOffice is a .uno: command, including many with no model-level API at all — so when no dedicated tool fits, this usually still can. Examples: '.uno:Undo', '.uno:GoToCell' (args {Nr:'B7'}), '.uno:InsertPagebreak', '.uno:Deselect', '.uno:RecalcPivotTable', '.uno:SelectAll', '.uno:FreezePanes', '.uno:SpellDialog'. It drives the GUI, so it acts on the CURRENT selection/view — set that up first (e.g. calc_select_range). |
 | `document_undo` | Undo/redo/clear the active document's undo stack, or just query it (action 'status'). Returns whether undo/redo are possible and the next undo title. |
 | `bind_document_event` | Bind (or clear) a Basic/script macro to a document event such as OnSave, OnLoad, OnModifyChanged, OnPrint. Omit 'script' to clear the binding. |
 | `set_view_zoom` | Set the window zoom: 'percent' (a number) and/or 'type' (optimal/page_width/whole_page/percent/page_width_exact). |
@@ -242,6 +242,7 @@ All **183 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 |---|---|
 | `lo_health` | Pre-flight check before a risky edit: connection and transport, the call timeout, every open document with whether it has UNSAVED changes and a real file, stale .~lock files left by a crash, pending crash-recovery, and whether AutoSave is on. Returns a 'problems' list and a 'healthy' flag. Call this when something has gone wrong, or before a large/destructive change. |
 | `lo_recover` | LibreOffice's crash recovery, driven over UNO instead of the startup dialog. action 'status' (default) reports whether it crashed, what is waiting to be recovered and the AutoSave setting; 'restore' reopens the pending documents; 'discard' permanently destroys that unsaved work and needs confirm=true; 'set_autosave' turns AutoSave on with 'minutes' (0 = off). |
+| `document_watch` | Notice when a document changes underneath you — in particular when the USER edits it while Claude is thinking. action 'start' begins watching, 'check' reports how many changes happened and separates OUR edits from the user's, 'stop' ends it, 'list' shows what is watched. Start a watch before a long or multi-step operation, then check before overwriting anything. |
 | `checkpoint_document` | Snapshot a document to a side file so a risky edit can be undone. THIS IS THE ONLY ROLLBACK for anything that writes a cell range — LibreOffice does not record bulk range writes for undo, so Ctrl+Z cannot bring those back. action 'create' (default) saves a copy and returns a checkpoint_id, 'list' shows saved checkpoints, 'restore' puts one back (closing and reopening the document; unsaved edits since the checkpoint are lost). |
 | `writer_captions` | List or re-word existing captions. action 'list' returns every auto-numbered caption (index, category, number, label) — including ones made with LibreOffice's own Insert > Caption. action 'set' rewrites the LABEL of the caption picked by 'index', 'search' or 'category', leaving the number a live field so renumbering still works. To delete a caption outright use writer_delete_paragraphs. |
 | `writer_table_formula` | Set a formula in a Writer table cell and return the computed value. Writer cell-reference syntax, e.g. '=<A1>+<A2>', '=<A1>*2', 'sum <A1:A5>'. Target the table by 'name' or 0-based 'index'. |
