@@ -45,6 +45,16 @@ def main():
         (os.path.join(ROOT, "docs", "MCP-TOOLS.md"), "docs/MCP-TOOLS.md"),
     ]
 
+    # The server is a PACKAGE now, not one file — shipping only the entry point
+    # would bundle something that cannot import itself. Globbed rather than
+    # listed so a new tool module is never silently left out of a release.
+    pkg = os.path.join(ROOT, "mcp", "loconn")
+    for folder in (pkg, os.path.join(pkg, "tools")):
+        rel = os.path.relpath(folder, ROOT).replace(os.sep, "/")
+        for name in sorted(os.listdir(folder)):
+            if name.endswith(".py"):
+                files.append((os.path.join(folder, name), "%s/%s" % (rel, name)))
+
     # Ship the agent-acceptor .oxt inside the bundle. Without it, Claude can only
     # reach a LibreOffice it launched itself — an everyday user who already has
     # LibreOffice open hits the single-instance wall. Bundled, lo_status can hand

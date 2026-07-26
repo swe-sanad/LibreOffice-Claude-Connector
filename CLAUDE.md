@@ -61,16 +61,29 @@ src/                    # extension source (single source of truth)
   sidebar_panel.py      # registered XUIElementFactory component (sidebar deck/panel)
 ext/                    # .oxt packaging: description.xml, META-INF/manifest.xml, Addons.xcu,
                         #   ProtocolHandler.xcu, registry/.../{Sidebar,Factories}.xcu, icons/
-mcp/libreoffice_mcp.py  # stdlib MCP server (JSON-RPC/stdio, 174 tools), runs under LO python.exe
+mcp/libreoffice_mcp.py  # MCP PROTOCOL layer only: initialize/tools/prompts + stdin loop
+mcp/loconn/             # the server package (191 tools), runs under LO python.exe
+  registry.py           #   register() — ONE declaration site per tool; validates at import
+  core.py               #   shared UNO machinery: connect, documents, undo, errors, timeout
+  tools/<app>_<concern>.py  # calc_{data,sheets,format,analysis},
+                        #   writer_{text,structure,format,tables},
+                        #   shared_{lifecycle,properties,recovery,automation}
 scripts/                # build_oxt.py, build_mcpb.py, install_and_verify.ps1, run_integration.ps1,
                         #   start_office_socket.ps1, make_icons.py, spike_http.py
-tests/ tests/integration/# offline suites (111) + real-LO integration tests
+tests/ tests/integration/# offline suites (173) + real-LO integration tests
 docs/                   # RESEARCH, BUILD-PLAN, ARCHITECTURE, DEVELOPMENT, CHANGELOG, TEST-PLAN
 ```
 
 **Two entry points, one bridge.** Both the extension and the MCP server drive UNO
 through `src/uno_bridge.py`. The extension calls it in-process from a document it
 already has; the MCP server calls it over a socket against whatever document is open.
+
+**Adding a tool** — write `tool_<name>(args)` in the module for its application and
+concern, add its schema to that module's `TOOL_DEFS`, and add the name to `basic=`
+(everyday tier) and/or `read_only=` (no undo context) in the same `register(...)` call
+at the bottom. All four facts live together; `register` raises at IMPORT time if a
+schema has no handler, a handler has no schema, or a tier names an unknown tool. Then
+`scripts/gen_mcp_tools_doc.py` (it imports the registry, so it needs LO's python).
 
 **Packaging.** The registered components (`connector.py`, `sidebar_panel.py`) live at
 the `.oxt` root; helper modules are bundled as a **`claudeconn` package under
