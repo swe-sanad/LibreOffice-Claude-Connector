@@ -31,6 +31,30 @@ class ToolRegistryTest(unittest.TestCase):
             self.assertIn(name, m.TOOLS)
             self.assertIn(name, {d["name"] for d in m.TOOL_DEFS})
 
+    def test_borrowed_everyday_tools_are_registered_and_advertised(self):
+        # mined from the sibling projects; they exist to be found by a casual
+        # user, so being in TOOLS but not the everyday tier defeats the point
+        for name in ("calc_import_csv", "calc_detect_errors",
+                     "list_recent_documents", "print_document",
+                     "writer_resolve_comment", "writer_captions",
+                     "writer_insert_caption"):
+            self.assertIn(name, m.TOOLS)
+            self.assertIn(name, {d["name"] for d in m.TOOL_DEFS})
+            self.assertIn(name, m._BASIC_TOOLS)
+
+
+class CalcErrorTableTest(unittest.TestCase):
+    def test_covers_the_errors_users_actually_hit(self):
+        # the four a student sees on a broken sheet
+        for code, marker in ((532, "#DIV/0!"), (524, "#REF!"),
+                             (525, "#NAME?"), (519, "#VALUE!")):
+            self.assertIn(marker, m._CALC_ERRORS[code])
+
+    def test_every_entry_names_a_marker(self):
+        for code, text in m._CALC_ERRORS.items():
+            self.assertTrue(text.startswith("#"),
+                            "code %s should start with the cell marker" % code)
+
 
 class ToolTierTest(unittest.TestCase):
     def setUp(self):
@@ -72,13 +96,16 @@ class UndoGroupingTest(unittest.TestCase):
     def test_mutating_tools_are_not_exempt(self):
         for name in ("calc_write_range", "calc_delete_rows", "calc_format_table",
                      "calc_clean_data", "writer_append_text",
-                     "writer_format_document", "writer_find_replace"):
+                     "writer_format_document", "writer_find_replace",
+                     "calc_import_csv", "writer_resolve_comment",
+                     "writer_insert_caption", "writer_captions"):
             self.assertNotIn(name, m._NO_UNDO,
                              "%s mutates — it must get an undo context" % name)
 
     def test_read_only_tools_are_exempt(self):
         for name in ("calc_read_range", "calc_overview", "lo_status",
-                     "writer_get_text", "list_documents"):
+                     "writer_get_text", "list_documents", "calc_detect_errors",
+                     "list_recent_documents", "print_document"):
             self.assertIn(name, m._NO_UNDO)
 
     def test_exempt_tool_never_opens_a_context(self):

@@ -5,6 +5,46 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — everyday tools mined from the sibling projects (174 → 180)
+
+Selected from Nelson MCP's 140-tool surface against the everyday/student bar
+(see `docs/COMPETITOR-STUDY.md`); the niche families — AI images, tunnels,
+launchers, galleries, job/workflow, Draw/Impress, cross-document search indexes,
+and WriterAgent's data-science layer — were deliberately left out. All six are
+in the advertised tier, which grows 32 → 41.
+
+- `calc_import_csv` — import a CSV/TSV **into** the open sheet, rather than
+  opening it as a separate document. Delimiter auto-detected. Fields land as
+  text or numbers and **never as formulas**, so a field starting with `=`
+  cannot execute (CSV injection).
+- `calc_detect_errors` — find every broken formula in the workbook (#REF!,
+  #DIV/0!, #NAME?, #VALUE!, circular refs) with the formula that caused each.
+  Uses `queryFormulaCells(ERROR)` — one UNO call per sheet, not a cell walk.
+- `list_recent_documents` — File ▸ Recent Documents, so "open the essay I was
+  working on" resolves without the user knowing the path.
+- `print_document` — send a document to a physical printer (page range, copies,
+  printer name).
+- `writer_resolve_comment` — mark comments resolved/unresolved. The write side
+  of what `writer_get_comments` already reported and nothing could set.
+- `writer_captions` — **list and re-word existing captions**, including ones
+  made with LibreOffice's own Insert ▸ Caption. The number stays a live field,
+  so renumbering keeps working after the label changes.
+
+### Changed
+
+- `writer_insert_caption` can now anchor to a **table or image by name**
+  (`table` / `image` / `position`) instead of only a text search — table
+  captions default above the table, figure captions below, per convention.
+
+### Fixed
+
+- `docs/MCP-TOOLS.md` is generated but was committed stale, so the v0.10.0
+  bundle shipped a tool reference labelled v0.9.2. The release workflow now
+  regenerates it after stamping the version.
+- The release workflow built the `.mcpb` *before* the `.oxt`, which would have
+  published a bundle missing the agent-acceptor extension it is meant to carry.
+- `.vscode/mcp.json` had a trailing comma, making it invalid strict JSON.
+
 ## [0.10.0] — 2026-07-26
 
 Everyday-user pass. Until now the surface was tuned for an expert operator

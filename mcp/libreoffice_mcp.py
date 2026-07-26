@@ -183,7 +183,8 @@ def _is_connection_error(exc):
 _NO_UNDO = frozenset("""
 lo_status lo_screenshot list_documents list_macros list_styles list_templates
 list_embedded_objects get_current_selection get_document_properties get_signatures
-read_spreadsheet inspect_ods calc_overview
+read_spreadsheet inspect_ods calc_overview calc_detect_errors
+list_recent_documents print_document
 create_document open_document create_from_template close_document save_document
 export_document reload_document set_active_document convert merge
 dispatch batch document_undo
@@ -5147,6 +5148,66 @@ def tool_writer_convert_table(args):
     raise RuntimeError("direction must be 'to_text' or 'to_table'.")
 
 
+def _blank_paragraph_at(text, where, before):
+    """Open an empty paragraph next to `where` and return a cursor sitting in it.
+
+    `before=True` puts the new paragraph ahead of `where`'s content, which needs
+    the extra gotoPreviousParagraph — inserting a break at a paragraph's start
+    leaves the cursor with the ORIGINAL content, not the new empty line.
+    """
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    cur = text.createTextCursorByRange(where)
+    text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+    if before:
+        cur.gotoPreviousParagraph(False)
+    return cur
+
+
+def _caption_slot_for_table(doc, name, position):
+    """A table's getAnchor() is NOT a usable text range on this build —
+    getText() returns None and createTextCursorByRange rejects it. So find the
+    table in the body enumeration and work from the paragraph beside it."""
+    text = doc.getText()
+    elements = []
+    enum = text.createEnumeration()
+    while enum.hasMoreElements():
+        elements.append(enum.nextElement())
+    idx = None
+    for i, el in enumerate(elements):
+        if (el.supportsService("com.sun.star.text.TextTable")
+                and getattr(el, "Name", None) == name):
+            idx = i
+            break
+    if idx is None:
+        raise RuntimeError("No table named %r. Tables: %s"
+                           % (name, ", ".join(doc.getTextTables().getElementNames())))
+    if position == "before":
+        if idx == 0:
+            raise RuntimeError(
+                "Table %r is the first thing in the document, so there is no "
+                "paragraph above it to hold a caption — use position='after'."
+                % name)
+        return text, _blank_paragraph_at(text, elements[idx - 1].getEnd(), False)
+    if idx + 1 >= len(elements):
+        return text, _blank_paragraph_at(text, text.getEnd(), False)
+    return text, _blank_paragraph_at(text, elements[idx + 1].getStart(), True)
+
+
+def _caption_slot_for_image(doc, name, position):
+    graphics = doc.getGraphicObjects()
+    if not graphics.hasByName(name):
+        raise RuntimeError("No image named %r. Images: %s"
+                           % (name, ", ".join(graphics.getElementNames())))
+    rng = graphics.getByName(name).getAnchor()
+    host = rng.getText()
+    if host is None:                     # same quirk as tables — fall back
+        host = doc.getText()
+        return host, _blank_paragraph_at(host, host.getEnd(), False)
+    return host, _blank_paragraph_at(
+        host, rng.getStart() if position == "before" else rng.getEnd(),
+        position == "before")
+
+
 def tool_writer_insert_caption(args):
     """Insert an auto-numbering caption ('Figure 1 — ...') as a new paragraph,
     backed by a per-category SetExpression sequence field so numbers increment
@@ -5172,7 +5233,15 @@ def tool_writer_insert_caption(args):
     field.SubType = SEQUENCE
     field.attachTextFieldMaster(master)
     text = doc.getText()
-    if args.get("search"):
+    # Convention: table captions sit above the table, figure captions below it —
+    # so 'position' defaults per object type rather than globally.
+    if args.get("table"):
+        text, cur = _caption_slot_for_table(
+            doc, args["table"], str(args.get("position") or "before").lower())
+    elif args.get("image"):
+        text, cur = _caption_slot_for_image(
+            doc, args["image"], str(args.get("position") or "after").lower())
+    elif args.get("search"):
         rng = _writer_find_first(doc, args["search"], args.get("match_case", False))
         if rng is None:
             raise RuntimeError("Search text %r not found." % args["search"])
@@ -5192,7 +5261,106 @@ def tool_writer_insert_caption(args):
     except Exception:
         pass
     return {"category": category, "number": field.getPresentation(False),
-            "text": label}
+            "text": label,
+            "anchored_to": args.get("table") or args.get("image") or None}
+
+
+_SEQ_FIELD = "com.sun.star.text.TextField.SetExpression"
+
+
+def _iter_captions(doc):
+    """Yield (field, category, paragraph_cursor) for every auto-numbered caption.
+
+    A caption is a SetExpression field of subtype SEQUENCE — the same thing
+    writer_insert_caption creates, and the same thing LibreOffice's own
+    Insert > Caption creates, so captions made in the GUI are found too.
+    """
+    from com.sun.star.text.SetVariableType import SEQUENCE
+    enum = doc.getTextFields().createEnumeration()
+    while enum.hasMoreElements():
+        field = enum.nextElement()
+        if not field.supportsService(_SEQ_FIELD):
+            continue
+        try:
+            if field.SubType != SEQUENCE:
+                continue
+        except Exception:
+            continue
+        anchor = field.getAnchor()
+        # a caption can live in a table cell or a frame, so walk ITS text rather
+        # than doc.getText()
+        host = anchor.getText()
+        cur = host.createTextCursorByRange(anchor)
+        cur.gotoStartOfParagraph(False)
+        cur.gotoEndOfParagraph(True)
+        try:
+            category = field.getTextFieldMaster().Name
+        except Exception:
+            category = ""
+        yield field, category, cur
+
+
+def tool_writer_captions(args):
+    """List or re-word the auto-numbered captions ('Figure 1 - Site plan').
+
+    The NUMBER is a field and stays owned by LibreOffice, so renumbering after
+    an insert or delete keeps working; only the label is rewritten.
+    """
+    doc = _require_writer()
+    action = str(args.get("action", "list")).lower()
+    if action not in ("list", "set"):
+        raise RuntimeError("action must be 'list' or 'set'. To remove a caption "
+                           "entirely, use writer_delete_paragraphs on its text.")
+
+    found = []
+    for i, (field, category, cur) in enumerate(_iter_captions(doc)):
+        number = field.getPresentation(False)
+        full = cur.getString()
+        label, pos = full, full.find(number)
+        if pos >= 0:
+            label = full[pos + len(number):]
+        found.append({"index": i, "category": category, "number": number,
+                      "label": label.lstrip(" —-:.\t"), "text": full,
+                      "_field": field})
+
+    if action == "list":
+        return {"captions": [{k: v for k, v in c.items()
+                              if not k.startswith("_")} for c in found],
+                "count": len(found)}
+
+    want_index = args.get("index")
+    search = (args.get("search") or "").lower()
+    category = (args.get("category") or "").lower()
+    if want_index is None and not search and not category:
+        raise RuntimeError("Give 'index' (from action='list'), 'search' (text "
+                           "in the caption) or 'category' to pick the caption.")
+    if "text" not in args:
+        raise RuntimeError("Give 'text' - the new caption label.")
+    sep = args.get("separator", " — ")
+
+    changed = []
+    for c in found:
+        if want_index is not None and c["index"] != int(want_index):
+            continue
+        if search and search not in c["text"].lower():
+            continue
+        if category and category != c["category"].lower():
+            continue
+        anchor = c["_field"].getAnchor()
+        host = anchor.getText()
+        tail = host.createTextCursorByRange(anchor.getEnd())
+        tail.gotoEndOfParagraph(True)          # everything after the number
+        tail.setString(sep + args["text"])
+        changed.append({"index": c["index"], "category": c["category"],
+                        "number": c["number"], "label": args["text"]})
+    if not changed:
+        raise RuntimeError("No caption matched - call this tool with "
+                           "action='list' to see the captions and their indexes.")
+    try:
+        doc.getTextFields().refresh()
+    except Exception:
+        pass
+    return {"updated": changed, "count": len(changed)}
 
 
 def tool_writer_table_formula(args):
@@ -5811,6 +5979,217 @@ def tool_writer_format_document(args):
             "page_style": page.Name, "applied": applied}
 
 
+# --------------------------------------------------------------------------- #
+# Tools — borrowed from the sibling projects, everyday/student slice only
+#
+# Mined from Nelson MCP's 140-tool surface (docs/COMPETITOR-STUDY.md). Only what
+# a student or casual user reaches for. Deliberately NOT borrowed: ai_images_*,
+# tunnel_*, launcher_*, gallery/docgallery, job/task/workflow, draw_* (a whole
+# unsupported app), cross-document search indexes, and WriterAgent's
+# data-science / symbolic-math / OCR / audio layer.
+# --------------------------------------------------------------------------- #
+
+def tool_calc_import_csv(args):
+    """Import a CSV/TSV file INTO the open sheet — unlike open_document, which
+    opens the file as its own separate spreadsheet."""
+    import csv as _csv
+
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    path = args["path"]
+    if not os.path.exists(path):
+        raise RuntimeError("CSV not found: %s" % path)
+
+    encoding = args.get("encoding") or "utf-8-sig"   # -sig strips an Excel BOM
+    delimiter = args.get("delimiter")
+    with open(path, "r", encoding=encoding, errors="replace", newline="") as fh:
+        sample = fh.read(8192)
+        fh.seek(0)
+        if not delimiter:
+            try:
+                delimiter = _csv.Sniffer().sniff(sample, ",;\t|").delimiter
+            except Exception:
+                delimiter = ","
+        rows = list(_csv.reader(fh, delimiter=delimiter))
+    if not rows:
+        return {"imported": os.path.abspath(path), "rows": 0, "columns": 0}
+
+    limit = int(args.get("max_rows", 0) or 0)
+    truncated = bool(limit and len(rows) > limit)
+    if truncated:
+        rows = rows[:limit]
+    width = max(len(r) for r in rows)
+
+    # Values, never formulas. A CSV field starting with "=" is the classic CSV
+    # injection vector, so this writes through setDataArray (which stores a
+    # string as text) rather than setFormulaArray (which would evaluate it).
+    grid = []
+    for row in rows:
+        padded = list(row) + [""] * (width - len(row))
+        grid.append(tuple(float(v.strip()) if _looks_numeric(v.strip()) else v
+                          for v in padded))
+
+    origin = sheet.getCellRangeByName(args.get("start_cell") or "A1")
+    addr = origin.getRangeAddress()
+    target = sheet.getCellRangeByPosition(
+        addr.StartColumn, addr.StartRow,
+        addr.StartColumn + width - 1, addr.StartRow + len(rows) - 1)
+    target.setDataArray(tuple(grid))
+
+    return {"imported": os.path.abspath(path), "sheet": sheet.getName(),
+            "range": _addr_to_a1(target.getRangeAddress()),
+            "rows": len(rows), "columns": width, "delimiter": delimiter,
+            "truncated": truncated}
+
+
+# Calc error codes -> the marker the user actually sees in the cell.
+_CALC_ERRORS = {
+    501: "#NAME? (invalid character)", 502: "#VALUE! (invalid argument)",
+    503: "#VALUE! (invalid floating point operation)",
+    504: "#VALUE! (parameter list error)",
+    508: "#NAME? (missing pair, e.g. a bracket)",
+    509: "#NAME? (missing operator)", 510: "#NAME? (missing variable)",
+    511: "#NAME? (missing variable)", 512: "#NAME? (formula too long)",
+    513: "#NAME? (string too long)", 514: "#NUM! (internal overflow)",
+    519: "#VALUE!", 520: "#NAME? (internal syntax error)",
+    521: "#NAME? (internal syntax error)", 522: "#REF! (circular reference)",
+    523: "#NUM! (calculation does not converge)",
+    524: "#REF! (invalid reference — a row, column or sheet was deleted)",
+    525: "#NAME? (unknown name)", 526: "#NAME?",
+    527: "#REF! (nesting too deep)", 532: "#DIV/0! (division by zero)",
+}
+
+
+def tool_calc_detect_errors(args):
+    """Find every broken formula in the workbook — the #REF!/#DIV/0!/#NAME?
+    cells — with the formula that produced each one."""
+    doc = _require_calc()
+    sheets = doc.getSheets()
+    if args.get("sheet") not in (None, ""):
+        targets = [_resolve_sheet(doc, args["sheet"])]
+    else:
+        targets = [sheets.getByName(n) for n in sheets.getElementNames()]
+    limit = int(args.get("max_results", 200))
+
+    found = []
+    for sheet in targets:
+        if len(found) >= limit:
+            break
+        try:
+            # FormulaResult.ERROR = 4 — one UNO call returns exactly the error
+            # cells, instead of walking every cell of the used range.
+            ranges = sheet.queryFormulaCells(4)
+        except Exception:
+            continue
+        cells = ranges.getCells().createEnumeration()
+        while cells.hasMoreElements() and len(found) < limit:
+            cell = cells.nextElement()
+            try:
+                code = cell.getError()
+            except Exception:
+                code = 0
+            addr = cell.getCellAddress()
+            found.append({
+                "sheet": sheet.getName(),
+                "cell": "%s%d" % (_col_letters(addr.Column), addr.Row + 1),
+                "error_code": code,
+                "error": _CALC_ERRORS.get(code) or cell.getString() or "error %s" % code,
+                "formula": cell.getFormula(),
+            })
+    return {"errors": found, "count": len(found),
+            "truncated": len(found) >= limit,
+            "sheets_scanned": [s.getName() for s in targets]}
+
+
+def tool_list_recent_documents(args):
+    """The Files > Recent Documents list, so "open my last essay" works without
+    the user having to remember where they saved it."""
+    state = _connect()
+    provider = state["smgr"].createInstanceWithContext(
+        "com.sun.star.configuration.ConfigurationProvider", state["ctx"])
+    node = provider.createInstanceWithArguments(
+        "com.sun.star.configuration.ConfigurationAccess",
+        (_pv("nodepath", "/org.openoffice.Office.Histories/Histories"),))
+    items = node.getByName("PickList").getByName("ItemList")
+
+    limit = int(args.get("limit", 15))
+    out = []
+    for name in list(items.getElementNames())[:limit]:
+        item = items.getByName(name)
+        entry = {}
+        for prop, key in (("URL", "url"), ("Title", "title"), ("Filter", "filter")):
+            try:
+                entry[key] = item.getPropertyValue(prop)
+            except Exception:
+                pass
+        if entry.get("url"):
+            try:
+                import unohelper
+                entry["path"] = unohelper.fileUrlToSystemPath(entry["url"])
+            except Exception:
+                pass
+        out.append(entry)
+    return {"recent": out, "count": len(out)}
+
+
+def tool_print_document(args):
+    """Send a document to a PHYSICAL printer."""
+    doc = _select_doc(args) or _current_doc()
+    opts = []
+    if args.get("printer"):
+        opts.append(_pv("Name", str(args["printer"])))
+    if args.get("pages"):
+        opts.append(_pv("Pages", str(args["pages"])))
+    copies = int(args.get("copies", 1))
+    if copies != 1:
+        opts.append(_pv("CopyCount", copies))
+    opts.append(_pv("Wait", True))   # so a failure surfaces here, not silently
+    # "print" is a keyword in Python 2-era UNO bindings; both spellings exist.
+    printer = getattr(doc, "print_", None) or getattr(doc, "print")
+    printer(tuple(opts))
+    return {"printed": _doc_info(doc),
+            "printer": args.get("printer") or "system default",
+            "pages": args.get("pages") or "all", "copies": copies}
+
+
+def tool_writer_resolve_comment(args):
+    """Mark a comment resolved / unresolved — the other half of the review loop
+    that writer_get_comments already reports but nothing could set."""
+    doc = _require_writer()
+    want_index = args.get("index")
+    search = (args.get("search") or "").lower()
+    author = (args.get("author") or "").lower()
+    resolved = bool(args.get("resolved", True))
+    if want_index is None and not search and not author:
+        raise RuntimeError("Give 'index', 'search' (comment-text substring) or "
+                           "'author' to pick which comment(s) to mark.")
+
+    changed, i = [], -1
+    enum = doc.getTextFields().createEnumeration()
+    while enum.hasMoreElements():
+        field = enum.nextElement()
+        if not field.supportsService(_ANNOTATION):
+            continue
+        i += 1
+        if want_index is not None and i != int(want_index):
+            continue
+        if search and search not in (field.Content or "").lower():
+            continue
+        if author and author not in (field.Author or "").lower():
+            continue
+        try:
+            field.setPropertyValue("Resolved", resolved)
+        except Exception as exc:
+            raise RuntimeError(
+                "This LibreOffice build cannot resolve comments (%s); the "
+                "feature needs LibreOffice 7.1 or newer." % exc)
+        changed.append({"index": i, "author": field.Author, "text": field.Content})
+    if not changed:
+        raise RuntimeError("No comment matched — call writer_get_comments to "
+                           "see the list and its indexes.")
+    return {"resolved": resolved, "changed": changed, "count": len(changed)}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -5976,6 +6355,13 @@ TOOLS = {
     "calc_format_table": tool_calc_format_table,
     "calc_clean_data": tool_calc_clean_data,
     "writer_format_document": tool_writer_format_document,
+    # everyday tools borrowed from the sibling projects
+    "calc_import_csv": tool_calc_import_csv,
+    "calc_detect_errors": tool_calc_detect_errors,
+    "list_recent_documents": tool_list_recent_documents,
+    "print_document": tool_print_document,
+    "writer_resolve_comment": tool_writer_resolve_comment,
+    "writer_captions": tool_writer_captions,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -6758,13 +7144,24 @@ TOOL_DEFS = [
                              "separator": dict(_STR, description="cell delimiter (default tab)")},
                             ["direction"])},
     {"name": "writer_insert_caption",
-     "description": "Insert an auto-numbering caption on a new paragraph, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/... ; numbers increment across captions sharing a category). 'text' is the label, 'separator' joins number and label (default ' — '), 'numbering' the number style. With 'search', the caption is placed after the matched paragraph.",
+     "description": "Insert an auto-numbering caption, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/...; numbers increment across captions sharing a category, and LibreOffice renumbers them automatically). Anchor it to a TABLE or an IMAGE by name — the usual case, and the caption then sits above the table / below the figure by convention — or to a text 'search' match, or append at the end. Use writer_list_tables / writer_list_figures to get the names.",
      "inputSchema": _schema({"category": dict(_STR, description="sequence name, e.g. 'Figure' or 'Table'"),
                              "text": dict(_STR, description="caption label"),
+                             "table": dict(_STR, description="caption this table (name from writer_list_tables)"),
+                             "image": dict(_STR, description="caption this image (name from writer_list_figures)"),
+                             "position": dict(_STR, enum=["before", "after"], description="relative to the table/image; defaults to before for tables, after for images"),
                              "separator": dict(_STR, description="between number and label (default ' — ')"),
                              "numbering": dict(_STR, enum=["arabic", "roman_upper", "roman_lower", "letter_upper", "letter_lower"]),
                              "search": dict(_STR, description="place caption after this text's paragraph"),
                              "match_case": _BOOL})},
+    {"name": "writer_captions",
+     "description": "List or re-word existing captions. action 'list' returns every auto-numbered caption (index, category, number, label) — including ones made with LibreOffice's own Insert > Caption. action 'set' rewrites the LABEL of the caption picked by 'index', 'search' or 'category', leaving the number a live field so renumbering still works. To delete a caption outright use writer_delete_paragraphs.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["list", "set"]),
+                             "text": dict(_STR, description="set: the new caption label"),
+                             "index": dict(_INT, description="set: 0-based index from action='list'"),
+                             "search": dict(_STR, description="set: match captions containing this text"),
+                             "category": dict(_STR, description="set: match captions in this sequence, e.g. 'Figure'"),
+                             "separator": dict(_STR, description="between number and label (default ' — ')")})},
     {"name": "writer_table_formula",
      "description": "Set a formula in a Writer table cell and return the computed value. Writer cell-reference syntax, e.g. '=<A1>+<A2>', '=<A1>*2', 'sum <A1:A5>'. Target the table by 'name' or 0-based 'index'.",
      "inputSchema": _schema({"cell": dict(_STR, description="cell name, e.g. 'A3'"),
@@ -6900,6 +7297,37 @@ TOOL_DEFS = [
      "inputSchema": _schema({"preset": dict(_STR, enum=["report", "essay", "letter"]),
                              "font_name": dict(_STR, description="override the preset font"),
                              "font_size": dict(_NUM, description="override the preset size (pt)")})},
+    # --- everyday tools borrowed from the sibling projects ---
+    {"name": "calc_import_csv",
+     "description": "Import a CSV/TSV file INTO the open spreadsheet at a target cell — unlike open_document, which opens the file as its own separate document. Delimiter is auto-detected. Fields are written as text or numbers, never as formulas, so a field starting with '=' cannot execute.",
+     "inputSchema": _schema({"path": dict(_STR, description="path to the .csv/.tsv file"),
+                             "sheet": _SHEET,
+                             "start_cell": dict(_STR, description="top-left target cell (default A1)"),
+                             "delimiter": dict(_STR, description="force a delimiter; omit to auto-detect , ; tab |"),
+                             "encoding": dict(_STR, description="file encoding (default utf-8, BOM tolerated)"),
+                             "max_rows": dict(_INT, description="import at most this many rows (0 = all)")},
+                            ["path"])},
+    {"name": "calc_detect_errors",
+     "description": "Find every broken formula in the workbook — #REF!, #DIV/0!, #NAME?, #VALUE!, circular references — reporting the sheet, cell, what the error means and the formula that caused it. Scans all sheets unless 'sheet' is given. Use this when a spreadsheet 'stopped working' or shows error markers.",
+     "inputSchema": _schema({"sheet": _SHEET,
+                             "max_results": dict(_INT, description="cap the list (default 200)")})},
+    {"name": "list_recent_documents",
+     "description": "List the documents from LibreOffice's File > Recent Documents, newest first, with title and file path — so a user who says 'open the essay I was working on' can be offered the right file without knowing where it lives.",
+     "inputSchema": _schema({"limit": dict(_INT, description="how many to return (default 15)")})},
+    {"name": "print_document",
+     "description": "Send a document to a PHYSICAL printer — this consumes real paper. Only call it when the user has actually asked to print, and confirm the printer and page range first if there is any doubt. Targets a specific open doc by index/title/url, else the active one.",
+     "inputSchema": _schema({"printer": dict(_STR, description="printer name (default: the system default printer)"),
+                             "pages": dict(_STR, description="page range like '1-4' or '1,3,5' (default: all pages)"),
+                             "copies": dict(_INT, description="number of copies (default 1)"),
+                             "title": dict(_STR, description="match the document by window-title substring"),
+                             "url": dict(_STR, description="match the document by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
+    {"name": "writer_resolve_comment",
+     "description": "Mark Writer comment(s) resolved or unresolved — the write side of what writer_get_comments reports. Pick by 'index' (as listed by writer_get_comments), or by 'search' (comment-text substring) / 'author' to resolve every match. Needs LibreOffice 7.1+.",
+     "inputSchema": _schema({"index": dict(_INT, description="0-based index as returned by writer_get_comments"),
+                             "search": dict(_STR, description="resolve every comment whose text contains this"),
+                             "author": dict(_STR, description="resolve every comment by this author"),
+                             "resolved": dict(_BOOL, description="true = resolved (default), false = reopen")})},
 ]
 
 
@@ -6981,9 +7409,13 @@ create_document open_document save_document close_document export_document conve
 calc_overview calc_read_range calc_write_range calc_set_formulas calc_list_sheets
 calc_get_used_range calc_format_table calc_clean_data calc_format_range
 calc_sort_range calc_create_chart calc_add_sheet
+calc_import_csv calc_detect_errors
 writer_get_text writer_append_text writer_replace_selection writer_find_replace
 writer_format_document writer_insert_heading writer_insert_table
 writer_apply_style writer_format_text
+writer_get_comments writer_resolve_comment
+writer_insert_image writer_insert_caption writer_captions
+list_recent_documents print_document
 """.split())
 
 

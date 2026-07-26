@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **174 tools** of the `libreoffice` MCP server (v0.10.0), generated from
+All **180 tools** of the `libreoffice` MCP server (v0.10.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -234,7 +234,8 @@ All **174 tools** of the `libreoffice` MCP server (v0.10.0), generated from
 | `writer_set_chapter_numbering` | Turn on heading (chapter) numbering: bind the first 'levels' outline levels (default 3) to a scheme so Heading 1/2/3 auto-number as 1, 1.1, 1.1.1. numbering arabic/roman_upper/roman_lower/letter_upper/letter_lower/none; 'separator' between/after numbers (default '.'). |
 | `writer_move_paragraphs` | Reorder body paragraphs: move the block of 'count' (default 1) paragraphs starting at 0-based 'start' to index 'to' (the block lands before the paragraph currently there; to == paragraph count appends at the end). Preserves content and formatting. Indices are the writer_get_paragraphs space. |
 | `writer_convert_table` | Convert between a table and text. direction 'to_text': turn a table (by 'name' or 0-based 'index') into rows of paragraphs, cells joined by 'separator' (default tab). direction 'to_table': turn body paragraphs [start, start+count) into a table, splitting each on 'separator' (default tab) into columns. |
-| `writer_insert_caption` | Insert an auto-numbering caption on a new paragraph, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/... ; numbers increment across captions sharing a category). 'text' is the label, 'separator' joins number and label (default ' — '), 'numbering' the number style. With 'search', the caption is placed after the matched paragraph. |
+| `writer_insert_caption` | Insert an auto-numbering caption, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/...; numbers increment across captions sharing a category, and LibreOffice renumbers them automatically). Anchor it to a TABLE or an IMAGE by name — the usual case, and the caption then sits above the table / below the figure by convention — or to a text 'search' match, or append at the end. Use writer_list_tables / writer_list_figures to get the names. |
+| `writer_captions` | List or re-word existing captions. action 'list' returns every auto-numbered caption (index, category, number, label) — including ones made with LibreOffice's own Insert > Caption. action 'set' rewrites the LABEL of the caption picked by 'index', 'search' or 'category', leaving the number a live field so renumbering still works. To delete a caption outright use writer_delete_paragraphs. |
 | `writer_table_formula` | Set a formula in a Writer table cell and return the computed value. Writer cell-reference syntax, e.g. '=<A1>+<A2>', '=<A1>*2', 'sum <A1:A5>'. Target the table by 'name' or 0-based 'index'. |
 | `writer_split_cells` | Split a table cell (or an 'A1:B1' range) into 'into' cells (default 2) along 'columns' (default) or 'rows'. Target the table by 'name' or 0-based 'index'. |
 | `writer_clear_formatting` | Remove direct character/paragraph formatting (reset to the underlying style) from text matching 'search', or a body-paragraph range ('start'/'count', default all). |
@@ -272,3 +273,13 @@ All **174 tools** of the `libreoffice` MCP server (v0.10.0), generated from
 | `calc_format_table` | Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range. |
 | `calc_clean_data` | Tidy a pasted or imported range: trim stray whitespace, turn numeric-looking text into real numbers, and drop fully empty rows. Formula cells are never rewritten. Defaults to the sheet's used range. NOTE: LibreOffice does not record bulk range writes for undo, so Ctrl+Z restores the deleted rows but not the trimmed values — say what will change before running it on data the user cannot re-import. |
 | `writer_format_document` | Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). |
+
+## Everyday tools borrowed from the sibling projects
+
+| Tool | Description |
+|---|---|
+| `calc_import_csv` | Import a CSV/TSV file INTO the open spreadsheet at a target cell — unlike open_document, which opens the file as its own separate document. Delimiter is auto-detected. Fields are written as text or numbers, never as formulas, so a field starting with '=' cannot execute. |
+| `calc_detect_errors` | Find every broken formula in the workbook — #REF!, #DIV/0!, #NAME?, #VALUE!, circular references — reporting the sheet, cell, what the error means and the formula that caused it. Scans all sheets unless 'sheet' is given. Use this when a spreadsheet 'stopped working' or shows error markers. |
+| `list_recent_documents` | List the documents from LibreOffice's File > Recent Documents, newest first, with title and file path — so a user who says 'open the essay I was working on' can be offered the right file without knowing where it lives. |
+| `print_document` | Send a document to a PHYSICAL printer — this consumes real paper. Only call it when the user has actually asked to print, and confirm the printer and page range first if there is any doubt. Targets a specific open doc by index/title/url, else the active one. |
+| `writer_resolve_comment` | Mark Writer comment(s) resolved or unresolved — the write side of what writer_get_comments reports. Pick by 'index' (as listed by writer_get_comments), or by 'search' (comment-text substring) / 'author' to resolve every match. Needs LibreOffice 7.1+. |
