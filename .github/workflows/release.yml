@@ -26,6 +26,12 @@ jobs:
       - name: Stamp version from tag
         run: python scripts/stamp_version.py "${GITHUB_REF_NAME#v}"
 
+      # MCP-TOOLS.md is generated and ships INSIDE the .mcpb, so a stale commit
+      # of it reaches users with the wrong version and tool list. Regenerate it
+      # after stamping rather than trusting whatever was committed.
+      - name: Regenerate the tool reference
+        run: python scripts/gen_mcp_tools_doc.py
+
       # ORDER MATTERS: build_mcpb.py ships the freshly built .oxt inside the
       # bundle, so the .oxt has to exist in dist/ first.
       - name: Build the .oxt and .mcpb bundles
