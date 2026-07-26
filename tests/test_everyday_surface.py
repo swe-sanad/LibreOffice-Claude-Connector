@@ -369,6 +369,63 @@ class MetadataPrintFormsTest(unittest.TestCase):
             self.assertEqual(props[single].get("type"), "string", single)
 
 
+class LifecycleTest(unittest.TestCase):
+    """The guided session: instructions, prompts, and the phase tool."""
+
+    def test_lifecycle_tool_registered_and_advertised(self):
+        self.assertIn("document_lifecycle", m.TOOLS)
+        self.assertIn("document_lifecycle", m._BASIC_TOOLS)
+        self.assertIn("document_lifecycle", m._NO_UNDO)   # it only reads
+
+    def test_initialize_carries_instructions_and_prompts(self):
+        result = m.handle({"jsonrpc": "2.0", "id": 0, "method": "initialize",
+                           "params": {}})["result"]
+        self.assertIn("instructions", result)
+        self.assertIn("prompts", result["capabilities"])
+        text = result["instructions"]
+        # the load-bearing claims: where to start, and the undo trap
+        self.assertIn("document_lifecycle", text)
+        self.assertIn("checkpoint_document", text)
+        self.assertIn("dispatch", text)
+
+    def test_instructions_name_all_three_phases(self):
+        for phase in ("SETUP", "AUTHORING", "CLOSING"):
+            self.assertIn(phase, m.SERVER_INSTRUCTIONS)
+
+    def test_prompts_list_and_get(self):
+        listed = m.handle({"jsonrpc": "2.0", "id": 1,
+                           "method": "prompts/list"})["result"]["prompts"]
+        self.assertEqual({p["name"] for p in listed},
+                         {"start_document", "review_document", "finish_document"})
+        for p in listed:
+            self.assertTrue(p["description"])
+
+    def test_prompt_arguments_are_substituted(self):
+        got = m.handle({"jsonrpc": "2.0", "id": 2, "method": "prompts/get",
+                        "params": {"name": "start_document",
+                                   "arguments": {"kind": "calc",
+                                                 "about": "a budget"}}})["result"]
+        text = got["messages"][0]["content"]["text"]
+        self.assertIn("calc", text)
+        self.assertIn("a budget", text)
+        self.assertNotIn("{kind}", text)
+        self.assertNotIn("{about}", text)
+
+    def test_unknown_prompt_is_an_error_not_a_crash(self):
+        reply = m.handle({"jsonrpc": "2.0", "id": 3, "method": "prompts/get",
+                          "params": {"name": "nope"}})
+        self.assertIn("error", reply)
+
+    def test_every_prompt_template_placeholder_is_declared(self):
+        # a {placeholder} with no matching argument would reach the user raw
+        import re
+        for prompt in m.PROMPTS:
+            declared = {a["name"] for a in prompt.get("arguments", [])}
+            used = set(re.findall(r"\{([a-z_]+)\}", prompt["text"]))
+            self.assertEqual(used - declared, set(),
+                             "%s uses undeclared placeholders" % prompt["name"])
+
+
 class LooksNumericTest(unittest.TestCase):
     def test_accepts_real_numbers(self):
         for text in ("3", "10.5", "-2", "+0.5", "1e3", ".5"):
