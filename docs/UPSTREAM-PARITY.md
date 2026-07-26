@@ -70,9 +70,18 @@ for the agent-acceptor pipe and the Claude menu). Superseding it is a bigger lif
 than the other three; triaged below.
 
 ### Already comparable
-- Tool breadth: our **170 tools** vs its "100+" — text/paragraphs/styles, tables,
+- Tool breadth: our **174 tools** vs its "100+" — text/paragraphs/styles, tables,
   charts, conditional formatting, hyperlinks, images/shapes, bookmarks/comments/
   search, file lifecycle + PDF export, and batch are all covered on both sides.
+
+> **A claim to check before conceding the undo point.** v0.10.0 established, live
+> against LibreOffice 25.2.3.2, that `setDataArray`/`setFormulaArray` register an
+> undo entry that does **not** restore the prior contents, while per-cell
+> `setString` and property sets do (table in `docs/KNOWN-GAPS.md`). Any project
+> advertising "undo-wrapped mutations" while writing ranges via `setDataArray`
+> has an undo that looks correct in the UI and silently fails to revert. Worth
+> verifying against Nelson and WriterAgent rather than taking the feature list at
+> face value — it is a differentiator only if it actually works.
 
 ### Genuine gaps — adopt candidates (prioritized)
 
@@ -87,13 +96,18 @@ than the other three; triaged below.
 - [ ] **Structured errors** — `{code, message, hint, retryable}` (e.g.
   `unsaved_document`, `incompatible_doc_type`, `execution_timeout`) + "did-you-mean"
   enum suggestions (Levenshtein). We currently raise typed-but-unstructured errors.
-- [ ] **Tool presets / custom endpoints** — expose only a named subset
-  (minimal / writer-edit / calc / …) to reduce tool confusion on smaller LLMs.
-  Pairs directly with our `dispatch` facade and the 170-tool count concern.
+- [x] **Tool presets / custom endpoints** — **CLOSED in v0.10.0**, and arguably
+  better than Nelson's: instead of named subsets the user must choose between,
+  `tools/list` advertises a 32-tool everyday tier by default while `dispatch`
+  still reaches all 174 by name, so a preset can never hide a capability. One
+  switch (`LO_TOOLS=full`, or a checkbox in the extension settings) restores the
+  flat surface. 84 KB → 15 KB of schema, an 82 % cut in fixed context cost.
 
 **P2 — useful**
-- [ ] **Undo-wrapped mutations** — wrap each tool op in an UndoContext so one
-  Ctrl+Z reverts the whole operation (we expose `document_undo`, but don't group).
+- [x] **Undo-wrapped mutations** — **CLOSED in v0.10.0**: every mutating tool runs
+  inside one `enterUndoContext`/`leaveUndoContext` pair, inherited by `dispatch`
+  and `batch`. **See the caveat below — we suspect Nelson's version of this
+  feature is partly hollow, and ours would have been too.**
 - [ ] **Draw / Impress** — Nelson covers them; reinforces our deferred frontier.
 - [ ] **Response context** — include `_resolved` (doc id/type/title) + `_session`
   in every result; a `/health` bootstrap endpoint (pairs with HTTP mode).
@@ -133,7 +147,8 @@ which is exactly where it collides with our **stdlib-only** rule.
   no third-party lib (the *symbolic* side below is not).
 - [ ] **Format-preserving ("surgical") replace** — keep bold/italic/size across a
   text replacement; an upgrade to `writer_find_replace`.
-- [ ] **Undo-wrapped rewrites** — same item as Nelson's undo support.
+- [x] **Undo-wrapped rewrites** — same item as Nelson's undo support; **closed in
+  v0.10.0**, with the `setDataArray` caveat noted above.
 
 ### Out of scope — needs third-party libraries (breaks stdlib-only)
 > The strategic catch: WriterAgent's differentiators mostly require
@@ -159,8 +174,12 @@ which is exactly where it collides with our **stdlib-only** rule.
   **sandraschi** (except the deferred niche/PDF/bridge items).
 - Remaining to fully supersede all five: **HTTP transport** and **Base support**
   are the two highest-leverage items; then Impress/Draw, structured errors +
-  per-call `_document` targeting + tool presets to match Nelson/WriterAgent agent
-  ergonomics.
+  per-call `_document` targeting. **Tool presets and undo grouping are done**
+  (v0.10.0).
+- **Caveat on this whole document:** the triage below was assembled from a
+  Copilot enumeration of the siblings' tool surfaces — it is second-hand. Every
+  "already comparable" line is a claim about someone else's code that has not
+  been run. Treat it as a map, not a measurement, until verified first-hand.
 - **Strategic fork:** Nelson's AI-image/tunnels and WriterAgent's data-science/
   quant/symbolic layer are the features we can't match under **stdlib-only** (they
   need NumPy/SciPy/SymPy/embeddings/etc.). Superseding those means a deliberate
