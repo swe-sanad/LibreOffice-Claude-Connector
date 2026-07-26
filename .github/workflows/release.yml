@@ -26,10 +26,12 @@ jobs:
       - name: Stamp version from tag
         run: python scripts/stamp_version.py "${GITHUB_REF_NAME#v}"
 
-      - name: Build the .mcpb and .oxt bundles
+      # ORDER MATTERS: build_mcpb.py ships the freshly built .oxt inside the
+      # bundle, so the .oxt has to exist in dist/ first.
+      - name: Build the .oxt and .mcpb bundles
         run: |
-          python scripts/build_mcpb.py
           python scripts/build_oxt.py
+          python scripts/build_mcpb.py
           ls -l dist
 
       # Attaches to the release for this tag; creates the release if the tag was

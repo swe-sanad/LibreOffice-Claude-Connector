@@ -5,6 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-07-26
+
 Everyday-user pass. Until now the surface was tuned for an expert operator
 driving complex documents: 170 flat tools (~76 KB of JSON schema, roughly 22k
 tokens injected into every conversation) and 68 `calc_*` lookalikes to pick

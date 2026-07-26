@@ -150,8 +150,13 @@ powershell -ExecutionPolicy Bypass -File scripts\start_office_socket.ps1   # →
 
 ## Working style here
 
-- Local git, **no remote** — don't push. Commit at feature boundaries with Conventional
-  Commit messages; keep `docs/CHANGELOG.md` current. Work lands on `master`.
+- Public remote: `origin` → github.com/swe-sanad/LibreOffice-Claude-Connector (push
+  with the `swe-sanad` gh account). Commit at feature boundaries with Conventional
+  Commit messages; keep `CHANGELOG.md` current. Work lands on `master`.
+- **Releasing:** `scripts/stamp_version.py <v>` stamps the server + `.mcpb` + `.oxt`
+  to one number, then push a `v*` tag — `.github/workflows/release.yml` rebuilds
+  both bundles and attaches them to the GitHub Release. Release notes live in
+  `docs/releases/v<version>.md`.
 - Don't re-add the extension to the user's real profile or restart their LibreOffice
   without saying so — they may have unsaved work.
 - After a real bug/lesson, capture it in project memory and `docs/`.
