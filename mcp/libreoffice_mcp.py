@@ -185,7 +185,7 @@ lo_status lo_screenshot list_documents list_macros list_styles list_templates
 list_embedded_objects get_current_selection get_document_properties get_signatures
 read_spreadsheet inspect_ods calc_overview calc_detect_errors
 list_recent_documents print_document lo_health lo_recover checkpoint_document
-document_watch print_settings
+document_watch print_settings document_lifecycle
 create_document open_document create_from_template close_document save_document
 export_document reload_document set_active_document convert merge
 dispatch batch document_undo
@@ -7131,6 +7131,198 @@ def tool_writer_content_control(args):
             "bound_to": args.get("xpath")}
 
 
+# --------------------------------------------------------------------------- #
+# Tools — the document lifecycle
+#
+# Deliberately NOT implemented as phase-gated tool sets. Hiding the export tools
+# until an "authoring" phase ends means a user who says "just send me the PDF"
+# hits a server that appears not to support it — the exact complaint Nelson MCP
+# recorded as issue #24 and cited when they rejected progressive disclosure
+# (docs/COMPETITOR-STUDY.md). Everything stays visible; this tool supplies the
+# ORDER, and it derives the phase from the document itself rather than storing
+# one, so it survives a server restart and cannot go stale.
+# --------------------------------------------------------------------------- #
+
+def _lifecycle_facts(doc, ub):
+    """What is actually true of this document right now."""
+    f = {"kind": _doc_kind(doc), "saved_to": doc.getURL() or None}
+    try:
+        f["unsaved_changes"] = bool(doc.isModified())
+    except Exception:
+        f["unsaved_changes"] = None
+
+    props = doc.getDocumentProperties()
+    f["title"] = props.Title or None
+    f["author"] = props.Author or None
+    f["subject"] = props.Subject or None
+    f["keywords"] = list(props.Keywords) or []
+    f["rights"] = getattr(props, "Rights", "") or None
+    try:
+        f["language"] = props.Language.Language or None
+    except Exception:
+        f["language"] = None
+
+    if ub.is_writer(doc):
+        text = doc.getText().getString()
+        f["characters"] = len(text)
+        headings, paragraphs = 0, 0
+        enum = doc.getText().createEnumeration()
+        while enum.hasMoreElements():
+            para = enum.nextElement()
+            if not para.supportsService("com.sun.star.text.Paragraph"):
+                continue
+            paragraphs += 1
+            try:
+                if para.OutlineLevel > 0 or str(para.ParaStyleName).startswith("Heading"):
+                    headings += 1
+            except Exception:
+                pass
+        f["paragraphs"], f["headings"] = paragraphs, headings
+        try:
+            f["tables"] = doc.getTextTables().getCount()
+        except Exception:
+            f["tables"] = 0
+        try:      # a real index/TOC, not merely "there are headings"
+            f["has_toc"] = doc.getDocumentIndexes().getCount() > 0
+        except Exception:
+            f["has_toc"] = False
+        missing = []
+        try:
+            graphics = doc.getGraphicObjects()
+            f["images"] = graphics.getCount()
+            for name in graphics.getElementNames():
+                obj = graphics.getByName(name)
+                if not (getattr(obj, "Description", "") or
+                        getattr(obj, "Title", "")):
+                    missing.append(name)
+        except Exception:
+            f["images"] = 0
+        f["images_without_alt_text"] = missing
+    else:
+        sheets = doc.getSheets()
+        f["sheets"] = list(sheets.getElementNames())
+        cells = 0
+        for name in f["sheets"]:
+            sheet = sheets.getByName(name)
+            addr = _sheet_used_addr(sheet)
+            if not _addr_is_empty(sheet, addr):
+                cells += ((addr.EndRow - addr.StartRow + 1) *
+                          (addr.EndColumn - addr.StartColumn + 1))
+        f["used_cells"] = cells
+        f["images_without_alt_text"] = []
+        # same signal calc_detect_errors reports. getCells() hands back an
+        # enumeration access, NOT an index access — getCount() raises, and
+        # swallowing that silently reported "no broken formulas" on a sheet
+        # full of #DIV/0!.
+        broken = 0
+        for name in f["sheets"]:
+            try:
+                cells = sheets.getByName(name).queryFormulaCells(4).getCells()
+                enum = cells.createEnumeration()
+                while enum.hasMoreElements():
+                    enum.nextElement()
+                    broken += 1
+            except Exception:
+                pass
+        f["formula_errors"] = broken
+    return f
+
+
+def tool_document_lifecycle(args):
+    """Where this document is in its life, and the next thing worth doing."""
+    ub = _bridge()
+    doc = _select_doc(args) or _current_doc()
+    f = _lifecycle_facts(doc, ub)
+    writer = f["kind"] == "writer"
+    has_content = (f.get("characters", 0) > 40 if writer
+                   else f.get("used_cells", 0) > 4)
+
+    setup_done, setup_todo = [], []
+    for label, ok, action in (
+            ("document title", bool(f["title"]),
+             "set_document_properties title='…'"),
+            ("document language", bool(f["language"]),
+             "set_document_properties language='en-GB' (or 'ar-LY')"),
+            ("base typography and margins", bool(f["title"]) and has_content,
+             "writer_format_document preset='report'|'essay'|'letter'"
+             if writer else "calc_format_table preset='clean'|'report'")):
+        (setup_done if ok else setup_todo).append({"item": label, "how": action})
+
+    # (label, satisfied, how, optional) — optional items are reported but never
+    # gate the phase, or a document that legitimately wants no table of contents
+    # would sit in "authoring" for ever.
+    author_done, author_todo = [], []
+    if writer:
+        checks = (("body text", has_content,
+                   "writer_append_text / writer_insert_heading", False),
+                  ("headings for structure", f.get("headings", 0) > 0,
+                   "writer_insert_heading — also what builds the PDF outline", False),
+                  ("a table of contents", f.get("has_toc", False),
+                   "writer_insert_toc (optional; needs headings first)", True))
+    else:
+        checks = (("data in the sheet", has_content,
+                   "calc_write_range / calc_import_csv", False),
+                  ("a formatted table", has_content, "calc_format_table", True),
+                  ("no broken formulas", not f.get("formula_errors"),
+                   "calc_detect_errors, then fix what it reports", False))
+    for label, ok, action, optional in checks:
+        entry = {"item": label, "how": action}
+        if optional:
+            entry["optional"] = True
+        (author_done if ok else author_todo).append(entry)
+
+    close_done, close_todo = [], []
+    for label, ok, action in (
+            ("author recorded", bool(f["author"]), "set_document_properties author='…'"),
+            ("subject / keywords", bool(f["subject"]) or bool(f["keywords"]),
+             "set_document_properties subject='…' keywords=[…]"),
+            ("licence or rights", bool(f["rights"]),
+             "set_document_properties rights='CC BY 4.0'"),
+            ("alt text on every image", not f["images_without_alt_text"],
+             "set_alt_text name='%s' description='…'"
+             % (f["images_without_alt_text"][0] if f["images_without_alt_text"] else "…")),
+            ("saved to a file", bool(f["saved_to"]), "save_document path='…'"),
+            ("no unsaved changes", f.get("unsaved_changes") is False, "save_document")):
+        (close_done if ok else close_todo).append({"item": label, "how": action})
+
+    def blocking(items):
+        return [i for i in items if not i.get("optional")]
+
+    if blocking(setup_todo):
+        phase, focus = "setup", setup_todo
+    elif blocking(author_todo):
+        phase, focus = "authoring", author_todo
+    else:
+        phase, focus = "closing", close_todo
+
+    ask = {
+        "setup": "Confirm what this document is for and who it is for, then "
+                 "agree a title, a language and a look before writing anything.",
+        "authoring": "Work through the content with the user, one section or "
+                     "sheet at a time, showing the result and asking what to "
+                     "change before moving on.",
+        "closing": "Walk the user through finishing: the metadata to record, "
+                   "whether any image still needs alt text, where to save, and "
+                   "whether they want an accessible or a form-fillable PDF.",
+    }[phase]
+
+    return {
+        "phase": phase,
+        "document": _doc_info(doc),
+        "facts": f,
+        "next_actions": focus[:3],
+        "ask_the_user": ask,
+        "checklist": {
+            "setup": {"done": setup_done, "todo": setup_todo},
+            "authoring": {"done": author_done, "todo": author_todo},
+            "closing": {"done": close_done, "todo": close_todo},
+        },
+        "note": "Phases are advisory and derived from the document, not stored. "
+                "Every tool stays callable in every phase — if the user asks to "
+                "export during authoring, just export.",
+    }
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7308,6 +7500,8 @@ TOOLS = {
     "lo_recover": tool_lo_recover,
     "checkpoint_document": tool_checkpoint_document,
     "document_watch": tool_document_watch,
+    # lifecycle
+    "document_lifecycle": tool_document_lifecycle,
     # print setup, accessibility, content controls
     "print_settings": tool_print_settings,
     "set_alt_text": tool_set_alt_text,
@@ -7820,6 +8014,11 @@ TOOL_DEFS = [
                              "type": dict(_STR, description="Dublin Core resource type, e.g. 'Text'"),
                              "language": dict(_STR, description="BCP-47 document language, e.g. 'en-GB' or 'ar-LY'"),
                              "custom": {"type": "object", "description": "user-defined props"}})},
+    {"name": "document_lifecycle",
+     "description": "START HERE for any document work. Reads the open document and reports which phase it is in — SETUP (title, language, house style), AUTHORING (content, headings, tables), or CLOSING (metadata, alt text, save, export) — with what is already done, what is left, and the exact tool for each remaining step. Also returns 'ask_the_user': what to ask before proceeding. Call it again after finishing a stage, or whenever you are unsure what to do next. Phases are ADVISORY and derived from the document itself, never stored: every tool works in every phase, so if the user asks to export mid-way, just export.",
+     "inputSchema": _schema({"title": dict(_STR, description="match the document by window-title substring"),
+                             "url": dict(_STR, description="match the document by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
     {"name": "print_settings",
      "description": "Read or change how a document prints: printer name, paper size, orientation, and the per-application content switches. Writer exposes PrintGraphics/PrintTables/PrintDrawings/PrintControls/PrintPageBackground/PrintBlackFonts/PrintEmptyPages/PrintHiddenText/PrintLeftPages/PrintRightPages/PrintReversed/PrintProspect (booklet)/PrintProspectRTL/...; Calc exposes PrintGrid/PrintHeaders/PrintCharts/PrintObjects/PrintFormulas/PrintNotes/PrintZeroValues/PrintDownFirst/... Call with no arguments to read the current state and the list valid for this document.",
      "inputSchema": _schema({"printer": dict(_STR, description="printer name"),
@@ -8451,7 +8650,7 @@ writer_get_comments writer_resolve_comment
 writer_insert_image writer_insert_caption writer_captions
 list_recent_documents print_document
 lo_health lo_recover checkpoint_document document_watch
-print_settings set_alt_text writer_content_control
+print_settings set_alt_text writer_content_control document_lifecycle
 set_document_properties insert_form_control export_document
 """.split())
 
@@ -8487,6 +8686,101 @@ def _bundled_oxt():
     return None
 
 
+# Sent once, in the initialize reply. This is where a server says HOW it wants
+# to be used — the standard place for it, and cheaper than repeating guidance in
+# 186 tool descriptions. Spend it on decisions, not on trivia.
+SERVER_INSTRUCTIONS = """\
+You are editing documents that are open in LibreOffice on the user's own screen.
+Edits appear immediately and there is no separate commit step, so treat the
+document as the user's live work, not a draft you own.
+
+START by calling document_lifecycle. It reads the document and tells you which
+phase it is in, what is already done, and the next few concrete steps. Call it
+again whenever you are unsure what to do next, or after finishing a stage.
+
+The three phases are advisory, and EVERY tool works in every phase — if the user
+asks to export while you are still writing, just export.
+
+  SETUP     Agree what the document is and who it is for. Set the title and the
+            language, and settle the look (writer_format_document, or
+            calc_format_table) BEFORE writing content — restyling later is far
+            more disruptive than getting it right first.
+
+  AUTHORING Build the content in visible increments. Use real headings rather
+            than bold text, because headings drive the navigation, the table of
+            contents and the PDF outline. Show the user what changed and ask
+            before moving to the next section.
+
+  CLOSING   Record the metadata (author, subject, keywords, rights), give every
+            image alt text, save, and ask what kind of export they want — a
+            plain PDF, an accessible one (tagged/pdfua), or a fillable form
+            (form_fields).
+
+BE INTERACTIVE. Ask before big or destructive changes, and show intermediate
+results rather than doing everything in one silent burst. When the user's intent
+is ambiguous, ask a single specific question instead of guessing.
+
+BEFORE ANY LARGE OR DESTRUCTIVE EDIT, call checkpoint_document. LibreOffice does
+NOT record bulk cell-range writes for undo, so Ctrl+Z will not bring back data
+that calc_write_range overwrote — a checkpoint is the only way back.
+
+Only about a quarter of the tools are advertised by default. `dispatch` with
+tool='list' is the authoritative catalog of everything this server can do; check
+it before telling a user something is not possible.
+
+If a call fails, read the structured error: `retryable` says whether to try
+again, and `hint` says what to do instead. lo_health explains most "it stopped
+working" situations."""
+
+
+# Server-side prompts: the closest thing MCP has to a shipped skill. Claude
+# Desktop surfaces these for the USER to pick, which is what makes the session
+# interactive rather than the model guessing when to start a workflow.
+PROMPTS = [
+    {"name": "start_document",
+     "description": "Begin a new document with Claude: agree the purpose, then "
+                    "set the title, language and house style before writing.",
+     "arguments": [
+         {"name": "kind", "description": "'writer' or 'calc'", "required": False},
+         {"name": "about", "description": "what the document is for", "required": False}],
+     "text": "I want to start a new {kind} document about {about}.\n\n"
+             "Call document_lifecycle first. Then, before writing any content,\n"
+             "walk me through the setup phase one question at a time:\n"
+             "  1. what this document is for and who will read it\n"
+             "  2. a title, and the language it should be in\n"
+             "  3. the look — page size, margins, base font, heading style\n"
+             "Apply each choice as we agree it so I can see it, and do not start\n"
+             "writing the body until I say the setup looks right."},
+    {"name": "review_document",
+     "description": "Check the open document for problems before it goes out: "
+                    "broken formulas, missing alt text, incomplete metadata.",
+     "arguments": [],
+     "text": "Review the document that is open.\n\n"
+             "Call document_lifecycle and lo_health, and for a spreadsheet also\n"
+             "calc_detect_errors. Then tell me, as a short list:\n"
+             "  - anything actually broken\n"
+             "  - anything missing before this could be shared\n"
+             "  - what you suggest doing about each\n"
+             "Do not change anything yet — show me the list and let me choose."},
+    {"name": "finish_document",
+     "description": "Close out a document: metadata, accessibility, save, and "
+                    "the right kind of export.",
+     "arguments": [
+         {"name": "purpose", "description": "e.g. 'email it', 'print it', 'a fillable form'",
+          "required": False}],
+     "text": "I am finished writing. Help me close this document out for: {purpose}\n\n"
+             "Call document_lifecycle for the closing checklist, then take me\n"
+             "through it one step at a time:\n"
+             "  1. metadata — author, subject, keywords, and any licence\n"
+             "  2. alt text for any image that lacks it\n"
+             "  3. where to save it\n"
+             "  4. the export — ask whether I need a plain PDF, an accessible\n"
+             "     one (tagged/PDF-UA), or a fillable form, and explain the\n"
+             "     difference briefly rather than choosing for me.\n"
+             "Confirm each step with me before doing the next."},
+]
+
+
 def handle(message):
     method = message.get("method")
     mid = message.get("id")
@@ -8496,9 +8790,27 @@ def handle(message):
         version = params.get("protocolVersion") or DEFAULT_PROTOCOL
         return _result(mid, {
             "protocolVersion": version,
-            "capabilities": {"tools": {}},
+            "capabilities": {"tools": {}, "prompts": {"listChanged": False}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
+            "instructions": SERVER_INSTRUCTIONS,
         })
+    if method == "prompts/list":
+        return _result(mid, {"prompts": [
+            {"name": p["name"], "description": p["description"],
+             "arguments": p.get("arguments", [])} for p in PROMPTS]})
+    if method == "prompts/get":
+        params = message.get("params") or {}
+        wanted = params.get("name")
+        prompt = next((p for p in PROMPTS if p["name"] == wanted), None)
+        if prompt is None:
+            return _error(mid, -32602, "Unknown prompt: %s" % wanted)
+        body = prompt["text"]
+        for key, value in (params.get("arguments") or {}).items():
+            body = body.replace("{%s}" % key, str(value))
+        return _result(mid, {
+            "description": prompt["description"],
+            "messages": [{"role": "user",
+                          "content": {"type": "text", "text": body}}]})
     if method == "notifications/initialized":
         return None  # notification, no reply
     if method == "ping":
