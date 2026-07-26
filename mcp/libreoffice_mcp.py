@@ -184,7 +184,7 @@ _NO_UNDO = frozenset("""
 lo_status lo_screenshot list_documents list_macros list_styles list_templates
 list_embedded_objects get_current_selection get_document_properties get_signatures
 read_spreadsheet inspect_ods calc_overview calc_detect_errors
-list_recent_documents print_document
+list_recent_documents print_document lo_health lo_recover checkpoint_document
 create_document open_document create_from_template close_document save_document
 export_document reload_document set_active_document convert merge
 dispatch batch document_undo
@@ -197,6 +197,126 @@ writer_list_figures writer_list_objects writer_list_tables writer_read_table
 writer_find writer_word_count
 set_view_zoom set_document_modified
 """.split())
+
+
+class ToolTimeout(RuntimeError):
+    """A UNO call did not come back — almost always a modal dialog in the GUI."""
+
+
+_DEFAULT_CALL_TIMEOUT = 120.0
+
+
+def _call_timeout():
+    """Seconds to wait for one tool call; LO_CALL_TIMEOUT overrides, 0 disables.
+
+    Generous on purpose: a COLD auto-launch of LibreOffice on a fresh profile
+    can genuinely take a minute or more. A dialog blocks forever, so a large
+    value still catches the case this exists for.
+    """
+    raw = os.environ.get("LO_CALL_TIMEOUT", "").strip()
+    try:
+        seconds = float(raw) if raw else _DEFAULT_CALL_TIMEOUT
+    except ValueError:
+        seconds = _DEFAULT_CALL_TIMEOUT
+    return seconds if seconds > 0 else 0.0
+
+
+def _run_with_timeout(func, seconds):
+    """Run `func` on a worker thread so a wedged UNO call cannot wedge us.
+
+    A UNO call waiting on a modal LibreOffice dialog never returns and cannot be
+    interrupted from Python — so the thread is abandoned (daemon, dies with the
+    process) and the cached bridge is dropped, meaning the NEXT call opens a
+    fresh connection instead of queueing behind the stuck one. Without this the
+    server simply stops answering and the MCP client eventually kills it, which
+    is the least debuggable failure this server has.
+    """
+    if not seconds:
+        return func()
+    import threading
+    box = {}
+
+    def runner():
+        try:
+            box["value"] = func()
+        except BaseException as exc:          # relayed to the calling thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=runner, name="lo-tool-call", daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        _reset_connection()
+        raise ToolTimeout(
+            "LibreOffice did not answer within %gs. It is almost certainly "
+            "showing a dialog that is waiting for a person — a Save, a document "
+            "recovery prompt, or a 'file is locked' warning. Switch to the "
+            "LibreOffice window, dismiss it, then retry. (Raise LO_CALL_TIMEOUT "
+            "if this was simply a slow operation.)" % seconds)
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
+# (code, retryable, hint) chosen by the FIRST matching substring of our own
+# error text. Substring matching is brittle in general — it is acceptable here
+# only because these are strings this file raises itself; the UNO-originated
+# cases are caught by exception type instead.
+_ERROR_RULES = (
+    ("no document is currently open", "no_document", False,
+     "Open or create a document first — open_document, create_document, or "
+     "list_recent_documents to find what the user meant."),
+    ("documents are open but none is focused", "ambiguous_document", False,
+     "Name the document: pass index, title or url (list_documents shows them)."),
+    ("is not a calc spreadsheet", "wrong_doc_type", False,
+     "This tool only works on a spreadsheet. Use list_documents to find or "
+     "switch to one with set_active_document."),
+    ("is not a writer document", "wrong_doc_type", False,
+     "This tool only works on a text document. Use list_documents to find or "
+     "switch to one with set_active_document."),
+    ("no sheet matches", "not_found", False,
+     "Call calc_list_sheets (or calc_overview) for the real sheet names."),
+    ("no table named", "not_found", False, "Call writer_list_tables for the names."),
+    ("no image named", "not_found", False, "Call writer_list_figures for the names."),
+    ("no comment matched", "not_found", False, "Call writer_get_comments first."),
+    ("no caption matched", "not_found", False,
+     "Call writer_captions with action='list' first."),
+    ("not found", "not_found", False, "Check the path or name and try again."),
+    ("locked", "locked", False,
+     "The file is open elsewhere, or a stale .~lock file was left by a crash. "
+     "lo_health reports stale locks."),
+    ("must be one of", "invalid_argument", False, "Use one of the listed values."),
+    ("give '", "invalid_argument", False, "Supply the argument named in the message."),
+)
+
+
+def _classify_error(exc):
+    """Turn an exception into {code, message, hint, retryable} so the caller can
+    tell 'retry this' from 'ask the user' from 'you called the wrong tool'."""
+    text = (str(exc) or "").strip()
+    low = text.lower()
+    kind = type(exc).__name__
+
+    if isinstance(exc, ToolTimeout):
+        code, retryable, hint = "timeout", True, (
+            "Dismiss the dialog in LibreOffice, then call the tool again.")
+    elif _is_connection_error(exc):
+        code, retryable, hint = "office_unreachable", True, (
+            "LibreOffice closed or restarted. Retrying reconnects, and "
+            "relaunches it if nothing is running.")
+    elif isinstance(exc, KeyError):
+        code, retryable = "invalid_argument", False
+        hint = "Required argument %s was not supplied." % text
+        text = "missing required argument %s" % text
+    else:
+        code, retryable, hint = "uno_error", False, ""
+        for needle, rule_code, rule_retry, rule_hint in _ERROR_RULES:
+            if needle in low:
+                code, retryable, hint = rule_code, rule_retry, rule_hint
+                break
+
+    return {"code": code, "error_type": kind, "retryable": retryable,
+            "message": text or "(no message)", "hint": hint}
 
 
 def _enter_undo(name):
@@ -6190,6 +6310,276 @@ def tool_writer_resolve_comment(args):
     return {"resolved": resolved, "changed": changed, "count": len(changed)}
 
 
+# --------------------------------------------------------------------------- #
+# Tools — failure recovery
+#
+# The auto-launch keeps --norestore ON PURPOSE: without it a pending crash makes
+# LibreOffice open its recovery dialog at startup, and that dialog blocks the
+# UNO socket from ever opening — auto-launch would hang instead of connecting.
+# So recovery is not silently discarded, it is DETECTED here (lo_health,
+# lo_recover) and restored deliberately over UNO, with no dialog involved.
+# --------------------------------------------------------------------------- #
+
+def _config_node(path, writable=False):
+    state = _connect()
+    provider = state["smgr"].createInstanceWithContext(
+        "com.sun.star.configuration.ConfigurationProvider", state["ctx"])
+    service = ("com.sun.star.configuration.ConfigurationUpdateAccess" if writable
+               else "com.sun.star.configuration.ConfigurationAccess")
+    return provider.createInstanceWithArguments(service, (_pv("nodepath", path),))
+
+
+_RECOVERY_PATH = "/org.openoffice.Office.Recovery"
+
+
+def _recovery_state():
+    """What LibreOffice is holding for crash recovery, if anything."""
+    out = {"crashed": False, "autosave_enabled": None,
+           "autosave_minutes": None, "pending": []}
+    try:
+        rec = _config_node(_RECOVERY_PATH)
+    except Exception as exc:
+        out["error"] = str(exc)
+        return out
+    try:
+        info = rec.getByName("RecoveryInfo")
+        out["crashed"] = bool(info.getPropertyValue("Crashed"))
+    except Exception:
+        pass
+    try:
+        auto = rec.getByName("AutoSave")
+        out["autosave_enabled"] = bool(auto.getPropertyValue("Enabled"))
+        out["autosave_minutes"] = int(auto.getPropertyValue("TimeIntervall"))
+    except Exception:
+        pass
+    try:
+        items = rec.getByName("RecoveryList")
+        for name in items.getElementNames():
+            entry, item = {}, items.getByName(name)
+            for prop in ("OriginalURL", "TempURL", "Title", "Filter",
+                         "DocumentState", "Module"):
+                try:
+                    entry[prop] = item.getPropertyValue(prop)
+                except Exception:
+                    pass
+            out["pending"].append(entry)
+    except Exception:
+        pass
+    return out
+
+
+def tool_lo_recover(args):
+    """Report and act on LibreOffice's crash-recovery state."""
+    action = str(args.get("action", "status")).lower()
+    # Validate BEFORE connecting: a bad action or a missing confirmation is the
+    # caller's mistake and should not depend on an office being reachable.
+    if action not in ("status", "restore", "discard", "set_autosave"):
+        raise RuntimeError("action must be one of status, restore, discard, "
+                           "set_autosave.")
+    if action == "discard" and not args.get("confirm"):
+        raise RuntimeError(
+            "Discarding recovery data permanently destroys the unsaved work "
+            "LibreOffice saved during the crash. Pass confirm=true only after "
+            "the user has explicitly agreed.")
+
+    state = _recovery_state()
+
+    if action == "status":
+        state["advice"] = (
+            "Documents are waiting to be recovered — call this tool with "
+            "action='restore' to reopen them." if state["pending"] else
+            "Nothing is pending recovery." if not state["crashed"] else
+            "LibreOffice recorded a crash but has nothing left to recover.")
+        if not state.get("autosave_enabled"):
+            state["advice"] += (" AutoSave is OFF; action='set_autosave' with "
+                                "minutes=10 turns it on for next time.")
+        return state
+
+    if action == "restore":
+        if not state["pending"]:
+            return dict(state, restored=False,
+                        note="Nothing was pending recovery, so nothing was done.")
+        st = _connect()
+        recovery = st["smgr"].createInstanceWithContext(
+            "com.sun.star.frame.AutoRecovery", st["ctx"])
+        url = _uno_struct("com.sun.star.util.URL")
+        url.Complete = "vnd.sun.star.autorecovery:/doAutoRestore"
+        try:      # the URL must be parsed before a dispatcher will accept it
+            parser = st["smgr"].createInstanceWithContext(
+                "com.sun.star.util.URLTransformer", st["ctx"])
+            _, url = parser.parseStrict(url)
+        except Exception:
+            pass
+        recovery.dispatch(url, (_pv("SetAutoRecoveryState", True),))
+        return {"restored": True, "documents": state["pending"],
+                "note": "Recovered documents are now open — save them to a real "
+                        "location before doing anything else."}
+
+    if action == "discard":
+        node = _config_node(_RECOVERY_PATH, writable=True)
+        items = node.getByName("RecoveryList")
+        removed = list(items.getElementNames())
+        for name in removed:
+            try:
+                items.removeByName(name)
+            except Exception:
+                pass
+        node.commitChanges()
+        return {"discarded": removed, "count": len(removed)}
+
+    # the only action left; the set is validated at the top
+    minutes = int(args.get("minutes", 10))
+    node = _config_node(_RECOVERY_PATH, writable=True)
+    auto = node.getByName("AutoSave")
+    auto.setPropertyValue("Enabled", minutes > 0)
+    if minutes > 0:
+        auto.setPropertyValue("TimeIntervall", minutes)
+    node.commitChanges()
+    return {"autosave_enabled": minutes > 0, "autosave_minutes": minutes}
+
+
+def _checkpoint_dir():
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), "claude-lo-checkpoints")
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    return path
+
+
+def tool_checkpoint_document(args):
+    """Snapshot a document to a side file so a risky edit can be rolled back.
+
+    This is the rollback that undo cannot give: LibreOffice does not record bulk
+    range writes for undo at all (docs/KNOWN-GAPS.md), so for anything that
+    rewrites a range, a checkpoint is the ONLY way back.
+    """
+    import shutil
+    import time
+
+    action = str(args.get("action", "create")).lower()
+    folder = _checkpoint_dir()
+
+    if action == "list":
+        rows = []
+        for name in sorted(os.listdir(folder), reverse=True):
+            full = os.path.join(folder, name)
+            if os.path.isfile(full):
+                rows.append({"id": name, "path": full,
+                             "size_bytes": os.path.getsize(full),
+                             "saved_at": time.strftime(
+                                 "%Y-%m-%d %H:%M:%S",
+                                 time.localtime(os.path.getmtime(full)))})
+        return {"checkpoints": rows, "count": len(rows), "folder": folder}
+
+    if action == "create":
+        doc = _select_doc(args) or _current_doc()
+        info = _doc_info(doc)
+        original = doc.getURL() or ""
+        # strip the title's own extension first, else "report.ods" sanitises to
+        # "reportods" and the id reads as gibberish
+        base = os.path.splitext(info.get("title") or "untitled")[0]
+        stem = "".join(c for c in base
+                       if c.isalnum() or c in "-_ ").strip() or "untitled"
+        ext = os.path.splitext(original)[1] or ".ods"
+        cid = "%s__%s%s" % (time.strftime("%Y%m%d-%H%M%S"), stem, ext)
+        target = os.path.join(folder, cid)
+        # storeToURL writes a COPY and leaves the live document's own location
+        # and modified flag alone — storeAsURL would silently re-point it here.
+        doc.storeToURL(_to_url(target), ())
+        return {"checkpoint_id": cid, "path": target, "of": info,
+                "original_url": original,
+                "note": "Roll back with action='restore' and this checkpoint_id."}
+
+    if action == "restore":
+        cid = args.get("checkpoint_id")
+        if not cid:
+            raise RuntimeError("Give 'checkpoint_id' — action='list' shows them.")
+        source = os.path.join(folder, os.path.basename(cid))
+        if not os.path.isfile(source):
+            raise RuntimeError("No checkpoint %r. Call action='list'." % cid)
+
+        doc = _select_doc(args) or _current_doc()
+        original = doc.getURL() or ""
+        if not original:
+            # never saved — there is nothing to restore OVER, so just open it
+            opened = _desktop().loadComponentFromURL(
+                _to_url(source), "_blank", 0, ())
+            _activate(opened)
+            return {"restored": "opened_alongside", "path": source,
+                    "note": "The live document has never been saved, so the "
+                            "checkpoint was opened as a separate document "
+                            "instead of overwriting anything."}
+
+        import unohelper
+        target_path = unohelper.fileUrlToSystemPath(original)
+        doc.setModified(False)      # discard in-memory edits, then close
+        doc.close(False)
+        shutil.copyfile(source, target_path)
+        reopened = _desktop().loadComponentFromURL(_to_url(target_path),
+                                                   "_blank", 0, ())
+        _activate(reopened)
+        return {"restored": target_path, "from_checkpoint": cid,
+                "document": _doc_info(reopened)}
+
+    raise RuntimeError("action must be one of create, list, restore.")
+
+
+def tool_lo_health(args):
+    """Pre-flight: is it safe to start editing, and is anything at risk?"""
+    state = _connect()
+    report = {"connected": True, "transport": state.get("transport"),
+              "call_timeout_seconds": _call_timeout(),
+              "tools_advertised": len(_advertised_tools()),
+              "tools_total": len(TOOLS)}
+    problems = []
+
+    docs = []
+    for doc in _open_docs():
+        info = _doc_info(doc)
+        try:
+            info["unsaved_changes"] = bool(doc.isModified())
+        except Exception:
+            info["unsaved_changes"] = None
+        try:
+            info["has_file"] = bool(doc.hasLocation())
+        except Exception:
+            info["has_file"] = None
+        # a .~lock.<name># left behind by a crash blocks the next open
+        url = doc.getURL() or ""
+        if url:
+            try:
+                import unohelper
+                path = unohelper.fileUrlToSystemPath(url)
+                lock = os.path.join(os.path.dirname(path),
+                                    ".~lock.%s#" % os.path.basename(path))
+                info["lock_file"] = lock if os.path.exists(lock) else None
+            except Exception:
+                pass
+        if info.get("unsaved_changes"):
+            problems.append("%s has unsaved changes — checkpoint_document or "
+                            "save_document before a risky edit."
+                            % info.get("title"))
+        docs.append(info)
+    report["documents"] = docs
+
+    recovery = _recovery_state()
+    report["recovery"] = recovery
+    if recovery.get("pending"):
+        problems.append("%d document(s) are waiting to be recovered from a "
+                        "crash — call lo_recover with action='restore'."
+                        % len(recovery["pending"]))
+    if recovery.get("autosave_enabled") is False:
+        problems.append("AutoSave is off; lo_recover action='set_autosave' "
+                        "minutes=10 reduces what a crash can cost.")
+    if not docs:
+        problems.append("No document is open — create_document, open_document "
+                        "or list_recent_documents.")
+
+    report["problems"] = problems
+    report["healthy"] = not problems
+    return report
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -6362,6 +6752,10 @@ TOOLS = {
     "print_document": tool_print_document,
     "writer_resolve_comment": tool_writer_resolve_comment,
     "writer_captions": tool_writer_captions,
+    # failure recovery
+    "lo_health": tool_lo_health,
+    "lo_recover": tool_lo_recover,
+    "checkpoint_document": tool_checkpoint_document,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -7154,6 +7548,22 @@ TOOL_DEFS = [
                              "numbering": dict(_STR, enum=["arabic", "roman_upper", "roman_lower", "letter_upper", "letter_lower"]),
                              "search": dict(_STR, description="place caption after this text's paragraph"),
                              "match_case": _BOOL})},
+    # --- failure recovery ---
+    {"name": "lo_health",
+     "description": "Pre-flight check before a risky edit: connection and transport, the call timeout, every open document with whether it has UNSAVED changes and a real file, stale .~lock files left by a crash, pending crash-recovery, and whether AutoSave is on. Returns a 'problems' list and a 'healthy' flag. Call this when something has gone wrong, or before a large/destructive change.",
+     "inputSchema": _schema()},
+    {"name": "lo_recover",
+     "description": "LibreOffice's crash recovery, driven over UNO instead of the startup dialog. action 'status' (default) reports whether it crashed, what is waiting to be recovered and the AutoSave setting; 'restore' reopens the pending documents; 'discard' permanently destroys that unsaved work and needs confirm=true; 'set_autosave' turns AutoSave on with 'minutes' (0 = off).",
+     "inputSchema": _schema({"action": dict(_STR, enum=["status", "restore", "discard", "set_autosave"]),
+                             "minutes": dict(_INT, description="set_autosave: interval in minutes, 0 to disable"),
+                             "confirm": dict(_BOOL, description="discard: required, destroys unsaved work from the crash")})},
+    {"name": "checkpoint_document",
+     "description": "Snapshot a document to a side file so a risky edit can be undone. THIS IS THE ONLY ROLLBACK for anything that writes a cell range — LibreOffice does not record bulk range writes for undo, so Ctrl+Z cannot bring those back. action 'create' (default) saves a copy and returns a checkpoint_id, 'list' shows saved checkpoints, 'restore' puts one back (closing and reopening the document; unsaved edits since the checkpoint are lost).",
+     "inputSchema": _schema({"action": dict(_STR, enum=["create", "list", "restore"]),
+                             "checkpoint_id": dict(_STR, description="restore: the id from create/list"),
+                             "title": dict(_STR, description="match the document by window-title substring"),
+                             "url": dict(_STR, description="match the document by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
     {"name": "writer_captions",
      "description": "List or re-word existing captions. action 'list' returns every auto-numbered caption (index, category, number, label) — including ones made with LibreOffice's own Insert > Caption. action 'set' rewrites the LABEL of the caption picked by 'index', 'search' or 'category', leaving the number a live field so renumbering still works. To delete a caption outright use writer_delete_paragraphs.",
      "inputSchema": _schema({"action": dict(_STR, enum=["list", "set"]),
@@ -7416,6 +7826,7 @@ writer_apply_style writer_format_text
 writer_get_comments writer_resolve_comment
 writer_insert_image writer_insert_caption writer_captions
 list_recent_documents print_document
+lo_health lo_recover checkpoint_document
 """.split())
 
 
@@ -7476,7 +7887,8 @@ def handle(message):
         if func is None:
             return _error(mid, -32602, "Unknown tool: %s" % name)
         try:
-            payload = _call_with_reconnect(func, args, name)
+            payload = _run_with_timeout(
+                lambda: _call_with_reconnect(func, args, name), _call_timeout())
             # Two blocks: a human-readable narration first (so an operator
             # watching Claude's CLI/Desktop sees WHAT was done in the document),
             # then the structured JSON (the model chains on content[-1]).
@@ -7487,11 +7899,18 @@ def handle(message):
                 {"type": "text", "text": text},
             ]})
         except Exception as exc:  # tool errors are reported in-band, not as JSON-RPC errors
-            # UNO exceptions often have an EMPTY str() — always name the type
-            msg = str(exc).strip() or "(no message)"
-            return _result(mid, {"content": [{"type": "text",
-                                              "text": "Error [%s]: %s" % (type(exc).__name__, msg)}],
-                                 "isError": True})
+            # Two blocks, mirroring the success shape: a human-readable line
+            # first, then the structured form the caller can branch on.
+            # UNO exceptions often have an EMPTY str() — always name the type.
+            info = _classify_error(exc)
+            line = "Error [%s] %s: %s" % (info["code"], info["error_type"],
+                                          info["message"])
+            if info["hint"]:
+                line += "\nHint: " + info["hint"]
+            return _result(mid, {"content": [
+                {"type": "text", "text": line},
+                {"type": "text", "text": json.dumps(info, ensure_ascii=False)}],
+                "isError": True})
 
     if mid is not None:
         return _error(mid, -32601, "Unknown method: %s" % method)

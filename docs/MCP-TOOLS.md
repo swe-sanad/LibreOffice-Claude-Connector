@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **180 tools** of the `libreoffice` MCP server (v0.10.0), generated from
+All **183 tools** of the `libreoffice` MCP server (v0.10.0), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -235,6 +235,14 @@ All **180 tools** of the `libreoffice` MCP server (v0.10.0), generated from
 | `writer_move_paragraphs` | Reorder body paragraphs: move the block of 'count' (default 1) paragraphs starting at 0-based 'start' to index 'to' (the block lands before the paragraph currently there; to == paragraph count appends at the end). Preserves content and formatting. Indices are the writer_get_paragraphs space. |
 | `writer_convert_table` | Convert between a table and text. direction 'to_text': turn a table (by 'name' or 0-based 'index') into rows of paragraphs, cells joined by 'separator' (default tab). direction 'to_table': turn body paragraphs [start, start+count) into a table, splitting each on 'separator' (default tab) into columns. |
 | `writer_insert_caption` | Insert an auto-numbering caption, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/...; numbers increment across captions sharing a category, and LibreOffice renumbers them automatically). Anchor it to a TABLE or an IMAGE by name — the usual case, and the caption then sits above the table / below the figure by convention — or to a text 'search' match, or append at the end. Use writer_list_tables / writer_list_figures to get the names. |
+
+## Failure recovery
+
+| Tool | Description |
+|---|---|
+| `lo_health` | Pre-flight check before a risky edit: connection and transport, the call timeout, every open document with whether it has UNSAVED changes and a real file, stale .~lock files left by a crash, pending crash-recovery, and whether AutoSave is on. Returns a 'problems' list and a 'healthy' flag. Call this when something has gone wrong, or before a large/destructive change. |
+| `lo_recover` | LibreOffice's crash recovery, driven over UNO instead of the startup dialog. action 'status' (default) reports whether it crashed, what is waiting to be recovered and the AutoSave setting; 'restore' reopens the pending documents; 'discard' permanently destroys that unsaved work and needs confirm=true; 'set_autosave' turns AutoSave on with 'minutes' (0 = off). |
+| `checkpoint_document` | Snapshot a document to a side file so a risky edit can be undone. THIS IS THE ONLY ROLLBACK for anything that writes a cell range — LibreOffice does not record bulk range writes for undo, so Ctrl+Z cannot bring those back. action 'create' (default) saves a copy and returns a checkpoint_id, 'list' shows saved checkpoints, 'restore' puts one back (closing and reopening the document; unsaved edits since the checkpoint are lost). |
 | `writer_captions` | List or re-word existing captions. action 'list' returns every auto-numbered caption (index, category, number, label) — including ones made with LibreOffice's own Insert > Caption. action 'set' rewrites the LABEL of the caption picked by 'index', 'search' or 'category', leaving the number a live field so renumbering still works. To delete a caption outright use writer_delete_paragraphs. |
 | `writer_table_formula` | Set a formula in a Writer table cell and return the computed value. Writer cell-reference syntax, e.g. '=<A1>+<A2>', '=<A1>*2', 'sum <A1:A5>'. Target the table by 'name' or 0-based 'index'. |
 | `writer_split_cells` | Split a table cell (or an 'A1:B1' range) into 'into' cells (default 2) along 'columns' (default) or 'rows'. Target the table by 'name' or 0-based 'index'. |

@@ -30,6 +30,41 @@ in the advertised tier, which grows 32 → 41.
   made with LibreOffice's own Insert ▸ Caption. The number stays a live field,
   so renumbering keeps working after the label changes.
 
+### Added — graceful failure recovery (180 → 183 tools)
+
+Two infrastructure changes come first, because new tools cannot help while a
+hung server produces no output at all.
+
+- **Per-call timeout** (`LO_CALL_TIMEOUT`, default 120s, 0 disables). There was
+  no timeout anywhere: a UNO call waiting on a modal LibreOffice dialog blocked
+  forever, the server stopped answering, and the MCP client eventually killed
+  it — this server's least debuggable failure. Tool calls now run on a worker
+  thread; on timeout the wedged thread is abandoned, the cached bridge is
+  dropped so the NEXT call reconnects instead of queueing behind it, and the
+  caller gets an error naming the likely dialog.
+- **Structured errors.** Failures now return `{code, error_type, retryable,
+  message, hint}` alongside the human-readable line, so a caller can tell
+  "retry" from "ask the user" from "you called the wrong tool". Codes:
+  `timeout`, `office_unreachable`, `no_document`, `ambiguous_document`,
+  `wrong_doc_type`, `not_found`, `locked`, `invalid_argument`, `uno_error`.
+- `lo_health` — pre-flight: transport, call timeout, every open document with
+  whether it has **unsaved changes**, stale `.~lock` files left by a crash,
+  pending crash-recovery, and whether AutoSave is on. Returns a `problems` list
+  and a `healthy` flag.
+- `lo_recover` — LibreOffice's crash recovery driven **over UNO instead of the
+  startup dialog**: `status`, `restore`, `discard` (requires `confirm=true` —
+  it destroys unsaved work), `set_autosave`.
+- `checkpoint_document` — snapshot a document to a side file and roll back to
+  it. **This is the only rollback for a bulk range write**, which LibreOffice
+  does not record for undo at all. Verified live: a checkpoint restored data
+  that `calc_write_range` had destroyed and Ctrl+Z could not recover.
+
+The auto-launch deliberately **keeps `--norestore`**. Dropping it looked like
+the fix for "we discard crash-recovery data", but a pending recovery makes
+LibreOffice open its dialog at startup, and that dialog blocks the UNO socket
+from ever opening — auto-launch would hang instead of connecting. Recovery is
+detected and restored explicitly instead, which is why `lo_recover` exists.
+
 ### Changed
 
 - `writer_insert_caption` can now anchor to a **table or image by name**

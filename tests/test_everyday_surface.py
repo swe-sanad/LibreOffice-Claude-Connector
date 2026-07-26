@@ -142,6 +142,118 @@ class UndoGroupingTest(unittest.TestCase):
             m._call_with_reconnect(boom, {}, "lo_status")
 
 
+class CallTimeoutTest(unittest.TestCase):
+    """A wedged UNO call must become an error, not a dead server."""
+
+    def setUp(self):
+        # these tests poke the shared connection cache; a leak here makes a
+        # LATER test connect for real and auto-launch an office
+        self._saved = dict(m._state)
+
+    def tearDown(self):
+        m._state.clear()
+        m._state.update(self._saved)
+
+    def test_returns_the_value_when_fast_enough(self):
+        self.assertEqual(m._run_with_timeout(lambda: "done", 5), "done")
+
+    def test_zero_disables_the_timeout(self):
+        self.assertEqual(m._run_with_timeout(lambda: "done", 0), "done")
+
+    def test_slow_call_raises_tool_timeout(self):
+        import time
+        with self.assertRaises(m.ToolTimeout):
+            m._run_with_timeout(lambda: time.sleep(3), 0.2)
+
+    def test_timeout_drops_the_cached_bridge(self):
+        # else the next call queues behind the stuck one and hangs too
+        import time
+        m._state["desktop"] = object()
+        try:
+            m._run_with_timeout(lambda: time.sleep(3), 0.2)
+        except m.ToolTimeout:
+            pass
+        self.assertIsNone(m._state["desktop"])
+
+    def test_exceptions_cross_the_thread_boundary(self):
+        def boom():
+            raise ValueError("inner")
+        with self.assertRaises(ValueError):
+            m._run_with_timeout(boom, 5)
+
+    def test_env_override_and_bad_value(self):
+        for raw, expected in (("30", 30.0), ("0", 0.0), ("nonsense", 120.0)):
+            os.environ["LO_CALL_TIMEOUT"] = raw
+            try:
+                self.assertEqual(m._call_timeout(), expected)
+            finally:
+                os.environ.pop("LO_CALL_TIMEOUT", None)
+
+
+class ErrorClassifierTest(unittest.TestCase):
+    """The point of the codes is deciding retry vs ask-the-user vs give up."""
+
+    def test_transient_failures_are_retryable(self):
+        for exc in (m.ToolTimeout("no answer"),
+                    RuntimeError("Binary URP bridge already disposed")):
+            info = m._classify_error(exc)
+            self.assertTrue(info["retryable"], info)
+
+    def test_user_errors_are_not_retryable(self):
+        cases = {
+            "No document is currently open/active in LibreOffice.": "no_document",
+            "The active document is not a Calc spreadsheet.": "wrong_doc_type",
+            "The active document is not a Writer document.": "wrong_doc_type",
+            "No sheet matches 'Q3'. Sheets: a ; b": "not_found",
+            "No table named 'T9'.": "not_found",
+            "3 documents are open but none is focused; focus one.": "ambiguous_document",
+            "preset must be one of ['clean']": "invalid_argument",
+        }
+        for text, code in cases.items():
+            info = m._classify_error(RuntimeError(text))
+            self.assertEqual(info["code"], code, text)
+            self.assertFalse(info["retryable"], text)
+
+    def test_missing_argument_is_named(self):
+        info = m._classify_error(KeyError("range"))
+        self.assertEqual(info["code"], "invalid_argument")
+        self.assertIn("range", info["hint"])
+
+    def test_every_classification_carries_the_full_shape(self):
+        for exc in (RuntimeError(""), KeyError("x"), m.ToolTimeout("t"),
+                    RuntimeError("something nobody predicted")):
+            info = m._classify_error(exc)
+            self.assertEqual(set(info),
+                             {"code", "error_type", "retryable", "message", "hint"})
+            self.assertTrue(info["message"], "message must never be empty")
+
+    def test_unrecognised_errors_fall_back_without_a_bogus_hint(self):
+        info = m._classify_error(RuntimeError("something nobody predicted"))
+        self.assertEqual(info["code"], "uno_error")
+        self.assertEqual(info["hint"], "")
+
+
+class RecoveryToolsTest(unittest.TestCase):
+    def test_registered_and_advertised(self):
+        for name in ("lo_health", "lo_recover", "checkpoint_document"):
+            self.assertIn(name, m.TOOLS)
+            self.assertIn(name, m._BASIC_TOOLS)
+            self.assertIn(name, m._NO_UNDO,
+                          "%s does not edit document content" % name)
+
+    def test_discard_refuses_without_confirmation(self):
+        # destroying unsaved crash data must never happen on a bare call
+        with self.assertRaises(Exception) as caught:
+            m.TOOLS["lo_recover"]({"action": "discard"})
+        self.assertIn("confirm", str(caught.exception).lower())
+
+    def test_unknown_actions_are_rejected(self):
+        for tool, action in (("lo_recover", "nuke"),
+                             ("checkpoint_document", "sideways")):
+            with self.assertRaises(Exception):
+                m.TOOLS[tool]({"action": action})
+
+
 class LooksNumericTest(unittest.TestCase):
     def test_accepts_real_numbers(self):
         for text in ("3", "10.5", "-2", "+0.5", "1e3", ".5"):
