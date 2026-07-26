@@ -1,5 +1,14 @@
 # Upstream parity — pruning the sibling LibreOffice-MCP projects
 
+> **Superseded in part by [`COMPETITOR-STUDY.md`](COMPETITOR-STUDY.md)
+> (2026-07-26)**, which read Nelson and WriterAgent first-hand from cloned
+> source. It corrects three things below: their scale is an order of magnitude
+> larger than implied, the stdlib-only "strategic fork" rests on a false premise
+> (WriterAgent runs its data-science layer in a Docker sidecar, not in
+> LibreOffice's Python), and "supersede all five" is not a realistic goal.
+> Where the two documents disagree, the study wins — it was measured, this was
+> enumerated.
+
 Goal: **absorb the useful capabilities of the sibling LibreOffice-MCP projects
 into this one, and supersede them.** This tracks what's been pulled in, what was
 already covered, and what's intentionally left for a later (or someone else's)
