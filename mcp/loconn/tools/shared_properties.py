@@ -139,6 +139,27 @@ def tool_set_document_properties(args):
     return {"updated": changed}
 
 
+# friendly family token -> UNO StyleFamilies name
+_STYLE_FAMILIES = {
+    "paragraph": "ParagraphStyles", "character": "CharacterStyles",
+    "cell": "CellStyles", "page": "PageStyles", "frame": "FrameStyles",
+    "numbering": "NumberingStyles", "graphic": "GraphicStyles",
+    "table": "TableStyles",
+}
+
+
+def _resolve_style_family(available, fam):
+    if fam in available:
+        return fam
+    key = str(fam).strip().lower().rstrip("s")
+    if key in _STYLE_FAMILIES and _STYLE_FAMILIES[key] in available:
+        return _STYLE_FAMILIES[key]
+    for nm in available:
+        if nm.lower() == str(fam).lower():
+            return nm
+    return None
+
+
 def tool_list_styles(args):
     doc = _current_doc()
     families = doc.getStyleFamilies()
@@ -167,6 +188,36 @@ def tool_list_styles(args):
             names.append(nm)
         out[f] = names
     return {"styles": out}
+
+
+_STYLE_SERVICES = {
+    "ParagraphStyles": "com.sun.star.style.ParagraphStyle",
+    "CharacterStyles": "com.sun.star.style.CharacterStyle",
+    "CellStyles": "com.sun.star.style.CellStyle",
+    "PageStyles": "com.sun.star.style.PageStyle",
+    "FrameStyles": "com.sun.star.style.FrameStyle",
+}
+
+
+def _apply_style_props(style, fmt):
+    if "bold" in fmt:
+        style.CharWeight = 150.0 if fmt["bold"] else 100.0
+    if "italic" in fmt:
+        style.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
+                                      "ITALIC" if fmt["italic"] else "NONE")
+    if "font_name" in fmt:
+        style.CharFontName = fmt["font_name"]
+    if "font_size" in fmt:
+        style.CharHeight = float(fmt["font_size"])
+    if "font_color" in fmt:
+        style.CharColor = _hex_color(fmt["font_color"])
+    if "background_color" in fmt:
+        for prop in ("CellBackColor", "ParaBackColor", "BackColor"):
+            try:
+                setattr(style, prop, _hex_color(fmt["background_color"]))
+                break
+            except Exception:
+                continue
 
 
 def tool_set_style(args):
@@ -229,6 +280,22 @@ def tool_protect_document(args):
         out["sections_affected"] = n
         return out
     raise RuntimeError("protect_document needs a Calc or Writer document.")
+
+
+def _zoom_target(ctrl):
+    """The object carrying ZoomType/ZoomValue: Calc's controller exposes them
+    directly; Writer's live on ctrl.ViewSettings. (Writing ctrl.ZoomValue on
+    Writer raised AttributeError — the original bug.)"""
+    if hasattr(ctrl, "ZoomValue"):
+        return ctrl
+    for get in (lambda: ctrl.ViewSettings, lambda: ctrl.getViewSettings()):
+        try:
+            vs = get()
+        except Exception:
+            vs = None
+        if vs is not None and hasattr(vs, "ZoomValue"):
+            return vs
+    return None
 
 
 def tool_set_view_zoom(args):
@@ -296,6 +363,29 @@ def tool_get_signatures(_args):
         except Exception:
             pass
     return out
+
+
+# Writer and Calc expose different Print* switches; each list is what that
+# application's document-settings object actually carries.
+_PRINT_SETTINGS_WRITER = (
+    "PrintGraphics", "PrintTables", "PrintDrawings", "PrintControls",
+    "PrintPageBackground", "PrintBlackFonts", "PrintEmptyPages",
+    "PrintHiddenText", "PrintTextPlaceholder", "PrintLeftPages",
+    "PrintRightPages", "PrintReversed", "PrintProspect", "PrintProspectRTL",
+    "PrintPaperFromSetup", "PrintFaxName", "PrintAnnotationMode",
+)
+# Calc keeps its print switches on the PAGE STYLE, not on the document settings
+# object — com.sun.star.document.Settings carries only PrinterName/PrinterSetup
+# for a spreadsheet. Getting this wrong is not a silent no-op: it raises
+# UnknownPropertyException at the office. (Verified on 25.2.3.2.)
+_PRINT_SETTINGS_CALC = (
+    "PrintAnnotations", "PrintCharts", "PrintDownFirst", "PrintDrawing",
+    "PrintFormulas", "PrintGrid", "PrintHeaders", "PrintObjects",
+    "PrintZeroValues",
+)
+
+_PAPER_FORMATS = ("A3", "A4", "A5", "B4", "B5", "LETTER", "LEGAL", "TABLOID",
+                  "USER")
 
 
 def tool_print_settings(args):
@@ -412,6 +502,98 @@ def tool_set_alt_text(args):
     return {"updated": updated, "count": len(updated),
             "title": title, "description": description,
             "decorative": decorative}
+
+
+# Deliberately NOT implemented as phase-gated tool sets. Hiding the export tools
+# until an "authoring" phase ends means a user who says "just send me the PDF"
+# hits a server that appears not to support it — the exact complaint Nelson MCP
+# recorded as issue #24 and cited when they rejected progressive disclosure
+# (docs/COMPETITOR-STUDY.md). Everything stays visible; this tool supplies the
+# ORDER, and it derives the phase from the document itself rather than storing
+# one, so it survives a server restart and cannot go stale.
+def _lifecycle_facts(doc, ub):
+    """What is actually true of this document right now."""
+    f = {"kind": _doc_kind(doc), "saved_to": doc.getURL() or None}
+    try:
+        f["unsaved_changes"] = bool(doc.isModified())
+    except Exception:
+        f["unsaved_changes"] = None
+
+    props = doc.getDocumentProperties()
+    f["title"] = props.Title or None
+    f["author"] = props.Author or None
+    f["subject"] = props.Subject or None
+    f["keywords"] = list(props.Keywords) or []
+    f["rights"] = getattr(props, "Rights", "") or None
+    try:
+        f["language"] = props.Language.Language or None
+    except Exception:
+        f["language"] = None
+
+    if ub.is_writer(doc):
+        text = doc.getText().getString()
+        f["characters"] = len(text)
+        headings, paragraphs = 0, 0
+        enum = doc.getText().createEnumeration()
+        while enum.hasMoreElements():
+            para = enum.nextElement()
+            if not para.supportsService("com.sun.star.text.Paragraph"):
+                continue
+            paragraphs += 1
+            try:
+                if para.OutlineLevel > 0 or str(para.ParaStyleName).startswith("Heading"):
+                    headings += 1
+            except Exception:
+                pass
+        f["paragraphs"], f["headings"] = paragraphs, headings
+        try:
+            f["tables"] = doc.getTextTables().getCount()
+        except Exception:
+            f["tables"] = 0
+        try:      # a real index/TOC, not merely "there are headings"
+            f["has_toc"] = doc.getDocumentIndexes().getCount() > 0
+        except Exception:
+            f["has_toc"] = False
+        missing = []
+        try:
+            graphics = doc.getGraphicObjects()
+            f["images"] = graphics.getCount()
+            for name in graphics.getElementNames():
+                obj = graphics.getByName(name)
+                if not (getattr(obj, "Description", "") or
+                        getattr(obj, "Title", "")):
+                    missing.append(name)
+        except Exception:
+            f["images"] = 0
+        f["images_without_alt_text"] = missing
+    else:
+        sheets = doc.getSheets()
+        f["sheets"] = list(sheets.getElementNames())
+        cells = 0
+        for name in f["sheets"]:
+            sheet = sheets.getByName(name)
+            addr = _sheet_used_addr(sheet)
+            if not _addr_is_empty(sheet, addr):
+                cells += ((addr.EndRow - addr.StartRow + 1) *
+                          (addr.EndColumn - addr.StartColumn + 1))
+        f["used_cells"] = cells
+        f["images_without_alt_text"] = []
+        # same signal calc_detect_errors reports. getCells() hands back an
+        # enumeration access, NOT an index access — getCount() raises, and
+        # swallowing that silently reported "no broken formulas" on a sheet
+        # full of #DIV/0!.
+        broken = 0
+        for name in f["sheets"]:
+            try:
+                cells = sheets.getByName(name).queryFormulaCells(4).getCells()
+                enum = cells.createEnumeration()
+                while enum.hasMoreElements():
+                    enum.nextElement()
+                    broken += 1
+            except Exception:
+                pass
+        f["formula_errors"] = broken
+    return f
 
 
 def tool_document_lifecycle(args):

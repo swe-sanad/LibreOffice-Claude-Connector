@@ -119,9 +119,9 @@ logic and UNO glue:
 
 ### Rewrite vs. generate
 
-`rewrite_writer_selection(doc, client, instruction)` inspects the current view cursor
-via `get_writer_selection(doc)`, which reads `isCollapsed()` — the reliable signal for
-"nothing is selected, just a caret position":
+`connector.py` inspects the current view cursor via `get_writer_selection(doc)`, which
+reads `isCollapsed()` — the reliable signal for "nothing is selected, just a caret
+position":
 
 - **Has a selection** (`isCollapsed() == False`) → `writer_actions.rewrite_text` sends
   the selected text + instruction to Claude, and `replace_writer_selection` overwrites

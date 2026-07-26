@@ -10,6 +10,16 @@ from ..registry import register
 
 
 
+_CHART_DIAGRAMS = {
+    "column": ("com.sun.star.chart.BarDiagram", True),
+    "bar": ("com.sun.star.chart.BarDiagram", False),
+    "line": ("com.sun.star.chart.LineDiagram", None),
+    "pie": ("com.sun.star.chart.PieDiagram", None),
+    "area": ("com.sun.star.chart.AreaDiagram", None),
+    "scatter": ("com.sun.star.chart.XYDiagram", None),
+}
+
+
 def tool_calc_create_chart(args):
     doc = _require_calc()
     sheet = _resolve_sheet(doc, args.get("sheet"))
@@ -218,6 +228,15 @@ def tool_calc_insert_image(args):
         pos.Y = _mm100(args.get("y_mm", 5))
     shape.setPosition(pos)
     return {"inserted": os.path.basename(path)}
+
+
+def _find_shape(sheet, name):
+    dp = sheet.DrawPage
+    for i in range(dp.getCount()):
+        shp = dp.getByIndex(i)
+        if getattr(shp, "Name", None) == name:
+            return shp
+    return None
 
 
 def tool_calc_position_shape(args):
@@ -445,6 +464,24 @@ def tool_calc_add_sparkline(args):
         raise RuntimeError("Could not add sparklines (%s). The Sparkline UNO API "
                            "varies by version." % type(exc).__name__)
     return {"sparkline": args["target_range"], "data": args["data_range"]}
+
+
+# Calc error codes -> the marker the user actually sees in the cell.
+_CALC_ERRORS = {
+    501: "#NAME? (invalid character)", 502: "#VALUE! (invalid argument)",
+    503: "#VALUE! (invalid floating point operation)",
+    504: "#VALUE! (parameter list error)",
+    508: "#NAME? (missing pair, e.g. a bracket)",
+    509: "#NAME? (missing operator)", 510: "#NAME? (missing variable)",
+    511: "#NAME? (missing variable)", 512: "#NAME? (formula too long)",
+    513: "#NAME? (string too long)", 514: "#NUM! (internal overflow)",
+    519: "#VALUE!", 520: "#NAME? (internal syntax error)",
+    521: "#NAME? (internal syntax error)", 522: "#REF! (circular reference)",
+    523: "#NUM! (calculation does not converge)",
+    524: "#REF! (invalid reference — a row, column or sheet was deleted)",
+    525: "#NAME? (unknown name)", 526: "#NAME?",
+    527: "#REF! (nesting too deep)", 532: "#DIV/0! (division by zero)",
+}
 
 
 def tool_calc_detect_errors(args):

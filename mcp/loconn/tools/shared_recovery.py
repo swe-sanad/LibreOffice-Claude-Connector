@@ -14,6 +14,21 @@ from ..registry import register
 # Tools — status & selection
 # --------------------------------------------------------------------------- #
 
+def _bundled_oxt():
+    """Path to the agent-acceptor .oxt shipped inside the bundle, if present.
+    Installing it is what lets Claude reach a LibreOffice the user opened
+    normally — no port, no relaunch, no command-line flags."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for base in (os.path.join(here, "..", "..", "ext"), os.path.join(here, "..")):
+        try:
+            for fn in sorted(os.listdir(base)):
+                if fn.endswith(".oxt"):
+                    return os.path.abspath(os.path.join(base, fn))
+        except OSError:
+            continue
+    return None
+
+
 def tool_lo_status(_args):
     _connect()
     advertised = len(_advertised_tools())
@@ -42,6 +57,54 @@ def tool_lo_status(_args):
         ps = _state["smgr"].createInstanceWithContext(
             "com.sun.star.util.PathSettings", _state["ctx"])
         out["profile"] = ps.UserConfig
+    except Exception:
+        pass
+    return out
+
+
+def _config_node(path, writable=False):
+    state = _connect()
+    provider = state["smgr"].createInstanceWithContext(
+        "com.sun.star.configuration.ConfigurationProvider", state["ctx"])
+    service = ("com.sun.star.configuration.ConfigurationUpdateAccess" if writable
+               else "com.sun.star.configuration.ConfigurationAccess")
+    return provider.createInstanceWithArguments(service, (_pv("nodepath", path),))
+
+
+_RECOVERY_PATH = "/org.openoffice.Office.Recovery"
+
+
+def _recovery_state():
+    """What LibreOffice is holding for crash recovery, if anything."""
+    out = {"crashed": False, "autosave_enabled": None,
+           "autosave_minutes": None, "pending": []}
+    try:
+        rec = _config_node(_RECOVERY_PATH)
+    except Exception as exc:
+        out["error"] = str(exc)
+        return out
+    try:
+        info = rec.getByName("RecoveryInfo")
+        out["crashed"] = bool(info.getPropertyValue("Crashed"))
+    except Exception:
+        pass
+    try:
+        auto = rec.getByName("AutoSave")
+        out["autosave_enabled"] = bool(auto.getPropertyValue("Enabled"))
+        out["autosave_minutes"] = int(auto.getPropertyValue("TimeIntervall"))
+    except Exception:
+        pass
+    try:
+        items = rec.getByName("RecoveryList")
+        for name in items.getElementNames():
+            entry, item = {}, items.getByName(name)
+            for prop in ("OriginalURL", "TempURL", "Title", "Filter",
+                         "DocumentState", "Module"):
+                try:
+                    entry[prop] = item.getPropertyValue(prop)
+                except Exception:
+                    pass
+            out["pending"].append(entry)
     except Exception:
         pass
     return out
@@ -115,6 +178,14 @@ def tool_lo_recover(args):
         auto.setPropertyValue("TimeIntervall", minutes)
     node.commitChanges()
     return {"autosave_enabled": minutes > 0, "autosave_minutes": minutes}
+
+
+def _checkpoint_dir():
+    import tempfile
+    path = os.path.join(tempfile.gettempdir(), "claude-lo-checkpoints")
+    if not os.path.isdir(path):
+        os.makedirs(path)
+    return path
 
 
 def tool_checkpoint_document(args):
@@ -193,6 +264,31 @@ def tool_checkpoint_document(args):
                 "document": _doc_info(reopened)}
 
     raise RuntimeError("action must be one of create, list, restore.")
+
+
+def _watch_key(doc):
+    try:
+        return doc.getURL() or doc.getTitle()
+    except Exception:
+        return "active"
+
+
+def _make_watcher():
+    import unohelper
+    from com.sun.star.util import XModifyListener
+
+    class _Watcher(unohelper.Base, XModifyListener):
+        def __init__(self, entry):
+            self.entry = entry
+
+        def modified(self, _event):
+            with _watch_lock():
+                self.entry["total"] += 1
+
+        def disposing(self, _event):
+            self.entry["disposed"] = True
+
+    return _Watcher
 
 
 def tool_document_watch(args):

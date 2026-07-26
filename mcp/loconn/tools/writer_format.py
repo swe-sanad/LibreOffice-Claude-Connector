@@ -65,6 +65,47 @@ def tool_writer_insert_image(args):
             "width_mm": image.Width // 100, "height_mm": image.Height // 100}
 
 
+# Paragraph alignment names -> com.sun.star.style.ParagraphAdjust
+_PARA_ADJUST = {"left": "LEFT", "right": "RIGHT", "center": "CENTER",
+                "justify": "BLOCK", "block": "BLOCK"}
+
+
+def _apply_para_format(target, args):
+    applied = []
+    if "align" in args:
+        key = str(args["align"]).lower()
+        if key not in _PARA_ADJUST:
+            raise RuntimeError("align must be one of %s" % sorted(_PARA_ADJUST))
+        target.ParaAdjust = _uno_enum("com.sun.star.style.ParagraphAdjust",
+                                      _PARA_ADJUST[key])
+        applied.append("align")
+    if "line_spacing_percent" in args:
+        spacing = _uno_struct("com.sun.star.style.LineSpacing")
+        spacing.Mode = 0   # com.sun.star.style.LineSpacingMode.PROP
+        spacing.Height = int(args["line_spacing_percent"])
+        target.ParaLineSpacing = spacing
+        applied.append("line_spacing_percent")
+    if "space_above_mm" in args:
+        target.ParaTopMargin = _mm100(args["space_above_mm"])
+        applied.append("space_above_mm")
+    if "space_below_mm" in args:
+        target.ParaBottomMargin = _mm100(args["space_below_mm"])
+        applied.append("space_below_mm")
+    if "indent_left_mm" in args:
+        target.ParaLeftMargin = _mm100(args["indent_left_mm"])
+        applied.append("indent_left_mm")
+    if "indent_right_mm" in args:
+        target.ParaRightMargin = _mm100(args["indent_right_mm"])
+        applied.append("indent_right_mm")
+    if "first_line_indent_mm" in args:
+        target.ParaFirstLineIndent = _mm100(args["first_line_indent_mm"])
+        applied.append("first_line_indent_mm")
+    if "style_name" in args:
+        target.ParaStyleName = args["style_name"]
+        applied.append("style_name")
+    return applied
+
+
 def tool_writer_format_paragraph(args):
     doc = _require_writer()
     if not any(k in args for k in ("align", "line_spacing_percent",
@@ -111,6 +152,23 @@ def tool_writer_format_paragraph(args):
             applied = _apply_para_format(para, args)
             count += 1
     return {"paragraphs_formatted": count, "applied": applied}
+
+
+def _page_style(doc, name=None):
+    styles = doc.getStyleFamilies().getByName("PageStyles")
+    if name:
+        if not styles.hasByName(name):
+            raise RuntimeError("No page style named %r." % name)
+        return styles.getByName(name)
+    # the page style actually in use by the first paragraph, else 'Standard'
+    try:
+        cursor = doc.getText().createEnumeration().nextElement()
+        used = cursor.getPropertyValue("PageStyleName")
+        if used and styles.hasByName(used):
+            return styles.getByName(used)
+    except Exception:
+        pass
+    return styles.getByName("Standard")
 
 
 def tool_writer_set_page_style(args):
@@ -259,6 +317,14 @@ def tool_writer_list_objects(_args):
     return {"objects": out, "count": len(out)}
 
 
+def _set_para_direction(para, wm, adjust_key, do_align):
+    # WritingMode2 short: RL_TB=1 (rtl) / LR_TB=0 (ltr).
+    para.WritingMode = wm
+    if do_align:
+        para.ParaAdjust = _uno_enum("com.sun.star.style.ParagraphAdjust",
+                                    adjust_key)
+
+
 def tool_writer_set_text_direction(args):
     doc = _require_writer()
     direction = str(args.get("direction", "rtl")).lower()
@@ -351,6 +417,14 @@ def tool_writer_delete_object(args):
         doc.getText().removeTextContent(sections.getByName(name))
         return {"deleted": name, "kind": "section"}
     raise RuntimeError("No object named %r found." % name)
+
+
+_ANCHOR_TYPES = {"as_char": "AS_CHARACTER", "char": "AT_CHARACTER",
+                 "paragraph": "AT_PARAGRAPH", "page": "AT_PAGE",
+                 "frame": "AT_FRAME"}
+
+_WRAP_MODES = {"none": "NONE", "through": "THROUGH", "parallel": "PARALLEL",
+               "dynamic": "DYNAMIC", "left": "LEFT", "right": "RIGHT"}
 
 
 def tool_writer_set_image_layout(args):
@@ -586,6 +660,10 @@ def tool_writer_set_document_defaults(args):
     return {"style": "Standard", "changed": changed}
 
 
+_TAB_ALIGN = {"left": "LEFT", "right": "RIGHT", "center": "CENTER",
+              "decimal": "DECIMAL"}
+
+
 def tool_writer_insert_tab_stops(args):
     """Set paragraph tab stops (positions in mm) on matched paragraphs ('search')
     or a body-paragraph range (start/count, default all) — for aligned columns /
@@ -632,6 +710,14 @@ def tool_writer_insert_tab_stops(args):
         _apply(para)
         n += 1
     return {"tab_stops": len(stops), "paragraphs": n, "scope": "range"}
+
+
+# preset -> (body font, body pt, margin mm, line spacing %)
+_DOC_PRESETS = {
+    "report": ("Liberation Sans", 11.0, 20.0, 115),
+    "essay":  ("Liberation Serif", 12.0, 25.4, 200),
+    "letter": ("Liberation Serif", 12.0, 25.0, 100),
+}
 
 
 def tool_writer_format_document(args):

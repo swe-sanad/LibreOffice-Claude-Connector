@@ -18,19 +18,13 @@ from loconn import registry           # noqa: E402
 
 
 class RegistryTest(unittest.TestCase):
-    def test_every_tool_has_a_handler_and_a_schema(self):
-        names = {d["name"] for d in registry.TOOL_DEFS}
-        self.assertEqual(names, set(registry.TOOLS))
-        self.assertEqual(len(registry.TOOL_DEFS), len(registry.TOOLS),
-                         "a tool was registered twice")
-
-    def test_handler_matches_its_declared_name(self):
-        for name, func in registry.TOOLS.items():
-            self.assertEqual(func.__name__, "tool_" + name)
-
-    def test_tiers_only_name_registered_tools(self):
-        self.assertEqual(registry.BASIC_TOOLS - set(registry.TOOLS), set())
-        self.assertEqual(registry.NO_UNDO - set(registry.TOOLS), set())
+    # test_every_tool_has_a_handler_and_a_schema, test_handler_matches_its_
+    # declared_name and test_tiers_only_name_registered_tools used to live here
+    # asserting exactly what register() now enforces at IMPORT time (a schema
+    # with no handler, a handler name mismatch, or an unknown tier name is an
+    # ImportError before any test runs) — so they could no longer fail and were
+    # removed. The two below keep teeth: they drive register() into the
+    # rejection path directly.
 
     def test_register_rejects_a_schema_with_no_handler(self):
         with self.assertRaises(ImportError):

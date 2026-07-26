@@ -100,6 +100,16 @@ def tool_calc_sheet_properties(args):
             "visible": bool(sheet.IsVisible), "changed": changed}
 
 
+def _calc_axis(sheet, axis):
+    """'columns'|'rows' -> the sheet's column/row collection. Raises on typos."""
+    a = str(axis).lower()
+    if a in ("columns", "column", "col", "cols"):
+        return sheet.getColumns(), "columns"
+    if a in ("rows", "row"):
+        return sheet.getRows(), "rows"
+    raise RuntimeError("axis must be 'columns' or 'rows', got: %r" % axis)
+
+
 def tool_calc_set_dimensions(args):
     doc = _require_calc()
     sheet = _resolve_sheet(doc, args.get("sheet"))

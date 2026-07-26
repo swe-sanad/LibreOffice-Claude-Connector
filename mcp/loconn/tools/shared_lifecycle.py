@@ -14,6 +14,24 @@ def tool_list_documents(_args):
     return tool_lo_status(_args)
 
 
+_FACTORY_URLS = {"calc": "private:factory/scalc",
+                 "writer": "private:factory/swriter"}
+
+# (doc kind, format) -> LibreOffice filter name
+_FILTERS = {
+    ("calc", "native"): "calc8",
+    ("calc", "ods"): "calc8",
+    ("calc", "xlsx"): "Calc MS Excel 2007 XML",
+    ("calc", "csv"): "Text - txt - csv (StarCalc)",
+    ("calc", "pdf"): "calc_pdf_Export",
+    ("writer", "native"): "writer8",
+    ("writer", "odt"): "writer8",
+    ("writer", "docx"): "MS Word 2007 XML",
+    ("writer", "txt"): "Text",
+    ("writer", "pdf"): "writer_pdf_Export",
+}
+
+
 def tool_create_document(args):
     kind = args.get("type", "calc")
     url = _FACTORY_URLS.get(kind)

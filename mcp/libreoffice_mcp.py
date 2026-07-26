@@ -17,23 +17,16 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from loconn import core                      # noqa: E402
 from loconn.core import *                    # noqa: E402,F401,F403
-from loconn.registry import (TOOLS, TOOL_DEFS, BASIC_TOOLS, NO_UNDO,  # noqa: E402
-                             advertised)
 from loconn import tools as _tools           # noqa: E402,F401 - self-registering
 
 SERVER_NAME = "libreoffice"
 SERVER_VERSION = "0.9.6"
 DEFAULT_PROTOCOL = "2024-11-05"
 
-# The registry owns these now. They are re-exported under their old names
-# because the offline suite reaches for them, and because core aliases the very
-# same mutable objects — no binding step, nothing to keep in step.
-_BASIC_TOOLS = BASIC_TOOLS
-_NO_UNDO = NO_UNDO
-_full_tier = core._full_tier
-_advertised_tools = core._advertised_tools
+# TOOLS, TOOL_DEFS, _BASIC_TOOLS, _NO_UNDO, _full_tier, _advertised_tools all
+# come in via the star-import above — core.__all__ already carries them under
+# these exact names (the offline suite reaches for them here).
 
 
 

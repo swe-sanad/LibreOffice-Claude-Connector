@@ -79,6 +79,16 @@ def tool_writer_add_conditional_section(args):
             "currently_visible": bool(applied.IsCurrentlyVisible)}
 
 
+_FIELD_SERVICES = {
+    "page_number": "com.sun.star.text.TextField.PageNumber",
+    "page_count": "com.sun.star.text.TextField.PageCount",
+    "date": "com.sun.star.text.TextField.DateTime",
+    "time": "com.sun.star.text.TextField.DateTime",
+    "title": "com.sun.star.text.TextField.DocInfo.Title",
+    "author": "com.sun.star.text.TextField.Author",
+}
+
+
 def tool_writer_insert_field(args):
     doc = _require_writer()
     kind = str(args.get("field", "page_number")).lower()
@@ -139,6 +149,25 @@ def tool_writer_update_indexes(_args):
     except Exception:
         pass
     return {"indexes_updated": indexes, "fields_refreshed": True}
+
+
+def _make_numbering_rules(doc, ordered):
+    """A bullet (default) or ordered NumberingRules, applied directly to
+    paragraphs so lists work regardless of the build's localized list-STYLE
+    names (e.g. 'List 1' / 'Numbering 1' instead of 'List Bullet')."""
+    import uno
+    from com.sun.star.style.NumberingType import ARABIC, CHAR_SPECIAL
+    rules = doc.createInstance("com.sun.star.text.NumberingRules")
+    if ordered:
+        level = (_pv("NumberingType", ARABIC), _pv("Prefix", ""),
+                 _pv("Suffix", "."))
+    else:
+        level = (_pv("NumberingType", CHAR_SPECIAL),
+                 _pv("BulletChar", u"•"), _pv("BulletFontName", "OpenSymbol"),
+                 _pv("Prefix", ""), _pv("Suffix", ""))
+    uno.invoke(rules, "replaceByIndex",
+               (0, _any_seq("com.sun.star.beans.PropertyValue", level)))
+    return rules
 
 
 def tool_writer_apply_list(args):
@@ -337,6 +366,66 @@ def tool_writer_set_chapter_numbering(args):
     return {"levels": levels, "numbering": numbering, "separator": separator}
 
 
+def _blank_paragraph_at(text, where, before):
+    """Open an empty paragraph next to `where` and return a cursor sitting in it.
+
+    `before=True` puts the new paragraph ahead of `where`'s content, which needs
+    the extra gotoPreviousParagraph — inserting a break at a paragraph's start
+    leaves the cursor with the ORIGINAL content, not the new empty line.
+    """
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    cur = text.createTextCursorByRange(where)
+    text.insertControlCharacter(cur, PARAGRAPH_BREAK, False)
+    if before:
+        cur.gotoPreviousParagraph(False)
+    return cur
+
+
+def _caption_slot_for_table(doc, name, position):
+    """A table's getAnchor() is NOT a usable text range on this build —
+    getText() returns None and createTextCursorByRange rejects it. So find the
+    table in the body enumeration and work from the paragraph beside it."""
+    text = doc.getText()
+    elements = []
+    enum = text.createEnumeration()
+    while enum.hasMoreElements():
+        elements.append(enum.nextElement())
+    idx = None
+    for i, el in enumerate(elements):
+        if (el.supportsService("com.sun.star.text.TextTable")
+                and getattr(el, "Name", None) == name):
+            idx = i
+            break
+    if idx is None:
+        raise RuntimeError("No table named %r. Tables: %s"
+                           % (name, ", ".join(doc.getTextTables().getElementNames())))
+    if position == "before":
+        if idx == 0:
+            raise RuntimeError(
+                "Table %r is the first thing in the document, so there is no "
+                "paragraph above it to hold a caption — use position='after'."
+                % name)
+        return text, _blank_paragraph_at(text, elements[idx - 1].getEnd(), False)
+    if idx + 1 >= len(elements):
+        return text, _blank_paragraph_at(text, text.getEnd(), False)
+    return text, _blank_paragraph_at(text, elements[idx + 1].getStart(), True)
+
+
+def _caption_slot_for_image(doc, name, position):
+    graphics = doc.getGraphicObjects()
+    if not graphics.hasByName(name):
+        raise RuntimeError("No image named %r. Images: %s"
+                           % (name, ", ".join(graphics.getElementNames())))
+    rng = graphics.getByName(name).getAnchor()
+    host = rng.getText()
+    if host is None:                     # same quirk as tables — fall back
+        host = doc.getText()
+        return host, _blank_paragraph_at(host, host.getEnd(), False)
+    return host, _blank_paragraph_at(
+        host, rng.getStart() if position == "before" else rng.getEnd(),
+        position == "before")
+
+
 def tool_writer_insert_caption(args):
     """Insert an auto-numbering caption ('Figure 1 — ...') as a new paragraph,
     backed by a per-category SetExpression sequence field so numbers increment
@@ -392,6 +481,41 @@ def tool_writer_insert_caption(args):
     return {"category": category, "number": field.getPresentation(False),
             "text": label,
             "anchored_to": args.get("table") or args.get("image") or None}
+
+
+_SEQ_FIELD = "com.sun.star.text.TextField.SetExpression"
+
+
+def _iter_captions(doc):
+    """Yield (field, category, paragraph_cursor) for every auto-numbered caption.
+
+    A caption is a SetExpression field of subtype SEQUENCE — the same thing
+    writer_insert_caption creates, and the same thing LibreOffice's own
+    Insert > Caption creates, so captions made in the GUI are found too.
+    """
+    from com.sun.star.text.SetVariableType import SEQUENCE
+    enum = doc.getTextFields().createEnumeration()
+    while enum.hasMoreElements():
+        field = enum.nextElement()
+        if not field.supportsService(_SEQ_FIELD):
+            continue
+        try:
+            if field.SubType != SEQUENCE:
+                continue
+        except Exception:
+            continue
+        anchor = field.getAnchor()
+        # a caption can live in a table cell or a frame, so walk ITS text rather
+        # than doc.getText()
+        host = anchor.getText()
+        cur = host.createTextCursorByRange(anchor)
+        cur.gotoStartOfParagraph(False)
+        cur.gotoEndOfParagraph(True)
+        try:
+            category = field.getTextFieldMaster().Name
+        except Exception:
+            category = ""
+        yield field, category, cur
 
 
 def tool_writer_captions(args):
@@ -496,6 +620,10 @@ def tool_writer_list_figures(_args):
             pass
         out.append(entry)
     return {"figures": out, "count": len(out)}
+
+
+_CONTENT_CONTROL_KINDS = ("rich_text", "plain_text", "checkbox", "dropdown",
+                          "combobox", "date", "picture")
 
 
 def tool_writer_content_control(args):

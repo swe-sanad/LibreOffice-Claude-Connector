@@ -172,6 +172,37 @@ def tool_get_current_selection(_args):
     return {"type": "other"}
 
 
+# Everything under Writer's Form menu that instantiates without a database
+# connection. ImageControl and GridControl (Table Control) are deliberately
+# absent: both are data-bound and need a form/data source context.
+_FORM_COMPONENTS = {
+    "button": "com.sun.star.form.component.CommandButton",
+    "imagebutton": "com.sun.star.form.component.ImageButton",
+    "checkbox": "com.sun.star.form.component.CheckBox",
+    "radio": "com.sun.star.form.component.RadioButton",
+    "groupbox": "com.sun.star.form.component.GroupBox",
+    "textfield": "com.sun.star.form.component.TextField",
+    "label": "com.sun.star.form.component.FixedText",
+    "listbox": "com.sun.star.form.component.ListBox",
+    "combobox": "com.sun.star.form.component.ComboBox",
+    "formatted": "com.sun.star.form.component.FormattedField",
+    "date": "com.sun.star.form.component.DateField",
+    "time": "com.sun.star.form.component.TimeField",
+    "numeric": "com.sun.star.form.component.NumericField",
+    "currency": "com.sun.star.form.component.CurrencyField",
+    "pattern": "com.sun.star.form.component.PatternField",
+    "file": "com.sun.star.form.component.FileControl",
+    "scrollbar": "com.sun.star.form.component.ScrollBar",
+    "spinbutton": "com.sun.star.form.component.SpinButton",
+    "navbar": "com.sun.star.form.component.NavigationToolBar",
+}
+
+# kinds that carry a visible caption. NOT imagebutton — it shows a picture and
+# has no Label property at all (setting one raises AttributeError).
+_FORM_LABELLED = ("button", "checkbox", "radio", "groupbox", "label")
+_FORM_LISTED = ("listbox", "combobox")
+
+
 def tool_insert_form_control(args):
     ub = _bridge()
     doc = _current_doc()
@@ -187,8 +218,7 @@ def tool_insert_form_control(args):
         model.DefaultText = args["text"]
     if kind in _FORM_LISTED and args.get("items"):
         model.StringItemList = tuple(str(x) for x in args["items"])
-        if kind in _FORM_DROPDOWN_DEFAULT:
-            model.Dropdown = True
+        model.Dropdown = True
     if kind in ("button", "imagebutton") and args.get("url"):
         model.ButtonType = _uno_enum("com.sun.star.form.FormButtonType", "URL")
         model.TargetURL = args["url"]
@@ -545,6 +575,45 @@ def tool_insert_ole_object(args):
         shape.setSize(pos)
         return {"inserted": obj_kind, "clsid": clsid}
     raise RuntimeError("insert_ole_object needs a Calc or Writer document.")
+
+
+def _form_controls(doc):
+    """Yield (form_name, control_model) over every form control in the active
+    document — the Writer draw page, or each Calc sheet's draw page."""
+    ub = _bridge()
+    pages = []
+    if ub.is_calc(doc):
+        sheets = doc.getSheets()
+        for i in range(sheets.getCount()):
+            pages.append(sheets.getByIndex(i).getDrawPage())
+    else:
+        pages.append(doc.getDrawPage())
+    for dp in pages:
+        try:
+            forms = dp.getForms()
+        except Exception:
+            continue
+        for fi in range(forms.getCount()):
+            form = forms.getByIndex(fi)
+            for ci in range(form.getCount()):
+                yield form.Name, form.getByIndex(ci)
+
+
+def _control_info(model):
+    info = {"name": getattr(model, "Name", "")}
+    try:
+        comp = [s for s in model.getSupportedServiceNames() if ".component." in s]
+        info["type"] = comp[0].rsplit(".", 1)[-1] if comp else ""
+    except Exception:
+        info["type"] = ""
+    try:
+        psi = model.getPropertySetInfo()
+        for p in ("Label", "Text", "DefaultText", "State", "Enabled", "ReadOnly"):
+            if psi.hasPropertyByName(p):
+                info[p] = _jsonable(getattr(model, p))
+    except Exception:
+        pass
+    return info
 
 
 def tool_form_control(args):

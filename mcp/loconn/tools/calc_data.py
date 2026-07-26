@@ -22,6 +22,17 @@ def tool_calc_read_range(args):
     return {"range": args["range"], "cells": ub.read_range_grid(rng)}
 
 
+def _check_grid_shape(rng, grid, what):
+    addr = rng.getRangeAddress()
+    rows = addr.EndRow - addr.StartRow + 1
+    cols = addr.EndColumn - addr.StartColumn + 1
+    if len(grid) != rows or any(len(r) != cols for r in grid):
+        raise RuntimeError(
+            "%s shape %dx%d does not match the range (%dx%d)."
+            % (what, len(grid), len(grid[0]) if grid else 0, rows, cols))
+    return rows, cols
+
+
 def tool_calc_write_range(args):
     ub = _bridge()
     doc = _require_calc()
@@ -38,6 +49,32 @@ def tool_calc_get_formulas(args):
     rng = sheet.getCellRangeByName(args["range"])
     return {"range": args["range"],
             "formulas": [list(row) for row in rng.getFormulaArray()]}
+
+
+def _range_errors(rng, max_cells=4096):
+    """Cells in a range holding an error value (Err:5xx / #NAME? / #REF! ...),
+    as ([{cell, code, text}], incomplete). Each cell is a cross-process read, so
+    ranges above `max_cells` are NOT scanned (incomplete=True) rather than stall a
+    large write; a scan that itself fails partway also reports incomplete — so a
+    partial/skipped scan is never mistaken for 'no errors'."""
+    errs, incomplete = [], False
+    try:
+        addr = rng.getRangeAddress()
+        rows = addr.EndRow - addr.StartRow + 1
+        cols = addr.EndColumn - addr.StartColumn + 1
+        if rows * cols > max_cells:
+            return errs, True
+        for r in range(rows):
+            for c in range(cols):
+                cell = rng.getCellByPosition(c, r)
+                code = cell.getError()
+                if code:
+                    errs.append({"cell": "%s%d" % (_col_letters(addr.StartColumn + c),
+                                                   addr.StartRow + r + 1),
+                                 "code": int(code), "text": cell.getString()})
+    except Exception:
+        incomplete = True
+    return errs, incomplete
 
 
 def tool_calc_set_formulas(args):
@@ -301,6 +338,13 @@ def tool_calc_standard_filter(args):
     return {"filtered": args["range"], "conditions": len(fields)}
 
 
+def _addr_intersects(a, b):
+    """True when two CellRangeAddress rectangles overlap (same sheet)."""
+    return (a.Sheet == b.Sheet
+            and a.StartColumn <= b.EndColumn and a.EndColumn >= b.StartColumn
+            and a.StartRow <= b.EndRow and a.EndRow >= b.StartRow)
+
+
 def tool_calc_multiple_operations(args):
     from com.sun.star.sheet.TableOperationMode import COLUMN, ROW, BOTH
     doc = _require_calc()
@@ -460,6 +504,38 @@ def tool_calc_overview(args):
         out.append(info)
     return {"sheets": out, "count": len(out),
             "active": doc.getCurrentController().getActiveSheet().getName()}
+
+
+def _looks_numeric(text):
+    """True when Calc would store this as a number if typed in. Rejects Python's
+    own float() extras ('nan', 'inf', '1_000') — none of them are what a user
+    means by 'this column should be numbers'."""
+    if not text or "_" in text:
+        return False
+    if text.strip().lstrip("+-").lower() in ("nan", "inf", "infinity"):
+        return False
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_cell(value):
+    """Trim a literal text cell, and let numeric-looking text become a number.
+
+    getFormulaArray() renders a TEXT cell that LOOKS numeric with a leading
+    apostrophe — Calc's force-text marker — so " 3 " arrives as "' 3 ". Dropping
+    that marker is what turns the cell back into a real number on write-back; a
+    plain .strip() leaves "' 3" and the cell stays stubbornly text.
+    """
+    if not isinstance(value, str):
+        return value
+    if value.startswith("'"):
+        body = value[1:].strip()
+        # only un-text it when it really is a number — otherwise keep the marker
+        return body if _looks_numeric(body) else "'" + body
+    return value.strip()
 
 
 def tool_calc_clean_data(args):

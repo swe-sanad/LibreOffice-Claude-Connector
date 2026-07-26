@@ -52,6 +52,28 @@ def tool_writer_append_text(args):
     return {"appended": len(args["text"])}
 
 
+# Character properties carried across a format-preserving replacement. Kept to
+# the run-level ones a user would notice; paragraph properties are untouched
+# because the replacement never leaves its paragraph.
+_CHAR_PROPS = ("CharWeight", "CharPosture", "CharUnderline", "CharFontName",
+               "CharHeight", "CharColor", "CharBackColor", "CharStrikeout",
+               "CharEscapement", "CharWeightComplex", "CharPostureComplex",
+               "CharFontNameComplex", "CharHeightComplex")
+
+
+def _char_props_at(text, rng):
+    """Snapshot the character formatting of the FIRST character of a range."""
+    probe = text.createTextCursorByRange(rng.getStart())
+    probe.goRight(1, True)
+    snapshot = {}
+    for name in _CHAR_PROPS:
+        try:
+            snapshot[name] = getattr(probe, name)
+        except Exception:
+            pass
+    return snapshot
+
+
 def tool_writer_find_replace(args):
     doc = _require_writer()
     regex = bool(args.get("regex", False))
@@ -107,6 +129,9 @@ def tool_writer_insert_page_break(_args):
     _text, cursor = _append_paragraph(doc, style="Standard")
     cursor.BreakType = _uno_enum("com.sun.star.style.BreakType", "PAGE_BEFORE")
     return {"inserted": "page_break"}
+
+
+_ANNOTATION = "com.sun.star.text.TextField.Annotation"
 
 
 def tool_writer_add_comment(args):
@@ -357,6 +382,18 @@ def tool_writer_spellcheck(args):
         if len(flagged) >= limit:
             break
     return {"flagged": flagged, "count": len(flagged)}
+
+
+def _transform_case(s, mode):
+    if mode == "upper":
+        return s.upper()
+    if mode == "lower":
+        return s.lower()
+    if mode == "title":
+        return s.title()
+    if mode == "sentence":
+        return s.capitalize()
+    raise RuntimeError("mode must be upper|lower|title|sentence.")
 
 
 def tool_writer_change_case(args):

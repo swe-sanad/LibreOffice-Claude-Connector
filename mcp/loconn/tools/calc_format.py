@@ -10,6 +10,51 @@ from ..registry import register
 
 
 
+_H_ALIGN = {"left": "LEFT", "center": "CENTER", "right": "RIGHT",
+            "justify": "BLOCK", "default": "STANDARD"}
+
+
+# com.sun.star.util.NumberFormat is a CONSTANTS group, not an enum — the values
+# are fixed by the API, so naming them here avoids a lookup per call.
+_NUMBER_TYPES = {"number": 16, "currency": 8, "percent": 128, "date": 2,
+                 "time": 4, "datetime": 6, "text": 256}
+
+
+def _parse_locale(tag):
+    """'ar-LY' / 'en_US' / 'de' -> a com.sun.star.lang.Locale. An empty tag gives
+    the blank locale, which means 'whatever the document is set to'."""
+    loc = _uno_struct("com.sun.star.lang.Locale")
+    if tag:
+        parts = str(tag).replace("_", "-").split("-")
+        loc.Language = parts[0]
+        if len(parts) > 1:
+            loc.Country = parts[1].upper()
+    return loc
+
+
+def _number_format_key(doc, preset, locale_tag=None, decimals=None):
+    """Resolve a named format in a LOCALE, so money/dates come out the way that
+    locale writes them — ar-LY currency really is [$د.ل.‏-1001] #٬##0٫00, which
+    no hand-written format string was ever going to get right."""
+    if preset not in _NUMBER_TYPES:
+        raise RuntimeError("number_preset must be one of %s"
+                           % sorted(_NUMBER_TYPES))
+    formats = doc.getNumberFormats()
+    locale = _parse_locale(locale_tag)
+    key = formats.getStandardFormat(_NUMBER_TYPES[preset], locale)
+    if decimals is None:
+        return key
+    # ask the format service to restate the same format with N decimals
+    try:
+        base = formats.getByKey(key).FormatString
+        wanted = formats.generateFormat(key, locale, False, False,
+                                        int(decimals), 1)
+        found = formats.queryKey(wanted, locale, False)
+        return found if found != -1 else formats.addNew(wanted, locale)
+    except Exception:
+        return key
+
+
 def tool_calc_format_range(args):
     doc = _require_calc()
     sheet = _resolve_sheet(doc, args.get("sheet"))
@@ -102,6 +147,53 @@ def tool_calc_set_borders(args):
 # Tools — Calc conditional formatting & comments
 # --------------------------------------------------------------------------- #
 
+# Calc conditional-format operators -> com.sun.star.sheet.ConditionOperator names
+_COND_OPERATORS = {
+    "==": "EQUAL", "=": "EQUAL",
+    "!=": "NOT_EQUAL", "<>": "NOT_EQUAL",
+    ">": "GREATER", ">=": "GREATER_EQUAL",
+    "<": "LESS", "<=": "LESS_EQUAL",
+    "between": "BETWEEN", "not_between": "NOT_BETWEEN",
+    "formula": "FORMULA",
+}
+
+
+def _ensure_cell_style(doc, name, fmt):
+    """Create or update a Calc cell style with the given formatting (used as the
+    'apply this when true' target of a conditional format)."""
+    cell_styles = doc.getStyleFamilies().getByName("CellStyles")
+    if cell_styles.hasByName(name):
+        style = cell_styles.getByName(name)
+    else:
+        style = doc.createInstance("com.sun.star.style.CellStyle")
+        cell_styles.insertByName(name, style)
+    if "bold" in fmt:
+        style.CharWeight = 150.0 if fmt["bold"] else 100.0
+    if "italic" in fmt:
+        style.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
+                                      "ITALIC" if fmt["italic"] else "NONE")
+    if "font_color" in fmt:
+        style.CharColor = _hex_color(fmt["font_color"])
+    if "background_color" in fmt:
+        style.CellBackColor = _hex_color(fmt["background_color"])
+    return name
+
+
+def _cond_style_name(fmt):
+    """A deterministic style name so identical formatting reuses one style and
+    distinct formatting gets distinct styles."""
+    parts = ["ClaudeCF"]
+    if fmt.get("bold"):
+        parts.append("b")
+    if fmt.get("italic"):
+        parts.append("i")
+    if "background_color" in fmt:
+        parts.append("bg" + str(fmt["background_color"]).lstrip("#"))
+    if "font_color" in fmt:
+        parts.append("fg" + str(fmt["font_color"]).lstrip("#"))
+    return "_".join(parts)
+
+
 def tool_calc_add_conditional_format(args):
     doc = _require_calc()
     sheet = _resolve_sheet(doc, args.get("sheet"))
@@ -147,6 +239,14 @@ def tool_calc_clear_conditional_formats(args):
     conditions.clear()
     rng.setPropertyValue("ConditionalFormat", conditions)
     return {"range": args["range"], "cleared": removed}
+
+
+def _cell_addr_struct(sheet_index, col, row):
+    addr = _uno_struct("com.sun.star.table.CellAddress")
+    addr.Sheet = sheet_index
+    addr.Column = col
+    addr.Row = row
+    return addr
 
 
 def tool_calc_add_comment(args):
@@ -244,6 +344,9 @@ def tool_calc_cell_protection(args):
     rng.CellProtection = prot
     return {"range": args["range"], "locked": prot.IsLocked,
             "note": "cell protection only takes effect once the sheet is protected"}
+
+
+_VERT_JUSTIFY = {"standard": 0, "top": 1, "center": 2, "bottom": 3}
 
 
 def tool_calc_format_cells_advanced(args):
@@ -389,6 +492,14 @@ def tool_calc_add_scale_format(args):
                            "UNO API is version-sensitive." % (kind, type(exc).__name__))
     return {"scale_format": kind, "range": args["range"],
             "note": "created with default thresholds/colors; adjust in the UI if needed"}
+
+
+# preset -> (header background, header font colour, body number format or None)
+_TABLE_PRESETS = {
+    "clean":     ("#EFEFEF", "#000000", None),
+    "report":    ("#2F5597", "#FFFFFF", None),
+    "financial": ("#2F5597", "#FFFFFF", "#,##0.00"),
+}
 
 
 def tool_calc_format_table(args):

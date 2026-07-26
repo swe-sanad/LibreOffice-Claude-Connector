@@ -22,10 +22,9 @@ import uno  # provided by LibreOffice's runtime
 from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
 
 try:
-    from . import calc_actions, writer_actions   # packaged in the .oxt (claudeconn package)
-except ImportError:                               # flat layout (tests / dev)
+    from . import calc_actions   # packaged in the .oxt (claudeconn package)
+except ImportError:              # flat layout (tests / dev)
     import calc_actions
-    import writer_actions
 
 Grid = List[List[Any]]
 
@@ -257,18 +256,3 @@ def insert_writer_at_caret(doc: Any, text: str,
                lambda: _insert_multiline(xtext, view_cursor.getStart(), text, False))
 
 
-def rewrite_writer_selection(doc: Any, client: Any, instruction: str,
-                             **kwargs: Any) -> str:
-    """Synchronous: rewrite the selection, or generate at the caret if none.
-
-    Returns the text that was written. The packaged extension splits this so the
-    network call runs off the UI thread.
-    """
-    text, has_selection = get_writer_selection(doc)
-    if has_selection:
-        new_text = writer_actions.rewrite_text(client, text, instruction, **kwargs)
-        replace_writer_selection(doc, new_text)
-    else:
-        new_text = writer_actions.generate_text(client, instruction, **kwargs)
-        insert_writer_at_caret(doc, new_text)
-    return new_text

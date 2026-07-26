@@ -182,6 +182,19 @@ def tool_writer_edit_table(args):
     return {"table": table.Name, "actions": actions}
 
 
+def _resolve_table(doc, args):
+    tables = doc.getTextTables()
+    name = args.get("name")
+    if name not in (None, ""):
+        if not tables.hasByName(name):
+            raise RuntimeError("No table named %r. Tables: %s"
+                               % (name, ", ".join(tables.getElementNames())))
+        return tables.getByName(name)
+    if tables.getCount() == 0:
+        raise RuntimeError("The document has no tables.")
+    return tables.getByIndex(int(args.get("index", 0)))
+
+
 def tool_writer_sort_table(args):
     """Sort a Writer table's data rows by one key column. Reads the grid, sorts
     in Python (numeric-aware), writes cell text back."""
