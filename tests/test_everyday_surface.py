@@ -25,6 +25,37 @@ from loconn.tools import shared_automation as _shared_automation  # noqa: E402
 from loconn.tools import shared_properties as _shared_properties  # noqa: E402
 from loconn.tools import writer_format as _writer_format    # noqa: E402
 from loconn.tools import writer_structure as _writer_structure  # noqa: E402
+from loconn import core as _core                            # noqa: E402
+
+try:                     # only LibreOffice's own interpreter ships `uno`
+    import uno           # noqa: F401
+    HAS_UNO = True
+except ImportError:      # stock CPython: skip the handful of tests that build
+    HAS_UNO = False      # real UNO structs, and run the other ~165 anywhere
+
+
+def setUpModule():
+    """Make this suite genuinely offline.
+
+    It is advertised as needing no LibreOffice, but `_enter_undo` reaches for
+    the current document, which connects — and with no office running that
+    falls all the way through to AUTO-LAUNCHING one and waiting ~70s for it to
+    boot. The suite passed either way, so the cost hid behind a machine that
+    happened to have LibreOffice open.
+
+    Refusing to connect makes the offline claim true and enforced: any test
+    that starts needing an office fails loudly here instead of silently
+    starting one.
+    """
+    global _real_connect
+    _real_connect = _core._connect
+    def _refuse():
+        raise RuntimeError("the offline suite must not connect to LibreOffice")
+    _core._connect = _refuse
+
+
+def tearDownModule():
+    _core._connect = _real_connect
 
 
 class ToolRegistryTest(unittest.TestCase):
@@ -264,6 +295,7 @@ class RecoveryToolsTest(unittest.TestCase):
                 m.TOOLS[tool]({"action": action})
 
 
+@unittest.skipUnless(HAS_UNO, "builds a real com.sun.star.lang.Locale struct")
 class LocaleNumberFormatTest(unittest.TestCase):
     def test_parses_bcp47_tags(self):
         for tag, lang, country in (("ar-LY", "ar", "LY"), ("en_US", "en", "US"),
