@@ -5,6 +5,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.9.5] — 2026-07-26
+
+Everyday-user pass. Until now the surface was tuned for an expert operator
+driving complex documents: 170 flat tools (~76 KB of JSON schema, roughly 22k
+tokens injected into every conversation) and 68 `calc_*` lookalikes to pick
+between for "make this table look nice". This release keeps every capability but
+puts a small, forgiving surface in front of it — then adds the everyday tools
+the sibling projects had and we did not, and the recovery paths that turn a
+crash or a stuck dialog into something a user can get out of.
+
+**183 tools, 44 advertised.** 128 offline tests; every tool exercised against a
+real LibreOffice 25.2.3.2.
+
 ### Added — everyday tools mined from the sibling projects (174 → 180)
 
 Selected from Nelson MCP's 140-tool surface against the everyday/student bar
@@ -80,15 +93,7 @@ detected and restored explicitly instead, which is why `lo_recover` exists.
   published a bundle missing the agent-acceptor extension it is meant to carry.
 - `.vscode/mcp.json` had a trailing comma, making it invalid strict JSON.
 
-## [0.10.0] — 2026-07-26
-
-Everyday-user pass. Until now the surface was tuned for an expert operator
-driving complex documents: 170 flat tools (~76 KB of JSON schema, roughly 22k
-tokens injected into every conversation) and 68 `calc_*` lookalikes to pick
-between for "make this table look nice". This release keeps every capability but
-puts a small, forgiving surface in front of it.
-
-### Added — MCP server (170 → 174 tools)
+### Added — the tiered surface and the first composites (170 → 174 tools)
 - **Tiered tool advertising.** `tools/list` advertises a focused everyday set
   (**32 tools**) by default; the other 142 stay reachable by name through
   `dispatch`. `LO_TOOLS=full` (or the new **"Advertise all 174 tools"** checkbox

@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **183 tools** of the `libreoffice` MCP server (v0.10.0), generated from
+All **183 tools** of the `libreoffice` MCP server (v0.9.5), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
