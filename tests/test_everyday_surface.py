@@ -303,6 +303,70 @@ class DocumentWatchTest(unittest.TestCase):
         with self.assertRaises(Exception) as caught:
             m.TOOLS["document_watch"]({"action": "sideways"})
         self.assertIn("action must be", str(caught.exception))
+class MetadataPrintFormsTest(unittest.TestCase):
+    """Document attributes, print setup, and the Form-menu surface."""
+
+    def test_new_tools_registered_and_advertised(self):
+        for name in ("print_settings", "set_alt_text", "writer_content_control"):
+            self.assertIn(name, m.TOOLS)
+            self.assertIn(name, {d["name"] for d in m.TOOL_DEFS})
+            self.assertIn(name, m._BASIC_TOOLS)
+
+    def test_content_edits_get_undo_but_settings_do_not(self):
+        for name in ("set_alt_text", "writer_content_control"):
+            self.assertNotIn(name, m._NO_UNDO, "%s edits the document" % name)
+        self.assertIn("print_settings", m._NO_UNDO)
+
+    def test_form_menu_is_covered(self):
+        # the controls a real fillable form needs, beyond the original five
+        for kind in ("radio", "combobox", "date", "time", "numeric", "currency",
+                     "pattern", "formatted", "groupbox", "file", "imagebutton"):
+            self.assertIn(kind, m._FORM_COMPONENTS)
+        self.assertGreaterEqual(len(m._FORM_COMPONENTS), 19)
+
+    def test_imagebutton_is_not_treated_as_labelled(self):
+        # it has no Label property at all — setting one raises AttributeError,
+        # which is how this shipped broken the first time
+        self.assertNotIn("imagebutton", m._FORM_LABELLED)
+
+    def test_form_kinds_advertised_match_the_implementation(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["insert_form_control"]["inputSchema"]["properties"]["kind"]["enum"]
+        self.assertEqual(sorted(enum), sorted(m._FORM_COMPONENTS))
+
+    def test_print_option_lists_are_per_application(self):
+        # offering a Writer switch on a Calc doc would just raise at the office
+        self.assertIn("PrintProspectRTL", m._PRINT_SETTINGS_WRITER)
+        self.assertIn("PrintFormulas", m._PRINT_SETTINGS_CALC)
+        self.assertEqual(set(m._PRINT_SETTINGS_WRITER) & set(m._PRINT_SETTINGS_CALC),
+                         {"PrintEmptyPages"})
+
+    def test_print_settings_rejects_a_foreign_option(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        self.assertIn("options", by_name["print_settings"]["inputSchema"]["properties"])
+
+    def test_content_control_kinds_match_the_schema(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["writer_content_control"]["inputSchema"]["properties"]["kind"]["enum"]
+        self.assertEqual(sorted(enum), sorted(m._CONTENT_CONTROL_KINDS))
+
+    def test_pdf_accessibility_and_form_options_are_advertised(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        props = by_name["export_document"]["inputSchema"]["properties"]
+        for opt in ("tagged", "pdfua", "form_fields", "forms_type",
+                    "owner_password", "can_print", "can_modify", "can_copy"):
+            self.assertIn(opt, props, opt)
+
+    def test_dublin_core_fields_are_advertised_with_the_right_shapes(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        props = by_name["set_document_properties"]["inputSchema"]["properties"]
+        # these three are sequence<string> in ODF; a bare string raises
+        # CannotConvertException, so they must be advertised as arrays
+        for multi in ("keywords", "contributor", "publisher", "relation"):
+            self.assertEqual(props[multi].get("type"), "array", multi)
+        for single in ("coverage", "identifier", "rights", "source", "type",
+                       "language"):
+            self.assertEqual(props[single].get("type"), "string", single)
 
 
 class LooksNumericTest(unittest.TestCase):
