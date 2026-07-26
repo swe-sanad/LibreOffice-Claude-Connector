@@ -254,6 +254,57 @@ class RecoveryToolsTest(unittest.TestCase):
                 m.TOOLS[tool]({"action": action})
 
 
+class LocaleNumberFormatTest(unittest.TestCase):
+    def test_parses_bcp47_tags(self):
+        for tag, lang, country in (("ar-LY", "ar", "LY"), ("en_US", "en", "US"),
+                                   ("de", "de", "")):
+            loc = m._parse_locale(tag)
+            self.assertEqual((loc.Language, loc.Country), (lang, country), tag)
+
+    def test_empty_tag_means_the_document_locale(self):
+        loc = m._parse_locale(None)
+        self.assertEqual((loc.Language, loc.Country), ("", ""))
+
+    def test_constants_match_the_uno_api(self):
+        # these are fixed by com.sun.star.util.NumberFormat; a wrong value here
+        # silently formats money as a date
+        self.assertEqual(m._NUMBER_TYPES["currency"], 8)
+        self.assertEqual(m._NUMBER_TYPES["percent"], 128)
+        self.assertEqual(m._NUMBER_TYPES["date"], 2)
+        self.assertEqual(m._NUMBER_TYPES["number"], 16)
+
+
+class DocumentWatchTest(unittest.TestCase):
+    def tearDown(self):
+        m._WATCHERS.clear()
+
+    def test_registered_and_advertised(self):
+        self.assertIn("document_watch", m.TOOLS)
+        self.assertIn("document_watch", m._BASIC_TOOLS)
+        self.assertIn("document_watch", m._NO_UNDO)
+
+    def test_our_edits_are_counted_separately(self):
+        entry = {"total": 0, "ours": 0, "doc": None}
+        m._WATCHERS["doc"] = entry
+        m._note_our_edit()
+        m._note_our_edit()
+        entry["total"] += 3          # as if UNO reported three modifications
+        self.assertEqual(entry["ours"], 2)
+        self.assertEqual(max(0, entry["total"] - entry["ours"]), 1)
+
+    def test_note_our_edit_is_a_noop_with_no_watchers(self):
+        m._note_our_edit()           # must not raise
+        self.assertEqual(m._WATCHERS, {})
+
+    def test_list_needs_no_document(self):
+        self.assertEqual(m.TOOLS["document_watch"]({"action": "list"})["count"], 0)
+
+    def test_unknown_action_rejected_before_connecting(self):
+        with self.assertRaises(Exception) as caught:
+            m.TOOLS["document_watch"]({"action": "sideways"})
+        self.assertIn("action must be", str(caught.exception))
+
+
 class LooksNumericTest(unittest.TestCase):
     def test_accepts_real_numbers(self):
         for text in ("3", "10.5", "-2", "+0.5", "1e3", ".5"):

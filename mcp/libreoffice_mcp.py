@@ -185,6 +185,7 @@ lo_status lo_screenshot list_documents list_macros list_styles list_templates
 list_embedded_objects get_current_selection get_document_properties get_signatures
 read_spreadsheet inspect_ods calc_overview calc_detect_errors
 list_recent_documents print_document lo_health lo_recover checkpoint_document
+document_watch
 create_document open_document create_from_template close_document save_document
 export_document reload_document set_active_document convert merge
 dispatch batch document_undo
@@ -349,9 +350,12 @@ def _call_with_reconnect(func, args, name=None):
     def _run():
         mgr = _enter_undo(name)
         try:
-            return func(args)
+            result = func(args)
         finally:
             _leave_undo(mgr)
+        if name and name not in _NO_UNDO:
+            _note_our_edit()   # so document_watch can tell our edits from theirs
+        return result
 
     try:
         return _run()
@@ -1168,8 +1172,10 @@ def tool_calc_find_replace(args):
         desc.setPropertyValue("SearchCaseSensitive",
                               bool(args.get("match_case", False)))
         desc.setPropertyValue("SearchWords", bool(args.get("whole_cells", False)))
+        desc.setPropertyValue("SearchRegularExpression", bool(args.get("regex", False)))
         total += sheet.replaceAll(desc)
-    return {"replacements": total, "sheets_searched": len(sheets)}
+    return {"replacements": total, "sheets_searched": len(sheets),
+            "regex": bool(args.get("regex", False))}
 
 
 def tool_calc_get_used_range(args):
@@ -1269,6 +1275,47 @@ _H_ALIGN = {"left": "LEFT", "center": "CENTER", "right": "RIGHT",
             "justify": "BLOCK", "default": "STANDARD"}
 
 
+# com.sun.star.util.NumberFormat is a CONSTANTS group, not an enum — the values
+# are fixed by the API, so naming them here avoids a lookup per call.
+_NUMBER_TYPES = {"number": 16, "currency": 8, "percent": 128, "date": 2,
+                 "time": 4, "datetime": 6, "text": 256}
+
+
+def _parse_locale(tag):
+    """'ar-LY' / 'en_US' / 'de' -> a com.sun.star.lang.Locale. An empty tag gives
+    the blank locale, which means 'whatever the document is set to'."""
+    loc = _uno_struct("com.sun.star.lang.Locale")
+    if tag:
+        parts = str(tag).replace("_", "-").split("-")
+        loc.Language = parts[0]
+        if len(parts) > 1:
+            loc.Country = parts[1].upper()
+    return loc
+
+
+def _number_format_key(doc, preset, locale_tag=None, decimals=None):
+    """Resolve a named format in a LOCALE, so money/dates come out the way that
+    locale writes them — ar-LY currency really is [$د.ل.‏-1001] #٬##0٫00, which
+    no hand-written format string was ever going to get right."""
+    if preset not in _NUMBER_TYPES:
+        raise RuntimeError("number_preset must be one of %s"
+                           % sorted(_NUMBER_TYPES))
+    formats = doc.getNumberFormats()
+    locale = _parse_locale(locale_tag)
+    key = formats.getStandardFormat(_NUMBER_TYPES[preset], locale)
+    if decimals is None:
+        return key
+    # ask the format service to restate the same format with N decimals
+    try:
+        base = formats.getByKey(key).FormatString
+        wanted = formats.generateFormat(key, locale, False, False,
+                                        int(decimals), 1)
+        found = formats.queryKey(wanted, locale, False)
+        return found if found != -1 else formats.addNew(wanted, locale)
+    except Exception:
+        return key
+
+
 def tool_calc_format_range(args):
     doc = _require_calc()
     sheet = _resolve_sheet(doc, args.get("sheet"))
@@ -1316,6 +1363,11 @@ def tool_calc_format_range(args):
             key = formats.addNew(args["number_format"], locale)
         rng.NumberFormat = key
         applied.append("number_format")
+    if args.get("number_preset"):
+        rng.NumberFormat = _number_format_key(
+            doc, str(args["number_preset"]).lower(), args.get("locale"),
+            args.get("decimals"))
+        applied.append("number_preset")
     if args.get("auto_fit_columns"):
         cols = rng.getColumns()
         for i in range(cols.getCount()):
@@ -1559,16 +1611,76 @@ def tool_writer_insert_heading(args):
     return {"heading": args["text"], "level": level}
 
 
+# Character properties carried across a format-preserving replacement. Kept to
+# the run-level ones a user would notice; paragraph properties are untouched
+# because the replacement never leaves its paragraph.
+_CHAR_PROPS = ("CharWeight", "CharPosture", "CharUnderline", "CharFontName",
+               "CharHeight", "CharColor", "CharBackColor", "CharStrikeout",
+               "CharEscapement", "CharWeightComplex", "CharPostureComplex",
+               "CharFontNameComplex", "CharHeightComplex")
+
+
+def _char_props_at(text, rng):
+    """Snapshot the character formatting of the FIRST character of a range."""
+    probe = text.createTextCursorByRange(rng.getStart())
+    probe.goRight(1, True)
+    snapshot = {}
+    for name in _CHAR_PROPS:
+        try:
+            snapshot[name] = getattr(probe, name)
+        except Exception:
+            pass
+    return snapshot
+
+
 def tool_writer_find_replace(args):
     doc = _require_writer()
-    desc = doc.createReplaceDescriptor()
+    regex = bool(args.get("regex", False))
+
+    if not args.get("preserve_formatting", True):
+        desc = doc.createReplaceDescriptor()
+        desc.SearchString = args["search"]
+        desc.ReplaceString = args.get("replace", "")
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        desc.setPropertyValue("SearchWords", bool(args.get("whole_words", False)))
+        desc.setPropertyValue("SearchRegularExpression", regex)
+        return {"replacements": doc.replaceAll(desc), "regex": regex,
+                "preserved_formatting": False}
+
+    # replaceAll keeps formatting when a match sits inside ONE formatting run,
+    # but a match spanning runs comes back chopped along the OLD boundaries:
+    # "plain <b>BOLD</b> tail" -> "REPLA" plain + "CEMENT" bold. So replace each
+    # match by hand and stamp it with the formatting of its first character.
+    text = doc.getText()
+    desc = doc.createSearchDescriptor()
     desc.SearchString = args["search"]
-    desc.ReplaceString = args.get("replace", "")
     desc.setPropertyValue("SearchCaseSensitive",
                           bool(args.get("match_case", False)))
     desc.setPropertyValue("SearchWords", bool(args.get("whole_words", False)))
-    count = doc.replaceAll(desc)
-    return {"replacements": count}
+    desc.setPropertyValue("SearchRegularExpression", regex)
+    found = doc.findAll(desc)
+
+    replacement = args.get("replace", "")
+    ranges = [found.getByIndex(i) for i in range(found.getCount())]
+    count = 0
+    # in reverse: replacing shortens/extends the text and would shift the
+    # ranges that come after it
+    for rng in reversed(ranges):
+        try:
+            host = rng.getText() or text
+            props = _char_props_at(host, rng)
+            rng.setString(replacement)
+            for name, value in props.items():
+                try:
+                    setattr(rng, name, value)
+                except Exception:
+                    pass
+            count += 1
+        except Exception:
+            continue
+    return {"replacements": count, "regex": regex,
+            "preserved_formatting": True}
 
 
 def tool_writer_format_text(args):
@@ -5628,29 +5740,55 @@ def tool_writer_find(args):
     each paragraph that contains 'search', its 0-based index, occurrence count, a
     snippet, and its paragraph style — so callers can then target it by index."""
     doc = _require_writer()
-    search = args["search"]
-    if not search:
-        raise RuntimeError("Give a non-empty 'search'.")
+    search = args.get("search") or ""
+    style = (args.get("style") or "").strip()
+    if not search and not style:
+        raise RuntimeError("Give 'search' text, a paragraph 'style' to list, "
+                           "or both.")
     mc = bool(args.get("match_case", False))
     limit = int(args.get("limit", 100))
-    needle = search if mc else search.lower()
+
+    matcher = None
+    if search:
+        if args.get("regex"):
+            import re
+            try:
+                matcher = re.compile(search, 0 if mc else re.IGNORECASE)
+            except re.error as exc:
+                raise RuntimeError("Bad regular expression %r: %s" % (search, exc))
+        else:
+            needle = search if mc else search.lower()
+
     out = []
     for i, para in _writer_paragraphs(doc):
-        s = para.getString()
-        hay = s if mc else s.lower()
-        pos = hay.find(needle)
-        if pos == -1:
+        para_style = para.getPropertyValue("ParaStyleName")
+        if style and para_style.lower() != style.lower():
             continue
+        s = para.getString()
+        if matcher is not None:
+            hits = list(matcher.finditer(s))
+            if not hits:
+                continue
+            pos, length, count = hits[0].start(), len(hits[0].group(0)), len(hits)
+        elif search:
+            hay = s if mc else s.lower()
+            pos = hay.find(needle)
+            if pos == -1:
+                continue
+            length, count = len(search), hay.count(needle)
+        else:                     # style-only listing
+            pos, length, count = 0, 0, 0
+
         a = max(0, pos - 20)
-        b = min(len(s), pos + len(search) + 20)
+        b = min(len(s), pos + length + 20)
         snippet = ("…" if a > 0 else "") + s[a:b] + ("…" if b < len(s) else "")
-        out.append({"paragraph": i, "occurrences": hay.count(needle),
-                    "snippet": snippet,
-                    "style": para.getPropertyValue("ParaStyleName")})
+        out.append({"paragraph": i, "occurrences": count, "snippet": snippet,
+                    "style": para_style})
         if len(out) >= limit:
             break
     return {"matches": out, "paragraphs_matched": len(out),
-            "total_occurrences": sum(m["occurrences"] for m in out)}
+            "total_occurrences": sum(m["occurrences"] for m in out),
+            "regex": bool(args.get("regex")), "style_filter": style or None}
 
 
 def tool_writer_list_tables(_args):
@@ -6524,6 +6662,115 @@ def tool_checkpoint_document(args):
     raise RuntimeError("action must be one of create, list, restore.")
 
 
+# doc key -> {"listener", "doc", "total", "ours"}. A UNO modify callback lands on
+# a bridge thread, and the timeout wrapper runs tools on a worker thread, so
+# every touch of this goes through _WATCH_LOCK.
+_WATCHERS = {}
+_WATCH_LOCK = None
+
+
+def _watch_lock():
+    global _WATCH_LOCK
+    if _WATCH_LOCK is None:
+        import threading
+        _WATCH_LOCK = threading.Lock()
+    return _WATCH_LOCK
+
+
+def _watch_key(doc):
+    try:
+        return doc.getURL() or doc.getTitle()
+    except Exception:
+        return "active"
+
+
+def _note_our_edit():
+    """Called after every successful mutating tool, so a watcher can subtract
+    the edits WE made from the edits the user made."""
+    if not _WATCHERS:
+        return
+    with _watch_lock():
+        for entry in _WATCHERS.values():
+            entry["ours"] += 1
+
+
+def _make_watcher():
+    import unohelper
+    from com.sun.star.util import XModifyListener
+
+    class _Watcher(unohelper.Base, XModifyListener):
+        def __init__(self, entry):
+            self.entry = entry
+
+        def modified(self, _event):
+            with _watch_lock():
+                self.entry["total"] += 1
+
+        def disposing(self, _event):
+            self.entry["disposed"] = True
+
+    return _Watcher
+
+
+def tool_document_watch(args):
+    """Detect that a document changed under us — including edits the USER made
+    while Claude was thinking, which is the case worth guarding against before
+    overwriting anything."""
+    action = str(args.get("action", "check")).lower()
+    if action not in ("start", "check", "stop", "list"):
+        raise RuntimeError("action must be one of start, check, stop, list.")
+
+    if action == "list":
+        with _watch_lock():
+            return {"watching": [
+                {"document": key, "total_changes": e["total"],
+                 "our_edits": e["ours"],
+                 "user_edits": max(0, e["total"] - e["ours"])}
+                for key, e in _WATCHERS.items()], "count": len(_WATCHERS)}
+
+    doc = _select_doc(args) or _current_doc()
+    key = _watch_key(doc)
+
+    if action == "start":
+        if key in _WATCHERS:                     # restart cleanly
+            tool_document_watch({"action": "stop", "url": key})
+        entry = {"total": 0, "ours": 0, "doc": doc}
+        listener = _make_watcher()(entry)
+        doc.addModifyListener(listener)
+        entry["listener"] = listener
+        with _watch_lock():
+            _WATCHERS[key] = entry
+        return {"watching": key, "document": _doc_info(doc),
+                "note": "Call action='check' later to see whether the user "
+                        "edited it in the meantime."}
+
+    if action == "stop":
+        entry = _WATCHERS.pop(key, None)
+        if entry is None:
+            return {"watching": None, "note": "That document was not watched."}
+        try:
+            entry["doc"].removeModifyListener(entry["listener"])
+        except Exception:
+            pass
+        return {"stopped": key, "total_changes": entry["total"],
+                "our_edits": entry["ours"],
+                "user_edits": max(0, entry["total"] - entry["ours"])}
+
+    entry = _WATCHERS.get(key)
+    if entry is None:
+        raise RuntimeError("Nothing is watching %r yet — call action='start' "
+                           "before the step you want to guard." % key)
+    with _watch_lock():
+        total, ours = entry["total"], entry["ours"]
+    user_edits = max(0, total - ours)
+    return {"document": key, "total_changes": total, "our_edits": ours,
+            "user_edits": user_edits,
+            "changed_by_user": bool(user_edits),
+            "advice": ("The user edited this document since the watch started — "
+                       "re-read before overwriting." if user_edits else
+                       "No edits from the user since the watch started.")}
+
+
 def tool_lo_health(args):
     """Pre-flight: is it safe to start editing, and is anything at risk?"""
     state = _connect()
@@ -6756,6 +7003,7 @@ TOOLS = {
     "lo_health": tool_lo_health,
     "lo_recover": tool_lo_recover,
     "checkpoint_document": tool_checkpoint_document,
+    "document_watch": tool_document_watch,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -6872,6 +7120,7 @@ TOOL_DEFS = [
      "description": "Find & replace cell text in one sheet, or in every sheet when 'sheet' is omitted. Returns the replacement count.",
      "inputSchema": _schema({"search": _STR, "replace": _STR, "sheet": _SHEET,
                              "match_case": _BOOL,
+                             "regex": dict(_BOOL, description="treat 'search' as an ICU regular expression; $1..$n work in 'replace'"),
                              "whole_cells": dict(_BOOL, description="match entire cell content only")},
                             ["search"])},
     {"name": "calc_get_used_range",
@@ -6912,7 +7161,11 @@ TOOL_DEFS = [
                              "background_color": dict(_STR, description="'#RRGGBB'"),
                              "wrap_text": _BOOL,
                              "horizontal_align": dict(_STR, enum=["left", "center", "right", "justify", "default"]),
-                             "number_format": dict(_STR, description="LibreOffice number format code"),
+                             "number_format": dict(_STR, description="raw LibreOffice number format code, e.g. '#,##0.00'"),
+                             "number_preset": dict(_STR, enum=["number", "currency", "percent", "date", "time", "datetime", "text"],
+                                                   description="named format resolved FOR A LOCALE — prefer this over number_format for money and dates, it gets the currency symbol, digit grouping and date order right per country"),
+                             "locale": dict(_STR, description="BCP-47 tag for number_preset, e.g. 'en-US', 'ar-LY', 'de-DE'; omit for the document's own locale"),
+                             "decimals": dict(_INT, description="decimal places for number_preset"),
                              "auto_fit_columns": _BOOL}, ["range"])},
     {"name": "calc_merge_cells",
      "description": "Merge (merge=true, default) or unmerge (merge=false) a Calc range.",
@@ -6975,9 +7228,12 @@ TOOL_DEFS = [
      "description": "Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document.",
      "inputSchema": _schema({"text": _STR, "level": dict(_INT, minimum=1, maximum=6)}, ["text"])},
     {"name": "writer_find_replace",
-     "description": "Find & replace text across the Writer document. Returns the replacement count.",
+     "description": "Find & replace text across the Writer document. Keeps the formatting of what it replaced: a match spanning several formatting runs (part bold, part not) would otherwise come back chopped along the OLD run boundaries — the replacement now takes the formatting of the match's first character. Set preserve_formatting=false for LibreOffice's raw behaviour. With regex=true, 'search' is an ICU regular expression and $1..$n backreferences work in 'replace'.",
      "inputSchema": _schema({"search": _STR, "replace": _STR,
-                             "match_case": _BOOL, "whole_words": _BOOL}, ["search"])},
+                             "match_case": _BOOL, "whole_words": _BOOL,
+                             "regex": dict(_BOOL, description="treat 'search' as a regular expression"),
+                             "preserve_formatting": dict(_BOOL, description="default true")},
+                            ["search"])},
     {"name": "writer_format_text",
      "description": "Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string.",
      "inputSchema": _schema({"search": _STR, "match_case": _BOOL,
@@ -7247,7 +7503,7 @@ TOOL_DEFS = [
      "inputSchema": _schema({"protect": dict(_BOOL, description="protect (default true) or unprotect"),
                              "password": _STR, "sheet": _SHEET})},
     {"name": "dispatch_uno",
-     "description": "Execute an arbitrary .uno: command against the active frame (e.g. '.uno:Undo', '.uno:GoToCell', '.uno:InsertPagebreak') with optional named args. Escape hatch when no dedicated tool fits.",
+     "description": "Execute an arbitrary .uno: command against the active frame. This is the widest escape hatch there is: EVERY menu item and toolbar button in LibreOffice is a .uno: command, including many with no model-level API at all — so when no dedicated tool fits, this usually still can. Examples: '.uno:Undo', '.uno:GoToCell' (args {Nr:'B7'}), '.uno:InsertPagebreak', '.uno:Deselect', '.uno:RecalcPivotTable', '.uno:SelectAll', '.uno:FreezePanes', '.uno:SpellDialog'. It drives the GUI, so it acts on the CURRENT selection/view — set that up first (e.g. calc_select_range).",
      "inputSchema": _schema({"command": dict(_STR, description="e.g. '.uno:GoToCell'"),
                              "args": {"type": "object", "description": "named PropertyValue args"}},
                             ["command"])},
@@ -7557,6 +7813,12 @@ TOOL_DEFS = [
      "inputSchema": _schema({"action": dict(_STR, enum=["status", "restore", "discard", "set_autosave"]),
                              "minutes": dict(_INT, description="set_autosave: interval in minutes, 0 to disable"),
                              "confirm": dict(_BOOL, description="discard: required, destroys unsaved work from the crash")})},
+    {"name": "document_watch",
+     "description": "Notice when a document changes underneath you — in particular when the USER edits it while Claude is thinking. action 'start' begins watching, 'check' reports how many changes happened and separates OUR edits from the user's, 'stop' ends it, 'list' shows what is watched. Start a watch before a long or multi-step operation, then check before overwriting anything.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["start", "check", "stop", "list"]),
+                             "title": dict(_STR, description="match the document by window-title substring"),
+                             "url": dict(_STR, description="match the document by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
     {"name": "checkpoint_document",
      "description": "Snapshot a document to a side file so a risky edit can be undone. THIS IS THE ONLY ROLLBACK for anything that writes a cell range — LibreOffice does not record bulk range writes for undo, so Ctrl+Z cannot bring those back. action 'create' (default) saves a copy and returns a checkpoint_id, 'list' shows saved checkpoints, 'restore' puts one back (closing and reopening the document; unsaved edits since the checkpoint are lost).",
      "inputSchema": _schema({"action": dict(_STR, enum=["create", "list", "restore"]),
@@ -7616,8 +7878,9 @@ TOOL_DEFS = [
     {"name": "writer_find",
      "description": "Locate text WITHOUT changing it: returns each matching body paragraph's 0-based index, occurrence count, a snippet, and its style — so you can then target it by index (writer_set_paragraph_text, writer_format_paragraph, writer_delete_paragraphs, ...). Read-only companion to writer_find_replace.",
      "inputSchema": _schema({"search": _STR, "match_case": _BOOL,
-                             "limit": dict(_INT, description="max matching paragraphs (default 100)")},
-                            ["search"])},
+                             "regex": dict(_BOOL, description="treat 'search' as a Python regular expression"),
+                             "style": dict(_STR, description="only paragraphs in this paragraph style, e.g. 'Heading 1' — give it WITHOUT 'search' to list every heading"),
+                             "limit": dict(_INT, description="max matching paragraphs (default 100)")})},
     {"name": "writer_list_tables",
      "description": "List every table with 0-based index, name, row/column counts, and a header-row preview — discovery for writer_edit_table / writer_sort_table / writer_convert_table / writer_table_formula.",
      "inputSchema": _schema()},
@@ -7826,7 +8089,7 @@ writer_apply_style writer_format_text
 writer_get_comments writer_resolve_comment
 writer_insert_image writer_insert_caption writer_captions
 list_recent_documents print_document
-lo_health lo_recover checkpoint_document
+lo_health lo_recover checkpoint_document document_watch
 """.split())
 
 
