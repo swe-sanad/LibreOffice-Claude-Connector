@@ -7,9 +7,10 @@
 				"${workspaceFolder}/mcpb/index.js"
 			],
 			"env": {
-				"LO_UNO_PORT": "2002"
+				"LO_UNO_PORT": "2002",
+				"LO_TOOLS": "full"
 			}
-		},
+		}
 	},
 	"inputs": []
 }

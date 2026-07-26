@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **170 tools** of the `libreoffice` MCP server (v0.9.2), generated from
+All **174 tools** of the `libreoffice` MCP server (v0.9.2), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -260,6 +260,15 @@ All **170 tools** of the `libreoffice` MCP server (v0.9.2), generated from
 | `create_from_template` | Create a new untitled document from a template file (.ott/.ots/...). |
 | `run_python_macro` | Invoke a PYTHON macro via the script provider (complements run_macro's Basic). 'name' is a full vnd.sun.star.script: URI, or 'file.py$function' resolved at 'location' (user/share/document; default user). Returns the macro's return value. |
 | `list_macros` | Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable). |
-| `dispatch` | Portmanteau facade for MCP clients with a tool-count cap: run ANY of this server's tools by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the catalog of names + one-line usage. Fans out to the same handlers as the discrete tools; does not replace them. |
+| `dispatch` | Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog of names + one-line usage. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible. |
 | `calc_statistics` | Descriptive statistics over the NUMERIC cells in a Calc range: count, sum, mean, min, max, median, and population stdev. Text/empty cells ignored. |
 | `read_spreadsheet` | Read every sheet's used range at once: {sheet_name: 2-D values} — a whole workbook in one call instead of one calc_read_range per sheet. |
+
+## Everyday composites
+
+| Tool | Description |
+|---|---|
+| `calc_overview` | Map the workbook cheaply before reading it: per sheet the used range, its row/column count, a few sample rows and whether row 1 looks like headers. Output stays small on a huge file — prefer this over read_spreadsheet to get your bearings. |
+| `calc_format_table` | Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range. |
+| `calc_clean_data` | Tidy a pasted or imported range: trim stray whitespace, turn numeric-looking text into real numbers, and drop fully empty rows. Formula cells are never rewritten. Defaults to the sheet's used range. NOTE: LibreOffice does not record bulk range writes for undo, so Ctrl+Z restores the deleted rows but not the trimmed values — say what will change before running it on data the user cannot re-import. |
+| `writer_format_document` | Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). |

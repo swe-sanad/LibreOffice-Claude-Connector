@@ -175,19 +175,71 @@ def _is_connection_error(exc):
     return any(marker in blob for marker in _CONN_ERROR_MARKERS)
 
 
-def _call_with_reconnect(func, args):
-    """Run a tool; if the UNO bridge was lost since we cached the connection
-    (LibreOffice restarted), drop the stale connection and retry ONCE. This is
-    what makes the server survive an office restart instead of returning
-    'Binary URP bridge already disposed' forever."""
+# Tools that do not mutate document CONTENT — they get no undo context.
+# Everything ELSE is wrapped, so one Ctrl+Z reverts a whole tool call instead of
+# one cell of a 500-cell write. Lifecycle tools (open/save/close/convert) are
+# listed here too: they are not in-document edits, and wrapping them would grab
+# the undo manager of whichever document happened to be current beforehand.
+_NO_UNDO = frozenset("""
+lo_status lo_screenshot list_documents list_macros list_styles list_templates
+list_embedded_objects get_current_selection get_document_properties get_signatures
+read_spreadsheet inspect_ods calc_overview
+create_document open_document create_from_template close_document save_document
+export_document reload_document set_active_document convert merge
+dispatch batch document_undo
+calc_read_range calc_get_cell_format calc_get_comments calc_get_conditional_formats
+calc_get_formulas calc_get_used_range calc_get_validation calc_list_charts
+calc_list_shapes calc_list_sheets calc_export_range calc_statistics
+calc_select_range calc_set_active_sheet calc_recalculate
+writer_get_comments writer_get_outline writer_get_paragraphs writer_get_text
+writer_list_figures writer_list_objects writer_list_tables writer_read_table
+writer_find writer_word_count
+set_view_zoom set_document_modified
+""".split())
+
+
+def _enter_undo(name):
+    """Open an undo context so every edit a tool makes collapses into ONE
+    Ctrl+Z. Best-effort: a read-only tool, no open document, or a model with no
+    undo manager all just mean no grouping — never a failed tool call."""
+    if not name or name in _NO_UNDO:
+        return None
     try:
-        return func(args)
+        mgr = _current_doc().getUndoManager()
+        mgr.enterUndoContext("Claude: %s" % name)
+        return mgr
+    except Exception:
+        return None
+
+
+def _leave_undo(mgr):
+    if mgr is not None:
+        try:
+            mgr.leaveUndoContext()   # an empty context is discarded by LO
+        except Exception:
+            pass
+
+
+def _call_with_reconnect(func, args, name=None):
+    """Run a tool inside a single undo context; if the UNO bridge was lost since
+    we cached the connection (LibreOffice restarted), drop the stale connection
+    and retry ONCE. This is what makes the server survive an office restart
+    instead of returning 'Binary URP bridge already disposed' forever."""
+    def _run():
+        mgr = _enter_undo(name)
+        try:
+            return func(args)
+        finally:
+            _leave_undo(mgr)
+
+    try:
+        return _run()
     except Exception as exc:
         if not _is_connection_error(exc):
             raise
         _log("UNO bridge lost (%s) - reconnecting and retrying once" % exc)
         _reset_connection()
-        return func(args)
+        return _run()
 
 
 def _desktop():
@@ -510,9 +562,28 @@ def _cond_style_name(fmt):
 
 def tool_lo_status(_args):
     _connect()
+    advertised = len(_advertised_tools())
     out = {"connected": True,
            "transport": _state.get("transport"),
+           "tools_advertised": advertised,
+           "tools_total": len(TOOLS),
+           "tool_tier": os.environ.get("LO_TOOLS", "basic").strip().lower(),
            "documents": [_doc_info(doc) for doc in _open_docs()]}
+    if advertised < len(TOOLS):
+        out["more_tools"] = ("%d further tools are available via dispatch "
+                            "(use dispatch with tool='list' for the catalog); "
+                            "set LO_TOOLS=full to advertise them all directly."
+                            % (len(TOOLS) - advertised))
+    if _state.get("transport") == "socket":
+        tip = ("Connected over a socket, so Claude can only reach a LibreOffice "
+               "it launched itself. Installing the agent-acceptor extension "
+               "makes a LibreOffice you opened normally reachable too.")
+        oxt = _bundled_oxt()
+        if oxt:
+            tip += (' It ships with this connector — install it once with:  '
+                    'unopkg add --suppress-license -f "%s"  '
+                    '(then restart LibreOffice).' % oxt)
+        out["tip"] = tip
     try:      # WHICH office answered (crucial when a pipe reaches a stray one)
         ps = _state["smgr"].createInstanceWithContext(
             "com.sun.star.util.PathSettings", _state["ctx"])
@@ -2154,7 +2225,8 @@ def tool_dispatch(args):
     if fn is None:
         raise RuntimeError("No tool named %r — use tool='list' for the catalog."
                            % name)
-    return fn(args.get("args") or {})
+    # via _call_with_reconnect so a dispatched tool keeps its undo grouping
+    return _call_with_reconnect(fn, args.get("args") or {}, name)
 
 
 def tool_calc_statistics(args):
@@ -5467,7 +5539,8 @@ def tool_batch(args):
                 break
             continue
         try:
-            results.append({"tool": name, "ok": True, "result": fn(a)})
+            results.append({"tool": name, "ok": True,
+                            "result": _call_with_reconnect(fn, a, name)})
         except Exception as exc:  # surface, don't abort the whole batch silently
             results.append({"tool": name, "ok": False,
                             "error": "%s: %s" % (type(exc).__name__, exc)})
@@ -5475,6 +5548,267 @@ def tool_batch(args):
                 break
     return {"results": results, "count": len(results),
             "ok": all(r["ok"] for r in results)}
+
+
+# --------------------------------------------------------------------------- #
+# Tools — everyday composites (task altitude, not UNO altitude)
+#
+# The rest of this server is one tool per UNO property group, which is right for
+# an operator who knows what they want. An everyday ask ("make this table look
+# nice") otherwise costs 5+ round-trips of format_range + set_borders +
+# set_dimensions + sheet_properties. These collapse the common ones into one
+# call and are the tools the `basic` tier advertises.
+# --------------------------------------------------------------------------- #
+
+def _sheet_used_addr(sheet):
+    cur = sheet.createCursor()
+    cur.gotoStartOfUsedArea(False)
+    cur.gotoEndOfUsedArea(True)
+    return cur.getRangeAddress()
+
+
+def _addr_is_empty(sheet, addr):
+    """A never-touched sheet still reports a 1x1 used area at A1."""
+    if addr.EndRow != addr.StartRow or addr.EndColumn != addr.StartColumn:
+        return False
+    return not sheet.getCellByPosition(addr.StartColumn, addr.StartRow).getString()
+
+
+def tool_calc_overview(args):
+    """Cheap structural map of the whole workbook — bounded output whatever the
+    file size, unlike read_spreadsheet which dumps every cell of every sheet."""
+    ub = _bridge()
+    doc = _require_calc()
+    sample_rows = max(0, min(int(args.get("sample_rows", 3)), 20))
+    col_cap = 20
+    sheets = doc.getSheets()
+    out = []
+    for name in sheets.getElementNames():
+        sheet = sheets.getByName(name)
+        addr = _sheet_used_addr(sheet)
+        if _addr_is_empty(sheet, addr):
+            out.append({"sheet": name, "range": None, "rows": 0, "columns": 0})
+            continue
+        info = {"sheet": name,
+                "range": _addr_to_a1(addr),
+                "rows": addr.EndRow - addr.StartRow + 1,
+                "columns": addr.EndColumn - addr.StartColumn + 1}
+        if sample_rows:
+            last_col = min(addr.EndColumn, addr.StartColumn + col_cap - 1)
+            last_row = min(addr.EndRow, addr.StartRow + sample_rows - 1)
+            grid = ub.read_range_grid(sheet.getCellRangeByPosition(
+                addr.StartColumn, addr.StartRow, last_col, last_row))
+            info["sample"] = grid
+            info["sample_truncated_columns"] = addr.EndColumn > last_col
+            # header heuristic: row 1 is all text, and some later row has a number
+            if len(grid) >= 2:
+                head = [c for c in grid[0] if c not in (None, "")]
+                body = [c for row in grid[1:] for c in row]
+                info["header_row_likely"] = bool(
+                    head
+                    and all(isinstance(c, str) for c in head)
+                    and any(isinstance(c, (int, float))
+                            and not isinstance(c, bool) for c in body))
+        out.append(info)
+    return {"sheets": out, "count": len(out),
+            "active": doc.getCurrentController().getActiveSheet().getName()}
+
+
+# preset -> (header background, header font colour, body number format or None)
+_TABLE_PRESETS = {
+    "clean":     ("#EFEFEF", "#000000", None),
+    "report":    ("#2F5597", "#FFFFFF", None),
+    "financial": ("#2F5597", "#FFFFFF", "#,##0.00"),
+}
+
+
+def tool_calc_format_table(args):
+    """One call for 'make this table look nice': header emphasis, a full border
+    grid, auto-fitted columns and a frozen header row."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    preset = str(args.get("preset", "clean")).lower()
+    if preset not in _TABLE_PRESETS:
+        raise RuntimeError("preset must be one of %s" % sorted(_TABLE_PRESETS))
+    head_bg, head_fg, number_format = _TABLE_PRESETS[preset]
+
+    a1 = args.get("range")
+    if not a1:
+        addr = _sheet_used_addr(sheet)
+        if _addr_is_empty(sheet, addr):
+            raise RuntimeError("Sheet %r is empty — nothing to format."
+                               % sheet.getName())
+        a1 = _addr_to_a1(addr)
+    rng = sheet.getCellRangeByName(a1)
+    addr = rng.getRangeAddress()
+    has_header = bool(args.get("header", True))
+    applied = []
+
+    rng.setPropertyValue("TableBorder2", _full_grid_border(0.5, "#B0B0B0", False))
+    applied.append("borders")
+
+    if has_header:
+        header = sheet.getCellRangeByPosition(
+            addr.StartColumn, addr.StartRow, addr.EndColumn, addr.StartRow)
+        header.CharWeight = 150.0
+        header.CellBackColor = _hex_color(head_bg)
+        header.CharColor = _hex_color(head_fg)
+        applied.append("header")
+
+    body_start = addr.StartRow + (1 if has_header else 0)
+    if number_format and body_start <= addr.EndRow:
+        body = sheet.getCellRangeByPosition(
+            addr.StartColumn, body_start, addr.EndColumn, addr.EndRow)
+        formats = doc.getNumberFormats()
+        locale = _uno_struct("com.sun.star.lang.Locale")
+        key = formats.queryKey(number_format, locale, False)
+        if key == -1:
+            key = formats.addNew(number_format, locale)
+        body.NumberFormat = key
+        applied.append("number_format")
+
+    cols = rng.getColumns()
+    for i in range(cols.getCount()):
+        cols.getByIndex(i).OptimalWidth = True
+    applied.append("auto_fit_columns")
+
+    if has_header and args.get("freeze", True):
+        try:
+            ctrl = doc.getCurrentController()
+            ctrl.setActiveSheet(sheet)
+            ctrl.freezeAtPosition(0, addr.StartRow + 1)
+            applied.append("freeze")
+        except Exception:
+            pass  # headless / no view — formatting still landed
+
+    # ponytail: no alternating row banding. Doing it per row is O(rows) UNO
+    # calls; the cheap route is ONE conditional format keyed on MOD(ROW();2)
+    # plus a named cell style — add that if "banded" is actually asked for.
+    return {"range": a1, "sheet": sheet.getName(), "preset": preset,
+            "applied": applied}
+
+
+def _looks_numeric(text):
+    """True when Calc would store this as a number if typed in. Rejects Python's
+    own float() extras ('nan', 'inf', '1_000') — none of them are what a user
+    means by 'this column should be numbers'."""
+    if not text or "_" in text:
+        return False
+    if text.strip().lstrip("+-").lower() in ("nan", "inf", "infinity"):
+        return False
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _clean_cell(value):
+    """Trim a literal text cell, and let numeric-looking text become a number.
+
+    getFormulaArray() renders a TEXT cell that LOOKS numeric with a leading
+    apostrophe — Calc's force-text marker — so " 3 " arrives as "' 3 ". Dropping
+    that marker is what turns the cell back into a real number on write-back; a
+    plain .strip() leaves "' 3" and the cell stays stubbornly text.
+    """
+    if not isinstance(value, str):
+        return value
+    if value.startswith("'"):
+        body = value[1:].strip()
+        # only un-text it when it really is a number — otherwise keep the marker
+        return body if _looks_numeric(body) else "'" + body
+    return value.strip()
+
+
+def tool_calc_clean_data(args):
+    """Tidy a pasted/imported range: trim stray whitespace, turn numeric-looking
+    text into real numbers, and drop fully empty rows. Formula cells are left
+    untouched."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    a1 = args.get("range")
+    if not a1:
+        addr0 = _sheet_used_addr(sheet)
+        if _addr_is_empty(sheet, addr0):
+            return {"range": None, "trimmed": 0, "deleted_rows": 0,
+                    "note": "sheet is empty"}
+        a1 = _addr_to_a1(addr0)
+    rng = sheet.getCellRangeByName(a1)
+    addr = rng.getRangeAddress()
+
+    # getFormulaArray gives formulas AND literals, so a rewrite preserves "=SUM(...)"
+    grid = [list(row) for row in rng.getFormulaArray()]
+    trimmed = 0
+    for r, row in enumerate(grid):
+        for c, val in enumerate(row):
+            if isinstance(val, str) and val.startswith("="):
+                continue  # a formula — never rewrite
+            new = _clean_cell(val)
+            if new != val:
+                grid[r][c] = new
+                trimmed += 1
+    if trimmed:
+        rng.setFormulaArray(tuple(tuple(row) for row in grid))
+
+    deleted = 0
+    if args.get("drop_empty_rows", True):
+        rows = sheet.getRows()
+        for r in range(len(grid) - 1, -1, -1):
+            if all((v is None or v == "") for v in grid[r]):
+                rows.removeByIndex(addr.StartRow + r, 1)
+                deleted += 1
+
+    return {"range": a1, "sheet": sheet.getName(), "trimmed_cells": trimmed,
+            "deleted_empty_rows": deleted}
+
+
+# preset -> (body font, body pt, margin mm, line spacing %)
+_DOC_PRESETS = {
+    "report": ("Liberation Sans", 11.0, 20.0, 115),
+    "essay":  ("Liberation Serif", 12.0, 25.4, 200),
+    "letter": ("Liberation Serif", 12.0, 25.0, 100),
+}
+
+
+def tool_writer_format_document(args):
+    """One call for 'make this document presentable': base typography, page
+    margins and line spacing for a common document shape."""
+    doc = _require_writer()
+    preset = str(args.get("preset", "report")).lower()
+    if preset not in _DOC_PRESETS:
+        raise RuntimeError("preset must be one of %s" % sorted(_DOC_PRESETS))
+    font, size, margin_mm, spacing = _DOC_PRESETS[preset]
+    font = args.get("font_name") or font
+    size = float(args.get("font_size") or size)
+    applied = []
+
+    std = doc.getStyleFamilies().getByName("ParagraphStyles").getByName("Standard")
+    for attr, value in (("CharFontName", font), ("CharFontNameComplex", font),
+                        ("CharFontNameAsian", font), ("CharHeight", size),
+                        ("CharHeightComplex", size), ("CharHeightAsian", size)):
+        setattr(std, attr, value)
+    applied.append("typography")
+
+    try:
+        line = _uno_struct("com.sun.star.style.LineSpacing")
+        line.Mode = 2  # PROP — proportional, Height is a percentage
+        line.Height = int(spacing)
+        std.ParaLineSpacing = line
+        applied.append("line_spacing")
+    except Exception:
+        pass
+
+    styles = doc.getStyleFamilies().getByName("PageStyles")
+    name = doc.getCurrentController().getViewCursor().PageStyleName
+    page = styles.getByName(name if styles.hasByName(name) else "Standard")
+    mm100 = int(round(margin_mm * 100))
+    for side in ("TopMargin", "BottomMargin", "LeftMargin", "RightMargin"):
+        setattr(page, side, mm100)
+    applied.append("margins")
+
+    return {"preset": preset, "font_name": font, "font_size": size,
+            "margin_mm": margin_mm, "line_spacing_percent": spacing,
+            "page_style": page.Name, "applied": applied}
 
 
 TOOLS = {
@@ -5637,6 +5971,11 @@ TOOLS = {
     "dispatch": tool_dispatch,
     "calc_statistics": tool_calc_statistics,
     "read_spreadsheet": tool_read_spreadsheet,
+    # everyday composites
+    "calc_overview": tool_calc_overview,
+    "calc_format_table": tool_calc_format_table,
+    "calc_clean_data": tool_calc_clean_data,
+    "writer_format_document": tool_writer_format_document,
     # calc P1/P2/P3
     "calc_add_shape": tool_calc_add_shape,
     "calc_insert_image": tool_calc_insert_image,
@@ -6533,7 +6872,7 @@ TOOL_DEFS = [
      "description": "Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable).",
      "inputSchema": _schema()},
     {"name": "dispatch",
-     "description": "Portmanteau facade for MCP clients with a tool-count cap: run ANY of this server's tools by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the catalog of names + one-line usage. Fans out to the same handlers as the discrete tools; does not replace them.",
+     "description": "Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog of names + one-line usage. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible.",
      "inputSchema": _schema({"tool": dict(_STR, description="tool name to run; omit or 'list' for the catalog"),
                              "args": {"type": "object", "description": "arguments for that tool"}})},
     {"name": "calc_statistics",
@@ -6542,6 +6881,25 @@ TOOL_DEFS = [
     {"name": "read_spreadsheet",
      "description": "Read every sheet's used range at once: {sheet_name: 2-D values} — a whole workbook in one call instead of one calc_read_range per sheet.",
      "inputSchema": _schema()},
+    # --- everyday composites ---
+    {"name": "calc_overview",
+     "description": "Map the workbook cheaply before reading it: per sheet the used range, its row/column count, a few sample rows and whether row 1 looks like headers. Output stays small on a huge file — prefer this over read_spreadsheet to get your bearings.",
+     "inputSchema": _schema({"sample_rows": dict(_INT, description="sample rows per sheet, 0-20 (default 3)")})},
+    {"name": "calc_format_table",
+     "description": "Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "preset": dict(_STR, enum=["clean", "report", "financial"]),
+                             "header": dict(_BOOL, description="treat row 1 as a header (default true)"),
+                             "freeze": dict(_BOOL, description="freeze the header row (default true)")})},
+    {"name": "calc_clean_data",
+     "description": "Tidy a pasted or imported range: trim stray whitespace, turn numeric-looking text into real numbers, and drop fully empty rows. Formula cells are never rewritten. Defaults to the sheet's used range. NOTE: LibreOffice does not record bulk range writes for undo, so Ctrl+Z restores the deleted rows but not the trimmed values — say what will change before running it on data the user cannot re-import.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
+                             "drop_empty_rows": dict(_BOOL, description="default true")})},
+    {"name": "writer_format_document",
+     "description": "Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single).",
+     "inputSchema": _schema({"preset": dict(_STR, enum=["report", "essay", "letter"]),
+                             "font_name": dict(_STR, description="override the preset font"),
+                             "font_size": dict(_NUM, description="override the preset size (pt)")})},
 ]
 
 
@@ -6612,6 +6970,54 @@ def _action_summary(name, args, payload):
     return line
 
 
+# The everyday surface. The full 174 are ~76 KB of JSON schema — roughly 22k
+# tokens injected into EVERY conversation, and 68 calc_* lookalikes to choose
+# between for "make this table look nice". These are the ones a student or an
+# everyday user actually reaches for; `dispatch` still reaches all the rest by
+# name, so nothing is lost — set LO_TOOLS=full to advertise them all flat.
+_BASIC_TOOLS = frozenset("""
+lo_status list_documents get_current_selection document_undo dispatch
+create_document open_document save_document close_document export_document convert
+calc_overview calc_read_range calc_write_range calc_set_formulas calc_list_sheets
+calc_get_used_range calc_format_table calc_clean_data calc_format_range
+calc_sort_range calc_create_chart calc_add_sheet
+writer_get_text writer_append_text writer_replace_selection writer_find_replace
+writer_format_document writer_insert_heading writer_insert_table
+writer_apply_style writer_format_text
+""".split())
+
+
+def _full_tier():
+    """True when the full flat surface is requested. Accepts the manifest's
+    boolean checkbox ('true'/'1') as well as an explicit LO_TOOLS=full."""
+    return (os.environ.get("LO_TOOLS", "").strip().lower()
+            in ("full", "all", "true", "yes", "1"))
+
+
+def _advertised_tools():
+    """tools/list payload for the configured tier. Anything unrecognised falls
+    back to basic rather than erroring — a typo in a GUI config field must not
+    leave the user with no tools at all."""
+    if _full_tier():
+        return TOOL_DEFS
+    return [d for d in TOOL_DEFS if d["name"] in _BASIC_TOOLS]
+
+
+def _bundled_oxt():
+    """Path to the agent-acceptor .oxt shipped inside the bundle, if present.
+    Installing it is what lets Claude reach a LibreOffice the user opened
+    normally — no port, no relaunch, no command-line flags."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for base in (os.path.join(here, "..", "ext"), here):
+        try:
+            for fn in sorted(os.listdir(base)):
+                if fn.endswith(".oxt"):
+                    return os.path.abspath(os.path.join(base, fn))
+        except OSError:
+            continue
+    return None
+
+
 def handle(message):
     method = message.get("method")
     mid = message.get("id")
@@ -6629,7 +7035,7 @@ def handle(message):
     if method == "ping":
         return _result(mid, {})
     if method == "tools/list":
-        return _result(mid, {"tools": TOOL_DEFS})
+        return _result(mid, {"tools": _advertised_tools()})
     if method == "tools/call":
         params = message.get("params") or {}
         name = params.get("name")
@@ -6638,7 +7044,7 @@ def handle(message):
         if func is None:
             return _error(mid, -32602, "Unknown tool: %s" % name)
         try:
-            payload = _call_with_reconnect(func, args)
+            payload = _call_with_reconnect(func, args, name)
             # Two blocks: a human-readable narration first (so an operator
             # watching Claude's CLI/Desktop sees WHAT was done in the document),
             # then the structured JSON (the model chains on content[-1]).
@@ -6669,8 +7075,11 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
-    _log("LibreOffice MCP server ready (stdio, %d tools). LO_UNO_PORT=%s"
-         % (len(TOOLS), os.environ.get("LO_UNO_PORT", "2002")))
+    _log("LibreOffice MCP server ready (stdio, %d of %d tools advertised; "
+         "LO_TOOLS=%s). LO_UNO_PORT=%s"
+         % (len(_advertised_tools()), len(TOOLS),
+            os.environ.get("LO_TOOLS", "basic"),
+            os.environ.get("LO_UNO_PORT", "2002")))
     for line in sys.stdin:
         line = line.strip()
         if not line:

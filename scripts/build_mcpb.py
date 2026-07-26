@@ -17,6 +17,14 @@ import zipfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _newest_oxt():
+    """The most recently built .oxt in dist/, or None."""
+    dist = os.path.join(ROOT, "dist")
+    found = [os.path.join(dist, f) for f in os.listdir(dist)
+             if f.endswith(".oxt")] if os.path.isdir(dist) else []
+    return max(found, key=os.path.getmtime) if found else None
+
+
 def main():
     manifest_path = os.path.join(ROOT, "mcpb", "manifest.json")
     manifest = json.load(io.open(manifest_path, encoding="utf-8"))
@@ -36,6 +44,17 @@ def main():
         (os.path.join(ROOT, "LICENSE"), "LICENSE"),
         (os.path.join(ROOT, "docs", "MCP-TOOLS.md"), "docs/MCP-TOOLS.md"),
     ]
+
+    # Ship the agent-acceptor .oxt inside the bundle. Without it, Claude can only
+    # reach a LibreOffice it launched itself — an everyday user who already has
+    # LibreOffice open hits the single-instance wall. Bundled, lo_status can hand
+    # them one ready-to-paste unopkg command instead of a download link.
+    oxt = _newest_oxt()
+    if oxt:
+        files.append((oxt, "ext/" + os.path.basename(oxt)))
+    else:
+        print("WARNING: no .oxt in dist/ — run scripts/build_oxt.py first so the "
+              "bundle can ship the agent-acceptor extension")
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
         for src, arc in files:
             z.write(src, arc)

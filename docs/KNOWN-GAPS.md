@@ -372,3 +372,63 @@ target class), a few rough edges, and two discovery gaps. All fixed and covered 
 All of the above are asserted against a real LibreOffice in `check_fieldtest_fixes`
 (run with `LO_UNO_PIPE=0` alongside a live agent-acceptor office). `set_view_zoom`
 is verified where a view exists (skipped only if the harness office is viewless).
+
+# Session 8 field report (2026-07-26) — everyday-user surface (170 → 174)
+
+Driven by a different question than sessions 1–7: not "what is missing for an
+expert driving a complex document", but "what does a student or everyday user
+hit first". Opposite pressure — those sessions grew the surface, this one
+narrows what is *advertised* without removing anything.
+
+## Shipped
+- **Tiered advertising** — `tools/list` returns 32 everyday tools by default;
+  `dispatch` still reaches all 174 by name. `LO_TOOLS=full` restores the flat
+  surface. 84 KB → 15 KB of schema (82 % less context, every conversation).
+- **Undo grouping** — one `enterUndoContext` per tool call, in the shared
+  `_call_with_reconnect` so `dispatch` and `batch` inherit it.
+- **Composites** — `calc_format_table`, `calc_clean_data`, `writer_format_document`.
+- **`calc_overview`** — bounded structural map (the cheap counterpart to
+  `read_spreadsheet`, which dumps every cell of every sheet).
+- **`.oxt` bundled in the `.mcpb`** + `lo_status` emits the ready-to-paste
+  `unopkg add` command when it is on a socket rather than the acceptor pipe.
+
+## Bugs found by live verification (both would have shipped silently)
+
+### 1. `getFormulaArray()` prefixes numeric-looking TEXT with an apostrophe
+Calc's force-text marker. A cell holding `" 3 "` comes back as `"' 3 "`, so a
+plain `.strip()` yields `"' 3"` — the leading char is the marker, not a space —
+and the cell stays text on write-back. `calc_clean_data` looked like it worked
+(it reported 6 trimmed cells) while leaving every number as text; the `=SUM()`
+below it evaluated to **0.0**. Fixed in `_clean_cell`: drop the marker only when
+the remainder really parses as a number, so genuinely-text cells keep it.
+
+### 2. LibreOffice does not record bulk range writes for undo — UPSTREAM, open
+Verified against 25.2.3.2, on a fresh document, four ways:
+
+| write path | undo entry created | contents actually revert |
+|---|---|---|
+| `setString` (per cell) | `Input` | **yes** |
+| property set (`CharWeight`, `CellBackColor`, …) | yes | **yes** |
+| grouped in `enterUndoContext` | ONE entry | **yes** |
+| `setDataArray` | `Insert` | **no** |
+| `setFormulaArray` | `Insert` | **no** |
+
+So the entry appears in Edit ▸ Undo and is consumed by `undo()`, but the cells
+keep their new values. `uno_bridge.write_range_grid` uses `setDataArray`, so
+`calc_write_range` and the trimming half of `calc_clean_data` are not undoable.
+
+**Not worked around.** The alternatives are worse: per-cell `setString` is O(n)
+UNO round-trips (unusable on a 10k-cell write), and a custom Python
+`XUndoAction` would leave a dead proxy in the document's undo stack whenever the
+server restarts. Grouping still delivers for the ~140 property- and text-based
+mutators — proved live: `calc_format_table` performs borders + header weight +
+background + font colour + number format + autofit + freeze and produces exactly
+ONE entry (`Claude: calc_format_table`), which a single undo fully reverts.
+
+`calc_clean_data`'s tool description states the caveat, since Ctrl+Z there
+restores the deleted rows but not the trimmed values.
+
+## Rejected
+- **Alternating row banding in `calc_format_table`** — per-row `CellBackColor` is
+  O(rows) UNO calls. The cheap route is one conditional format keyed on
+  `MOD(ROW();2)` plus a named cell style; left as a marked `ponytail:` note.

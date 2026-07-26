@@ -5,6 +5,51 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+Everyday-user pass. Until now the surface was tuned for an expert operator
+driving complex documents: 170 flat tools (~76 KB of JSON schema, roughly 22k
+tokens injected into every conversation) and 68 `calc_*` lookalikes to pick
+between for "make this table look nice". This release keeps every capability but
+puts a small, forgiving surface in front of it.
+
+### Added — MCP server (170 → 174 tools)
+- **Tiered tool advertising.** `tools/list` advertises a focused everyday set
+  (**32 tools**) by default; the other 142 stay reachable by name through
+  `dispatch`. `LO_TOOLS=full` (or the new **"Advertise all 174 tools"** checkbox
+  in the Claude Desktop extension settings) restores the flat surface.
+  **15 KB instead of 84 KB of schema — an 82 % cut**, and far less for the model
+  to choose between. No capability is lost either way.
+- **Undo grouping.** Every mutating tool now runs inside one
+  `enterUndoContext`/`leaveUndoContext` pair, so a single Ctrl+Z in LibreOffice
+  reverts a whole tool call instead of one cell of a 500-cell write. Applies to
+  tools reached through `dispatch` and `batch` too. (See Known issues.)
+- `calc_overview` — cheap structural map of a workbook: per sheet the used
+  range, size, a few sample rows and a header-row guess. Bounded output whatever
+  the file size, unlike `read_spreadsheet` which dumps every cell of every sheet.
+- `calc_format_table` — header emphasis + border grid + auto-fitted columns +
+  frozen header row in ONE call (presets: `clean`, `report`, `financial`).
+  Replaces a five-call `format_range`/`set_borders`/`set_dimensions`/
+  `sheet_properties` chain.
+- `calc_clean_data` — trim whitespace, turn numeric-looking text into real
+  numbers, drop fully empty rows. Formula cells are never rewritten.
+- `writer_format_document` — base typography (all scripts, so Arabic/CTL takes
+  effect), line spacing and page margins in one call (`report`/`essay`/`letter`).
+
+### Added — packaging
+- The agent-acceptor **`.oxt` now ships inside the `.mcpb`**, and `lo_status`
+  hands back the exact `unopkg add` command when it is connected over a socket.
+  Removes the third install step for a user who already had LibreOffice open.
+
+### Fixed
+- **`lo_status`** reports the advertised/total tool counts and the active tier.
+
+### Known issues
+- **LibreOffice does not record bulk range writes for undo.** `setDataArray` and
+  `setFormulaArray` both register an undo entry that does not restore the prior
+  contents (verified against 25.2.3.2). So `calc_write_range` and the trimming
+  half of `calc_clean_data` are not undoable — the undo grouping above delivers
+  for the ~140 property- and text-based mutators, not for those. Documented in
+  `docs/KNOWN-GAPS.md`.
+
 ## [0.9.2] — 2026-07-24
 
 Pruned nine capabilities from the sibling LibreOffice-MCP projects

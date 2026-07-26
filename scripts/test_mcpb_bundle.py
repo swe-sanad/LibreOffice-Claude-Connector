@@ -85,7 +85,17 @@ def main():
         check(init.get("serverInfo", {}).get("version") == version,
               "initialize", "server version %s" % init.get("serverInfo", {}).get("version"))
         tools = replies.get(1, {}).get("result", {}).get("tools", [])
-        check(len(tools) >= 60, "tools/list", "%d tools" % len(tools))
+        names = {t["name"] for t in tools}
+        # default tier: a small everyday set, with dispatch as the way to the rest
+        check(20 <= len(tools) <= 60, "tools/list (default tier)",
+              "%d tools" % len(tools))
+        check("dispatch" in names, "dispatch advertised",
+              "the escape hatch to the unadvertised tools")
+        for name in ("lo_status", "calc_overview", "calc_format_table",
+                     "writer_format_document"):
+            check(name in names, "everyday tool %s advertised" % name)
+        check(any(f.endswith(".oxt") for f in zipfile.ZipFile(bundle).namelist()),
+              "agent-acceptor .oxt bundled")
         if live:
             content = replies.get(2, {}).get("result", {})
             # content[0] is the human summary line; the JSON payload is content[-1].
@@ -95,6 +105,26 @@ def main():
         check("[libreoffice-connector] launching:" in err,
               "launcher diagnostics on stderr")
         check(proc.returncode == 0, "clean exit", "code %s" % proc.returncode)
+
+        # The "Advertise all tools" checkbox reaches the server as LO_TOOLS="true"
+        # (manifest booleans stringify). Prove that plumbing, not just LO_TOOLS=full.
+        full_env = dict(env)
+        full_env["LO_TOOLS"] = "true"
+        full = subprocess.run(
+            ["node", entry],
+            input="".join(json.dumps(m) + "\n" for m in msgs[:3]).encode("utf-8"),
+            capture_output=True, timeout=30, cwd=tmp, env=full_env)
+        n_full = 0
+        for line in full.stdout.decode("utf-8", "replace").splitlines():
+            if line.strip().startswith("{"):
+                try:
+                    msg = json.loads(line)
+                except ValueError:
+                    continue
+                if msg.get("id") == 1:
+                    n_full = len(msg.get("result", {}).get("tools", []))
+        check(n_full > len(tools), "tools/list (all-tools checkbox)",
+              "%d tools vs %d default" % (n_full, len(tools)))
 
         if not ok:
             print("--- stderr ---")

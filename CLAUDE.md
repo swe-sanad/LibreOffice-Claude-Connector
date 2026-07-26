@@ -15,7 +15,9 @@ Two complementary connectors between **Anthropic's Claude** and **LibreOffice**
    the selection in place. Standalone — no Claude Code needed.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the *inverse*: lets Claude Code /
    Desktop / Cowork drive a running LibreOffice as a tool (like the Figma MCP).
-   **137 tools**; registered with Claude Code at user scope as `libreoffice`.
+   **174 tools**, of which a **32-tool everyday tier is what `tools/list` advertises**
+   (`LO_TOOLS=full` advertises all 174; `dispatch` reaches the rest either way).
+   Registered with Claude Code at user scope as `libreoffice`.
 
 ## Status
 
@@ -23,9 +25,10 @@ Verified against real **LibreOffice 25.2.3.2 / bundled Python 3.10.17**:
 
 - ✅ `.oxt`: menu + Tools-Add-Ons + toolbar + **sidebar deck/panel (render confirmed
   in Calc & Writer)**, in-app settings, Windows-DPAPI API-key storage.
-- ✅ MCP server: **137 tools**, all exercised against a real office by
-  `tests/integration/test_mcp_tools_extended.py`; protocol + core tool tests pass.
-- ✅ 65 offline unit tests; all UNO integration tests; `.oxt` installs and both the
+- ✅ MCP server: **174 tools** (32 advertised by default), all exercised against a
+  real office by `tests/integration/test_mcp_tools_extended.py`; protocol + core
+  tool tests pass.
+- ✅ 111 offline unit tests; all UNO integration tests; `.oxt` installs and both the
   ProtocolHandler and sidebar factory register.
 - **Needs an API key (not done here):** a live Claude Transform from the GUI dialogs.
 - **Not done:** Phase 6/7 (streaming, richer in-panel prompt UI, publish to
@@ -58,10 +61,10 @@ src/                    # extension source (single source of truth)
   sidebar_panel.py      # registered XUIElementFactory component (sidebar deck/panel)
 ext/                    # .oxt packaging: description.xml, META-INF/manifest.xml, Addons.xcu,
                         #   ProtocolHandler.xcu, registry/.../{Sidebar,Factories}.xcu, icons/
-mcp/libreoffice_mcp.py  # stdlib MCP server (JSON-RPC/stdio, 137 tools), runs under LO python.exe
-scripts/                # build_oxt.py, install_and_verify.ps1, run_integration.ps1,
+mcp/libreoffice_mcp.py  # stdlib MCP server (JSON-RPC/stdio, 174 tools), runs under LO python.exe
+scripts/                # build_oxt.py, build_mcpb.py, install_and_verify.ps1, run_integration.ps1,
                         #   start_office_socket.ps1, make_icons.py, spike_http.py
-tests/ tests/integration/# offline suites (65) + real-LO integration tests
+tests/ tests/integration/# offline suites (111) + real-LO integration tests
 docs/                   # RESEARCH, BUILD-PLAN, ARCHITECTURE, DEVELOPMENT, CHANGELOG, TEST-PLAN
 ```
 
@@ -86,12 +89,13 @@ LibreOffice lives at `C:\Program Files\LibreOffice\program\` (python.exe, soffic
 unopkg.com). All Python must run under **that** python.exe (it has `uno`).
 
 ```powershell
-# Offline unit tests (65; no key/network/office). Single test:
+# Offline unit tests (111; no key/network/office). Single test:
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest discover -s tests -p "test_*.py" -v
 & "C:\Program Files\LibreOffice\program\python.exe" -m unittest tests.test_writer_actions.TestRewrite -v
 
-# MCP protocol smoke test (no office) — should report "137 tools"
+# MCP protocol smoke test (no office) — "32 tools" by default, "174 tools" with LO_TOOLS=full
 & "C:\Program Files\LibreOffice\program\python.exe" mcp\test_mcp_protocol.py
+$env:LO_TOOLS="full"; & "C:\Program Files\LibreOffice\program\python.exe" mcp\test_mcp_protocol.py; $env:LO_TOOLS=$null
 
 # Real-LibreOffice integration test (isolated headless profile; run ONE at a time)
 powershell -ExecutionPolicy Bypass -File scripts\run_integration.ps1 -Test tests\integration\test_calc_uno.py
@@ -131,6 +135,14 @@ powershell -ExecutionPolicy Bypass -File scripts\start_office_socket.ps1   # →
 - **Cursor:** `cursor.collapseToEnd()` after each `insertString`/`insertControlCharacter`,
   or multi-line inserts reverse. **`setDataArray`** needs an exact-shape 2-D array and
   rejects `None` — coerce `None`/JSON-null → `""`.
+- **`getFormulaArray()` prefixes numeric-looking TEXT with `'`** (Calc's force-text
+  marker): a cell holding `" 3 "` reads back as `"' 3 "`, so a plain `.strip()` leaves
+  `"' 3"` and the cell stays text on write-back. Drop the marker only when the
+  remainder really parses as a number (`_clean_cell`).
+- **Bulk range writes are NOT undoable.** `setDataArray`/`setFormulaArray` register an
+  undo entry that does not restore the prior contents; per-cell `setString` and
+  property sets do. So `enterUndoContext` grouping works for the ~140 property/text
+  mutators but cannot rescue `calc_write_range`. Table in `docs/KNOWN-GAPS.md`.
 - **UNO layout props are 1/100 mm**; LibreOffice round-trips through twips, so values
   come back ±1–2 (15mm → 1499). Assert with tolerance.
 - **Network calls run OFF the UI thread** (`uno_ui.run_with_progress`); document
