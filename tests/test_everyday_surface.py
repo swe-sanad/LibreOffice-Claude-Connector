@@ -43,6 +43,24 @@ class ToolRegistryTest(unittest.TestCase):
             self.assertIn(name, m._BASIC_TOOLS)
 
 
+class DiagnoseDocumentTest(unittest.TestCase):
+    """The read-only Writer/Calc health check must be wired like its siblings:
+    a handler with a schema, advertised in the everyday tier, and exempt from
+    undo grouping (it never edits)."""
+
+    def test_registered_advertised_and_read_only(self):
+        self.assertIn("diagnose_document", m.TOOLS)
+        self.assertIn("diagnose_document", {d["name"] for d in m.TOOL_DEFS})
+        self.assertIn("diagnose_document", m._BASIC_TOOLS)
+        self.assertIn("diagnose_document", m._NO_UNDO)  # it only reads
+
+    def test_body_styles_cover_the_default(self):
+        # the default body style must count as "body", or a bold one-liner in a
+        # fresh document would never be flagged as a pseudo-heading
+        self.assertIn("Standard", m._BODY_STYLES)
+        self.assertIn("Default Paragraph Style", m._BODY_STYLES)
+
+
 class CalcErrorTableTest(unittest.TestCase):
     def test_covers_the_errors_users_actually_hit(self):
         # the four a student sees on a broken sheet
