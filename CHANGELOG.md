@@ -5,6 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.9.7] — 2026-08-04
+
 ### Added
 
 - **`diagnose_document`** (188 → 189 tools) — a read-only Writer/Calc health
