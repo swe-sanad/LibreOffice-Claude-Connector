@@ -5,6 +5,16 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`diagnose_document`** (188 → 189 tools) — a read-only Writer/Calc health
+  check, the Writer counterpart of `calc_detect_errors`. Builds on the existing
+  lifecycle facts and reports the structural problems worth fixing, each naming
+  the tool that fixes it: Writer pseudo-headings (bold body text faking a
+  heading), broken cross-references, images missing alt text, unfilled
+  placeholder fields and leftover TODO/FIXME markers; Calc broken formula cells.
+  Advertised in the everyday tier.
+
 ## [0.9.6] — 2026-07-26
 
 Reaches deeper into the UNO API, and turns the server from a bag of tools into

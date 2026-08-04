@@ -183,7 +183,7 @@ def _is_connection_error(exc):
 _NO_UNDO = frozenset("""
 lo_status lo_screenshot list_documents list_macros list_styles list_templates
 list_embedded_objects get_current_selection get_document_properties get_signatures
-read_spreadsheet inspect_ods calc_overview calc_detect_errors
+read_spreadsheet inspect_ods calc_overview calc_detect_errors diagnose_document
 list_recent_documents print_document lo_health lo_recover checkpoint_document
 document_watch print_settings document_lifecycle
 create_document open_document create_from_template close_document save_document
@@ -6334,6 +6334,117 @@ def tool_writer_format_document(args):
             "page_style": page.Name, "applied": applied}
 
 
+def tool_diagnose_document(args):
+    """A read-only health check — the Writer analogue of calc_detect_errors.
+    Reuses the lifecycle facts, then reports the structural problems worth
+    fixing, each pointing at the tool that fixes it."""
+    ub = _bridge()
+    doc = _select_doc(args) or _current_doc()
+    if not (ub.is_writer(doc) or ub.is_calc(doc)):
+        raise RuntimeError("diagnose_document works on Writer or Calc documents.")
+    f = _lifecycle_facts(doc, ub)
+    issues = []
+
+    if ub.is_calc(doc):
+        # Every broken formula cell, the same signal calc_detect_errors reports,
+        # but scanned on the SELECTED doc (calc_detect_errors targets the active
+        # one). FormulaResult.ERROR = 4 hands back exactly the error cells.
+        sheets = doc.getSheets()
+        for name in sheets.getElementNames():
+            try:
+                cells = sheets.getByName(name).queryFormulaCells(4) \
+                    .getCells().createEnumeration()
+            except Exception:
+                continue
+            while cells.hasMoreElements():
+                cell = cells.nextElement()
+                try:
+                    code = cell.getError()
+                except Exception:
+                    code = 0
+                addr = cell.getCellAddress()
+                issues.append({
+                    "type": "formula_error", "severity": "error",
+                    "where": "%s!%s%d" % (name, _col_letters(addr.Column),
+                                          addr.Row + 1),
+                    "detail": (_CALC_ERRORS.get(code) or cell.getString()
+                               or "error %s" % code),
+                    "formula": cell.getFormula(),
+                    "fix": "calc_set_formulas"})
+        return {"kind": "calc",
+                "summary": {"used_cells": f.get("used_cells", 0),
+                            "formula_errors": len(issues),
+                            "issues": len(issues)},
+                "issues": issues}
+
+    # --- Writer ---
+    # 1. pseudo-headings, from the enumeration _lifecycle_facts already walked.
+    for ph in f.get("pseudo_headings", []):
+        issues.append({"type": "pseudo_heading", "severity": "warning",
+                       "where": "paragraph %d: %r" % (ph["index"], ph["text"]),
+                       "fix": "writer_apply_style"})
+
+    # Names a cross-reference may legitimately point at: bookmarks, reference
+    # marks, and the sequences behind captions (a GetReference to a caption uses
+    # the sequence's category name, e.g. 'Illustration').
+    valid = set(doc.getBookmarks().getElementNames())
+    for getter in ("getReferenceMarks", "getTextFieldMasters"):
+        try:
+            valid |= {n.rsplit(".", 1)[-1]
+                      for n in getattr(doc, getter)().getElementNames()}
+        except Exception:
+            pass
+
+    # 2 + 4a. one pass over the text fields: broken cross-references and the
+    # placeholder (JumpEdit) fields that were never filled in.
+    placeholders = 0
+    fields = doc.getTextFields().createEnumeration()
+    while fields.hasMoreElements():
+        fld = fields.nextElement()
+        if fld.supportsService("com.sun.star.text.TextField.GetReference"):
+            src = getattr(fld, "SourceName", "") or ""
+            if src not in valid:
+                issues.append({
+                    "type": "broken_cross_reference", "severity": "error",
+                    "where": "reference to %r" % (src or "(unset)"),
+                    "fix": "writer_insert_cross_reference"})
+        elif fld.supportsService("com.sun.star.text.TextField.JumpEdit"):
+            placeholders += 1
+            hint = getattr(fld, "PlaceHolder", "") or ""
+            issues.append({
+                "type": "placeholder", "severity": "warning",
+                "where": "placeholder %r" % hint if hint else "placeholder field",
+                "fix": "writer_replace_selection"})
+
+    # 3. images with no alt text — surfaced straight from the facts.
+    for name in f.get("images_without_alt_text", []):
+        issues.append({"type": "missing_alt_text", "severity": "warning",
+                       "where": "image %r" % name, "fix": "set_alt_text"})
+
+    # 4b. literal TODO/FIXME left in the body text — one rolled-up issue.
+    low = doc.getText().getString().lower()
+    todos = low.count("todo") + low.count("fixme")
+    if todos:
+        issues.append({"type": "todo_marker", "severity": "info",
+                       "where": "%d TODO/FIXME marker(s) in the body" % todos,
+                       "fix": "writer_find_replace"})
+
+    return {
+        "kind": "writer",
+        "summary": {
+            "characters": f.get("characters", 0),
+            "paragraphs": f.get("paragraphs", 0),
+            "headings": f.get("headings", 0),
+            "pseudo_headings": len(f.get("pseudo_headings", [])),
+            "broken_cross_references": sum(
+                1 for i in issues if i["type"] == "broken_cross_reference"),
+            "images_without_alt_text": len(f.get("images_without_alt_text", [])),
+            "placeholders": placeholders,
+            "todo_markers": todos,
+            "issues": len(issues)},
+        "issues": issues}
+
+
 # --------------------------------------------------------------------------- #
 # Tools — borrowed from the sibling projects, everyday/student slice only
 #
@@ -7143,6 +7254,12 @@ def tool_writer_content_control(args):
 # one, so it survives a server restart and cannot go stale.
 # --------------------------------------------------------------------------- #
 
+# Paragraph styles that carry ordinary body text — a short, fully-bold one-liner
+# in one of these reads like a heading but is not one (see diagnose_document).
+_BODY_STYLES = frozenset((
+    "Standard", "Default Paragraph Style", "Text Body", "Body Text"))
+
+
 def _lifecycle_facts(doc, ub):
     """What is actually true of this document right now."""
     f = {"kind": _doc_kind(doc), "saved_to": doc.getURL() or None}
@@ -7165,7 +7282,7 @@ def _lifecycle_facts(doc, ub):
     if ub.is_writer(doc):
         text = doc.getText().getString()
         f["characters"] = len(text)
-        headings, paragraphs = 0, 0
+        headings, paragraphs, pseudo = 0, 0, []
         enum = doc.getText().createEnumeration()
         while enum.hasMoreElements():
             para = enum.nextElement()
@@ -7173,11 +7290,20 @@ def _lifecycle_facts(doc, ub):
                 continue
             paragraphs += 1
             try:
-                if para.OutlineLevel > 0 or str(para.ParaStyleName).startswith("Heading"):
+                style = str(para.ParaStyleName)
+                if para.OutlineLevel > 0 or style.startswith("Heading"):
                     headings += 1
+                # A short, fully-bold body paragraph dressed up as a heading:
+                # it never reaches the navigation, the TOC or the PDF outline.
+                elif (style in _BODY_STYLES
+                      and getattr(para, "CharWeight", 100.0) >= 150.0):
+                    s = para.getString().strip()
+                    if 0 < len(s) <= 80:
+                        pseudo.append({"index": paragraphs - 1, "text": s[:60]})
             except Exception:
                 pass
         f["paragraphs"], f["headings"] = paragraphs, headings
+        f["pseudo_headings"] = pseudo
         try:
             f["tables"] = doc.getTextTables().getCount()
         except Exception:
@@ -7488,6 +7614,7 @@ TOOLS = {
     "calc_format_table": tool_calc_format_table,
     "calc_clean_data": tool_calc_clean_data,
     "writer_format_document": tool_writer_format_document,
+    "diagnose_document": tool_diagnose_document,
     # everyday tools borrowed from the sibling projects
     "calc_import_csv": tool_calc_import_csv,
     "calc_detect_errors": tool_calc_detect_errors,
@@ -8530,6 +8657,11 @@ TOOL_DEFS = [
      "inputSchema": _schema({"preset": dict(_STR, enum=["report", "essay", "letter"]),
                              "font_name": dict(_STR, description="override the preset font"),
                              "font_size": dict(_NUM, description="override the preset size (pt)")})},
+    {"name": "diagnose_document",
+     "description": "A read-only health check — the Writer counterpart of calc_detect_errors. Reports the structural problems worth fixing, each naming the tool that fixes it: Writer pseudo-headings (bold body text faking a heading), broken cross-references, images missing alt text, unfilled placeholders and leftover TODO/FIXME markers; Calc broken formula cells. Targets a specific open doc by index/title/url, else the active one.",
+     "inputSchema": _schema({"title": dict(_STR, description="match the document by window-title substring"),
+                             "url": dict(_STR, description="match the document by file URL/path substring"),
+                             "index": dict(_INT, description="0-based index over open documents")})},
     # --- everyday tools borrowed from the sibling projects ---
     {"name": "calc_import_csv",
      "description": "Import a CSV/TSV file INTO the open spreadsheet at a target cell — unlike open_document, which opens the file as its own separate document. Delimiter is auto-detected. Fields are written as text or numbers, never as formulas, so a field starting with '=' cannot execute.",
@@ -8642,7 +8774,7 @@ create_document open_document save_document close_document export_document conve
 calc_overview calc_read_range calc_write_range calc_set_formulas calc_list_sheets
 calc_get_used_range calc_format_table calc_clean_data calc_format_range
 calc_sort_range calc_create_chart calc_add_sheet
-calc_import_csv calc_detect_errors
+calc_import_csv calc_detect_errors diagnose_document
 writer_get_text writer_append_text writer_replace_selection writer_find_replace
 writer_format_document writer_insert_heading writer_insert_table
 writer_apply_style writer_format_text
