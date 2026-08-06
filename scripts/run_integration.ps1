@@ -149,6 +149,11 @@ sys.exit(8)
     Write-Host "UNO port open (isolated instance verified); running $Test`n"
 
     $env:LO_UNO_PORT = "$Port"
+    # Force the socket to THIS isolated office. Without this the server's
+    # _connect() prefers the agent-acceptor named pipe, which reaches the user's
+    # REAL office (the .oxt is installed only in the real profile) — defeating
+    # isolation and running the test against the user's live session.
+    $env:LO_UNO_PIPE = "0"
     & $py $Test
     $code = $LASTEXITCODE
 }
