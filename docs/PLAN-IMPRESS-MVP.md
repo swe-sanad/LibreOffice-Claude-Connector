@@ -77,6 +77,40 @@ bugs. So we probe a real `simpress` doc first (a throwaway script in the
 The probe's findings get written back into this doc before the tool signatures are
 frozen. Tools are not written against assumptions about the placeholder model.
 
+### Phase 0 findings (LO 25.2.3.2, measured 2026-08-07 via `scripts/spike_impress.py`)
+
+The probe overturned two assumptions — recorded here so the tools are built on
+the real model:
+
+- **Layout ints** (verified by `getCount` after `page.Layout = n`):
+  `blank=20` (0 shapes), `title_only=19` (title only), `title_subtitle=0`
+  (title + subtitle), `title_content=1` (title + outliner), `two_content=3`
+  (title + 2 outliner). *The plan's earlier `title_only=20` was wrong.*
+- **Placeholders resolve by INDEX, not by a stable text-shape service.** A fresh
+  `simpress` page exposes placeholders as **empty presentation objects**
+  (`IsEmptyPresentationObject=True`) at fixed indices: **title = index 0**
+  (also reports `presentation.TitleTextShape`), **body = index 1** (reports
+  `presentation.OutlinerShape`; index 2 for the 2nd content box), **subtitle =
+  index 1** on the title-slide layout (reports only the generic
+  `presentation.Shape`). `shape.setString(...)` writes into them and flips
+  `IsEmptyPresentationObject` to False. So: resolve **title by the
+  `TitleTextShape` service, body by the `OutlinerShape` service** (both reliably
+  reported for content layouts), and fall back to index 1 for the subtitle.
+  There is **no `OutlineTextShape`** service — it is `OutlinerShape`.
+- **Notes:** `page.getNotesPage()` returns a page whose **index 0 is the slide
+  thumbnail** (`com.sun.star.drawing.PageShape`, no text) and **index 1 is the
+  notes text box** (`supportsService("com.sun.star.drawing.Text")` True, no
+  presentation subtype). Resolve it as *the notes-page shape that supports
+  `drawing.Text` and is not a `PageShape`*. Write round-trips.
+- **Bullet levels:** per-paragraph `para.NumberingLevel` works, but the **default
+  level reads back as `None`, not `0`** — coerce `None -> 0` on read.
+- **Images:** `com.sun.star.graphic.GraphicProvider.queryGraphic({"URL": ...})`
+  is available; feed its result to `GraphicObjectShape.Graphic`.
+- **Reorder:** `doc.duplicate(page)` exists; there is **no `moveByIndex`** and no
+  other clean reorder API. Per the decision gate, **`impress_move_slide` is
+  dropped** from the MVP (duplicate + delete + add cover the need). **Tool count
+  is now 12, not 13.**
+
 ## Wiring changes (shared infra)
 
 - `src/uno_bridge.py`: add `IMPRESS_DOC_SERVICE =
@@ -111,7 +145,9 @@ in the default tier; the rest are reachable via `dispatch` / `LO_TOOLS=full`.
 | `impress_insert_text_box` | `slide`, `text`, `x,y,w,h` | free-floating TextShape | — |
 | `impress_delete_slide` | `slide` | remove a slide | — |
 | `impress_duplicate_slide` | `slide` | clone via `XDrawPageDuplicator` | — |
-| `impress_move_slide` | `slide`, `to` | reorder (dropped if Phase 0 finds no clean API) | — |
+
+`impress_move_slide` was dropped after Phase 0 found no clean reorder API (see
+findings above) — **12 tools, not 13**. Reordering is a next-increment concern.
 
 `layout` is an enum of friendly names (`title`, `title_content`, `title_subtitle`,
 `two_content`, `blank`, …) mapped to the `DrawPage.Layout` ints confirmed in Phase 0
@@ -146,7 +182,7 @@ master-slide / theme / template editing · the separate `draw_*` surface · Base
 
 ## Definition of done
 
-Phase 0 probe findings recorded here · 13 tools registered and passing offline
+Phase 0 probe findings recorded here · 12 tools registered and passing offline
 registry/tier tests · live integration test builds a deck and exports a PDF green
 · `CHANGELOG.md` updated · `PLAN-IMPRESS-BASE-DRAW.md` Impress section marked
 "in progress → see this doc" · `docs/MCP-TOOLS.md` lists the new family.
