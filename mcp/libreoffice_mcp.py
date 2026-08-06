@@ -472,6 +472,14 @@ def _require_writer():
     return doc
 
 
+def _require_impress():
+    ub = _bridge()
+    doc = _current_doc()
+    if not ub.is_impress(doc):
+        raise RuntimeError("The active document is not a presentation (Impress).")
+    return doc
+
+
 def _resolve_sheet(doc, sheet):
     """Resolve by 0-based index (int, float or numeric string), exact name, or
     the English token of a bilingual 'english | عربي' tab name. Raises with the
@@ -605,7 +613,9 @@ def _addr_intersects(a, b):
 def _doc_kind(doc):
     ub = _bridge()
     return ("calc" if ub.is_calc(doc)
-            else "writer" if ub.is_writer(doc) else "other")
+            else "writer" if ub.is_writer(doc)
+            else "impress" if ub.is_impress(doc)
+            else "draw" if ub.is_draw(doc) else "other")
 
 
 def _doc_info(doc):
@@ -889,7 +899,8 @@ def tool_get_current_selection(_args):
 # --------------------------------------------------------------------------- #
 
 _FACTORY_URLS = {"calc": "private:factory/scalc",
-                 "writer": "private:factory/swriter"}
+                 "writer": "private:factory/swriter",
+                 "impress": "private:factory/simpress"}
 
 # (doc kind, format) -> LibreOffice filter name
 _FILTERS = {
@@ -903,6 +914,10 @@ _FILTERS = {
     ("writer", "docx"): "MS Word 2007 XML",
     ("writer", "txt"): "Text",
     ("writer", "pdf"): "writer_pdf_Export",
+    ("impress", "native"): "impress8",
+    ("impress", "odp"): "impress8",
+    ("impress", "pptx"): "Impress MS PowerPoint 2007 XML",
+    ("impress", "pdf"): "impress_pdf_Export",
 }
 
 
@@ -910,7 +925,8 @@ def tool_create_document(args):
     kind = args.get("type", "calc")
     url = _FACTORY_URLS.get(kind)
     if url is None:
-        raise RuntimeError("type must be 'calc' or 'writer', got: %r" % kind)
+        raise RuntimeError("type must be one of %s, got: %r"
+                           % (sorted(_FACTORY_URLS), kind))
     doc = _desktop().loadComponentFromURL(url, "_blank", 0, ())
     _activate(doc)   # make the new doc the active one for subsequent calls
     return {"created": _doc_info(doc)}
@@ -3525,8 +3541,10 @@ def tool_export_document(args):
                     fd.append(_pv(prop, bool(args[arg])))
         if args.get("watermark"):
             fd.append(_pv("Watermark", str(args["watermark"])))
-        filter_name = ("writer_pdf_Export" if _doc_kind(doc) == "writer"
-                       else "calc_pdf_Export")
+        filter_name = {"writer": "writer_pdf_Export",
+                       "impress": "impress_pdf_Export",
+                       "draw": "draw_pdf_Export"}.get(_doc_kind(doc),
+                                                      "calc_pdf_Export")
         props = [_pv("FilterName", filter_name)]
         if fd:
             props.append(_pv("FilterData",
@@ -7578,8 +7596,8 @@ TOOL_DEFS = [
      "inputSchema": _schema()},
     # --- document lifecycle ---
     {"name": "create_document",
-     "description": "Create and open a new empty document ('calc' spreadsheet or 'writer' text document).",
-     "inputSchema": _schema({"type": dict(_STR, enum=["calc", "writer"])}, ["type"])},
+     "description": "Create and open a new empty document ('calc' spreadsheet, 'writer' text document, or 'impress' presentation).",
+     "inputSchema": _schema({"type": dict(_STR, enum=["calc", "writer", "impress"])}, ["type"])},
     {"name": "open_document",
      "description": "Open a document file (ods/xlsx/csv/odt/docx/...) in LibreOffice.",
      "inputSchema": _schema({"path": dict(_STR, description="absolute or relative file path")}, ["path"])},

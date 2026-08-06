@@ -468,5 +468,20 @@ class PresetTest(unittest.TestCase):
                              "%s advertises presets it cannot apply" % tool)
 
 
+class ImpressWiringTest(unittest.TestCase):
+    """Task 1 wiring: create_document/export must know about presentations."""
+
+    def test_create_document_accepts_impress(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["create_document"]["inputSchema"]["properties"]["type"]["enum"]
+        self.assertIn("impress", enum)
+
+    def test_impress_factory_url_registered(self):
+        self.assertEqual(m._FACTORY_URLS["impress"], "private:factory/simpress")
+
+    def test_impress_pdf_filter_registered(self):
+        self.assertEqual(m._FILTERS[("impress", "pdf")], "impress_pdf_Export")
+
+
 if __name__ == "__main__":
     unittest.main()

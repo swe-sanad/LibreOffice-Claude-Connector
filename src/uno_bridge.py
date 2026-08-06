@@ -193,6 +193,22 @@ def is_writer(doc: Any) -> bool:
     return bool(doc) and doc.supportsService(WRITER_DOC_SERVICE)
 
 
+# Impress (presentation) and Draw share the drawing model; the service tells
+# them apart. A presentation IS a drawing document too, so test Impress first.
+IMPRESS_DOC_SERVICE = "com.sun.star.presentation.PresentationDocument"
+DRAW_DOC_SERVICE = "com.sun.star.drawing.DrawingDocument"
+
+
+def is_impress(doc: Any) -> bool:
+    return bool(doc) and doc.supportsService(IMPRESS_DOC_SERVICE)
+
+
+def is_draw(doc: Any) -> bool:
+    # A presentation also supports DrawingDocument, so exclude it explicitly.
+    return (bool(doc) and doc.supportsService(DRAW_DOC_SERVICE)
+            and not doc.supportsService(IMPRESS_DOC_SERVICE))
+
+
 def get_writer_selection(doc: Any) -> Tuple[str, bool]:
     """Return ``(selected_text, has_selection)`` from the on-screen view cursor.
 
