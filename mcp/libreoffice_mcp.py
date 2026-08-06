@@ -7540,6 +7540,15 @@ def tool_impress_read_slide(args):
             "notes": notes.getString() if notes else ""}
 
 
+def tool_impress_set_notes(args):
+    page = _impress_slide(_impress_pages(), args["slide"])
+    shp = _ph_notes(page)
+    if shp is None:
+        raise RuntimeError("slide %s has no speaker-notes area" % args["slide"])
+    shp.setString(str(args["text"]))
+    return {"slide": int(args["slide"]), "notes": args["text"]}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7759,6 +7768,7 @@ TOOLS = {
     "impress_add_slide": tool_impress_add_slide,
     "impress_set_title": tool_impress_set_title,
     "impress_set_content": tool_impress_set_content,
+    "impress_set_notes": tool_impress_set_notes,
 }
 
 _STR = {"type": "string"}
@@ -8806,6 +8816,9 @@ TOOL_DEFS = [
                                          "items": {"type": ["string", "object"]},
                                          "description": "strings or {text, level} objects"}},
                             ["slide", "bullets"])},
+    {"name": "impress_set_notes",
+     "description": "Set the speaker notes of slide 'slide' (1-based) to 'text'. Notes are what the presenter sees, not the audience.",
+     "inputSchema": _schema({"slide": _INT, "text": _STR}, ["slide", "text"])},
 ]
 
 
@@ -8898,7 +8911,7 @@ lo_health lo_recover checkpoint_document document_watch
 print_settings set_alt_text writer_content_control document_lifecycle
 set_document_properties insert_form_control export_document
 impress_overview impress_read_slide impress_add_slide
-impress_set_title impress_set_content
+impress_set_title impress_set_content impress_set_notes
 """.split())
 
 

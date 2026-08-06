@@ -488,7 +488,7 @@ class ImpressRegistryTest(unittest.TestCase):
     undo; the everyday ones advertised. Extended as each task lands a tool."""
 
     ADVERTISED = ("impress_overview", "impress_read_slide", "impress_add_slide",
-                  "impress_set_title", "impress_set_content")
+                  "impress_set_title", "impress_set_content", "impress_set_notes")
     READ_ONLY = ("impress_overview", "impress_read_slide")
 
     def test_registered_in_tools_and_defs(self):

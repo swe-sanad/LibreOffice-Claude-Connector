@@ -70,6 +70,14 @@ def main():
         _assert(rs["bullets"][0]["level"] == 0, "top level: %r" % rs["bullets"])
         print("PASS: impress_set_title + impress_set_content + impress_read_slide")
 
+        # --- Task 4: speaker notes -----------------------------------------
+        server.tool_impress_set_notes({"slide": s, "text": "Pause for questions."})
+        _assert(server.tool_impress_read_slide({"slide": s})["notes"] ==
+                "Pause for questions.", "notes readback")
+        _assert(server.tool_impress_overview({})["slides"][s - 1]["has_notes"],
+                "overview reports has_notes")
+        print("PASS: impress_set_notes")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:
