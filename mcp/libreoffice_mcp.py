@@ -7400,16 +7400,28 @@ def _ph_title(page):
     return _shape_by_service(page, _TITLE_SVC)
 
 
+def _is_placeholder(shp):
+    """True for a layout placeholder (title/body/subtitle), False for an inserted
+    shape. Both carry the generic presentation.Shape service on a slide, so that
+    cannot tell them apart; IsPlaceholderDependent can (Phase-0 finding)."""
+    try:
+        return bool(shp.IsPlaceholderDependent)
+    except Exception:
+        return False
+
+
 def _ph_body(page):
-    """The content/outline placeholder. Falls back to the first non-title text
-    shape (a title slide's subtitle reports only the generic presentation.Shape,
-    so it is not found by the OutlinerShape service)."""
+    """The content/outline placeholder. Falls back to the title-slide subtitle,
+    which reports no specific text-shape service — but only among real layout
+    placeholders, so an inserted text box is never mistaken for the body."""
     body = _shape_by_service(page, _BODY_SVC)
     if body is not None:
         return body
     for i in range(page.getCount()):
         shp = page.getByIndex(i)
-        if shp.supportsService(_TEXT_SVC) and not shp.supportsService(_TITLE_SVC):
+        if (_is_placeholder(shp)
+                and shp.supportsService(_TEXT_SVC)
+                and not shp.supportsService(_TITLE_SVC)):
             return shp
     return None
 
@@ -7528,7 +7540,7 @@ def tool_impress_read_slide(args):
     shapes = []
     for i in range(page.getCount()):
         shp = page.getByIndex(i)
-        if shp.supportsService(_TITLE_SVC) or shp.supportsService(_BODY_SVC):
+        if _is_placeholder(shp):   # a layout placeholder, not inserted content
             continue
         shapes.append(shp.Name or ("shape#%d" % i))
     notes = _ph_notes(page)
@@ -7547,6 +7559,87 @@ def tool_impress_set_notes(args):
         raise RuntimeError("slide %s has no speaker-notes area" % args["slide"])
     shp.setString(str(args["text"]))
     return {"slide": int(args["slide"]), "notes": args["text"]}
+
+
+def _place_shape(shape, args, dx=10, dy=10, dw=40, dh=30):
+    """Size + position an added shape from mm args (1/100 mm on the wire)."""
+    size = _uno_struct("com.sun.star.awt.Size")
+    size.Width = _mm100(args.get("width_mm", dw))
+    size.Height = _mm100(args.get("height_mm", dh))
+    shape.setSize(size)
+    pos = _uno_struct("com.sun.star.awt.Point")
+    pos.X = _mm100(args.get("x_mm", dx))
+    pos.Y = _mm100(args.get("y_mm", dy))
+    shape.setPosition(pos)
+
+
+def tool_impress_insert_shape(args):
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    kind = str(args.get("kind", "rectangle")).lower()
+    service = _DRAW_SHAPES.get(kind)
+    if not service:
+        raise RuntimeError("kind must be one of %s" % sorted(_DRAW_SHAPES))
+    shape = doc.createInstance(service)
+    page.add(shape)
+    _place_shape(shape, args)
+    if args.get("fill_color") is not None:
+        try:
+            shape.FillColor = _hex_color(args["fill_color"])
+        except Exception:
+            pass
+    if args.get("text"):
+        shape.setString(str(args["text"]))
+    return {"slide": int(args["slide"]), "kind": kind,
+            "name": getattr(shape, "Name", "")}
+
+
+def tool_impress_insert_text_box(args):
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    shape = doc.createInstance("com.sun.star.drawing.TextShape")
+    page.add(shape)
+    _place_shape(shape, args, dw=80, dh=20)
+    try:
+        shape.TextAutoGrowHeight = True
+    except Exception:
+        pass
+    shape.setString(str(args.get("text", "")))
+    return {"slide": int(args["slide"]), "name": getattr(shape, "Name", "")}
+
+
+def tool_impress_insert_image(args):
+    path = args["path"]
+    if not os.path.exists(path):
+        raise RuntimeError("Image file not found: %s" % path)
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    state = _connect()
+    provider = state["smgr"].createInstanceWithContext(
+        "com.sun.star.graphic.GraphicProvider", state["ctx"])
+    graphic = provider.queryGraphic((_pv("URL", _to_url(path)),))
+    if graphic is None:
+        raise RuntimeError("Could not load image: %s" % path)
+    shape = doc.createInstance("com.sun.star.drawing.GraphicObjectShape")
+    shape.Graphic = graphic
+    page.add(shape)
+    size = _uno_struct("com.sun.star.awt.Size")
+    try:
+        native = graphic.Size100thMM
+        size.Width = (_mm100(args["width_mm"]) if args.get("width_mm")
+                      else native.Width or 6000)
+        size.Height = (_mm100(args["height_mm"]) if args.get("height_mm")
+                       else native.Height or 4000)
+    except Exception:
+        size.Width = _mm100(args.get("width_mm", 60))
+        size.Height = _mm100(args.get("height_mm", 40))
+    shape.setSize(size)
+    pos = _uno_struct("com.sun.star.awt.Point")
+    pos.X = _mm100(args.get("x_mm", 10))
+    pos.Y = _mm100(args.get("y_mm", 10))
+    shape.setPosition(pos)
+    return {"slide": int(args["slide"]), "inserted": os.path.basename(path),
+            "name": getattr(shape, "Name", "")}
 
 
 TOOLS = {
@@ -7769,6 +7862,9 @@ TOOLS = {
     "impress_set_title": tool_impress_set_title,
     "impress_set_content": tool_impress_set_content,
     "impress_set_notes": tool_impress_set_notes,
+    "impress_insert_image": tool_impress_insert_image,
+    "impress_insert_shape": tool_impress_insert_shape,
+    "impress_insert_text_box": tool_impress_insert_text_box,
 }
 
 _STR = {"type": "string"}
@@ -8819,6 +8915,28 @@ TOOL_DEFS = [
     {"name": "impress_set_notes",
      "description": "Set the speaker notes of slide 'slide' (1-based) to 'text'. Notes are what the presenter sees, not the audience.",
      "inputSchema": _schema({"slide": _INT, "text": _STR}, ["slide", "text"])},
+    {"name": "impress_insert_image",
+     "description": "Insert an image from a local file 'path' onto slide 'slide' (1-based). Position/size in millimetres (x_mm/y_mm/width_mm/height_mm); size defaults to the image's own dimensions.",
+     "inputSchema": _schema({"slide": _INT,
+                             "path": dict(_STR, description="local image file"),
+                             "x_mm": _NUM, "y_mm": _NUM,
+                             "width_mm": _NUM, "height_mm": _NUM},
+                            ["slide", "path"])},
+    {"name": "impress_insert_shape",
+     "description": "Add an auto shape (rectangle, ellipse, line, text) to slide 'slide' (1-based) with optional 'text' and 'fill_color' (hex like '#4472C4'). Position/size in millimetres.",
+     "inputSchema": _schema({"slide": _INT,
+                             "kind": dict(_STR, enum=sorted(_DRAW_SHAPES),
+                                          description="shape kind (default rectangle)"),
+                             "x_mm": _NUM, "y_mm": _NUM,
+                             "width_mm": _NUM, "height_mm": _NUM,
+                             "text": _STR, "fill_color": _STR},
+                            ["slide"])},
+    {"name": "impress_insert_text_box",
+     "description": "Add a free-floating text box to slide 'slide' (1-based) holding 'text', positioned/sized in millimetres. For text outside the layout placeholders.",
+     "inputSchema": _schema({"slide": _INT, "text": _STR,
+                             "x_mm": _NUM, "y_mm": _NUM,
+                             "width_mm": _NUM, "height_mm": _NUM},
+                            ["slide", "text"])},
 ]
 
 
@@ -8912,6 +9030,7 @@ print_settings set_alt_text writer_content_control document_lifecycle
 set_document_properties insert_form_control export_document
 impress_overview impress_read_slide impress_add_slide
 impress_set_title impress_set_content impress_set_notes
+impress_insert_image impress_insert_shape
 """.split())
 
 

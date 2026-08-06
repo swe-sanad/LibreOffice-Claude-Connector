@@ -488,12 +488,15 @@ class ImpressRegistryTest(unittest.TestCase):
     undo; the everyday ones advertised. Extended as each task lands a tool."""
 
     ADVERTISED = ("impress_overview", "impress_read_slide", "impress_add_slide",
-                  "impress_set_title", "impress_set_content", "impress_set_notes")
+                  "impress_set_title", "impress_set_content", "impress_set_notes",
+                  "impress_insert_image", "impress_insert_shape")
+    # registered and reachable via dispatch, but not in the everyday tier
+    DISPATCH_ONLY = ("impress_insert_text_box",)
     READ_ONLY = ("impress_overview", "impress_read_slide")
 
     def test_registered_in_tools_and_defs(self):
         defs = {d["name"] for d in m.TOOL_DEFS}
-        for name in self.ADVERTISED:
+        for name in self.ADVERTISED + self.DISPATCH_ONLY:
             self.assertIn(name, m.TOOLS, "%s missing from TOOLS" % name)
             self.assertIn(name, defs, "%s missing from TOOL_DEFS" % name)
 

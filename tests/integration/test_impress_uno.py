@@ -78,6 +78,25 @@ def main():
                 "overview reports has_notes")
         print("PASS: impress_set_notes")
 
+        # --- Task 5: image + shape + text box ------------------------------
+        blank = server.tool_impress_add_slide({"layout": "blank"})["slide"]
+        png = os.path.abspath(os.path.join(_HERE, "..", "..", "ext", "icons", "icon.png"))
+        _assert(os.path.exists(png), "test image missing: %s" % png)
+        ri = server.tool_impress_insert_image(
+            {"slide": blank, "path": png, "x_mm": 20, "y_mm": 20,
+             "width_mm": 30, "height_mm": 30})
+        _assert(ri["inserted"] == "icon.png", "image inserted: %r" % ri)
+        server.tool_impress_insert_shape(
+            {"slide": blank, "kind": "rectangle", "x_mm": 60, "y_mm": 20,
+             "width_mm": 40, "height_mm": 20, "text": "Box", "fill_color": "#4472C4"})
+        server.tool_impress_insert_text_box(
+            {"slide": blank, "text": "Free text", "x_mm": 20, "y_mm": 60,
+             "width_mm": 80, "height_mm": 15})
+        # all three are real (non-placeholder) shapes on the blank slide
+        shapes = server.tool_impress_read_slide({"slide": blank})["shapes"]
+        _assert(len(shapes) >= 3, "expected >=3 inserted shapes, got %r" % shapes)
+        print("PASS: impress_insert_image + impress_insert_shape + impress_insert_text_box")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

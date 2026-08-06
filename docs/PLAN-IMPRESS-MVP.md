@@ -104,6 +104,12 @@ the real model:
   `drawing.Text` and is not a `PageShape`*. Write round-trips.
 - **Bullet levels:** per-paragraph `para.NumberingLevel` works, but the **default
   level reads back as `None`, not `0`** — coerce `None -> 0` on read.
+- **Placeholder vs inserted shape:** an inserted drawing shape on a slide *also*
+  reports `com.sun.star.presentation.Shape`, so that service cannot tell a layout
+  placeholder from inserted content. The reliable discriminator is the
+  **`IsPlaceholderDependent`** property: `True` for title/body/subtitle
+  placeholders, `False` for anything added with `page.add()`. `read_slide`'s
+  shape list and the subtitle fallback both key off it.
 - **Images:** `com.sun.star.graphic.GraphicProvider.queryGraphic({"URL": ...})`
   is available; feed its result to `GraphicObjectShape.Graphic`.
 - **Reorder:** `doc.duplicate(page)` exists; there is **no `moveByIndex`** and no
