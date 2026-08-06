@@ -491,8 +491,15 @@ class ImpressRegistryTest(unittest.TestCase):
                   "impress_set_title", "impress_set_content", "impress_set_notes",
                   "impress_insert_image", "impress_insert_shape")
     # registered and reachable via dispatch, but not in the everyday tier
-    DISPATCH_ONLY = ("impress_insert_text_box",)
+    DISPATCH_ONLY = ("impress_insert_text_box", "impress_set_layout",
+                     "impress_delete_slide", "impress_duplicate_slide")
     READ_ONLY = ("impress_overview", "impress_read_slide")
+
+    def test_mutating_impress_tools_are_not_no_undo(self):
+        for name in ("impress_add_slide", "impress_set_title", "impress_set_notes",
+                     "impress_insert_image", "impress_delete_slide",
+                     "impress_duplicate_slide"):
+            self.assertNotIn(name, m._NO_UNDO, "%s mutates" % name)
 
     def test_registered_in_tools_and_defs(self):
         defs = {d["name"] for d in m.TOOL_DEFS}

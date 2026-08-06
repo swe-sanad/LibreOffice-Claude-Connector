@@ -7642,6 +7642,33 @@ def tool_impress_insert_image(args):
             "name": getattr(shape, "Name", "")}
 
 
+def tool_impress_set_layout(args):
+    page = _impress_slide(_impress_pages(), args["slide"])
+    layout = args["layout"]
+    if layout not in _IMPRESS_LAYOUTS:
+        raise RuntimeError("unknown layout %r; choose one of %s"
+                           % (layout, sorted(_IMPRESS_LAYOUTS)))
+    page.Layout = _IMPRESS_LAYOUTS[layout]
+    return {"slide": int(args["slide"]), "layout": layout}
+
+
+def tool_impress_delete_slide(args):
+    pages = _impress_pages()
+    if pages.getCount() <= 1:
+        raise RuntimeError("cannot delete the only slide in a presentation")
+    page = _impress_slide(pages, args["slide"])
+    pages.remove(page)
+    return {"deleted": int(args["slide"]), "count": pages.getCount()}
+
+
+def tool_impress_duplicate_slide(args):
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    doc.duplicate(page)   # XDrawPageDuplicator: inserts the copy right after
+    return {"slide": int(args["slide"]) + 1,
+            "count": doc.getDrawPages().getCount()}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7865,6 +7892,9 @@ TOOLS = {
     "impress_insert_image": tool_impress_insert_image,
     "impress_insert_shape": tool_impress_insert_shape,
     "impress_insert_text_box": tool_impress_insert_text_box,
+    "impress_set_layout": tool_impress_set_layout,
+    "impress_delete_slide": tool_impress_delete_slide,
+    "impress_duplicate_slide": tool_impress_duplicate_slide,
 }
 
 _STR = {"type": "string"}
@@ -8937,6 +8967,17 @@ TOOL_DEFS = [
                              "x_mm": _NUM, "y_mm": _NUM,
                              "width_mm": _NUM, "height_mm": _NUM},
                             ["slide", "text"])},
+    {"name": "impress_set_layout",
+     "description": "Change the autolayout of slide 'slide' (1-based) to 'layout' (title_subtitle, title_content, two_content, title_only, blank). Reflows the placeholders; existing placeholder text is kept where a matching box remains.",
+     "inputSchema": _schema({"slide": _INT,
+                             "layout": dict(_STR, enum=sorted(_IMPRESS_LAYOUTS))},
+                            ["slide", "layout"])},
+    {"name": "impress_delete_slide",
+     "description": "Delete slide 'slide' (1-based). Refuses to delete the last remaining slide.",
+     "inputSchema": _schema({"slide": _INT}, ["slide"])},
+    {"name": "impress_duplicate_slide",
+     "description": "Duplicate slide 'slide' (1-based); the copy is inserted immediately after it. Returns the new slide's 1-based number.",
+     "inputSchema": _schema({"slide": _INT}, ["slide"])},
 ]
 
 

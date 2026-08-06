@@ -97,6 +97,20 @@ def main():
         _assert(len(shapes) >= 3, "expected >=3 inserted shapes, got %r" % shapes)
         print("PASS: impress_insert_image + impress_insert_shape + impress_insert_text_box")
 
+        # --- Task 6: set_layout + duplicate + delete -----------------------
+        target = server.tool_impress_add_slide({"layout": "title_only"})["slide"]
+        before = server.tool_impress_overview({})["count"]
+        dup = server.tool_impress_duplicate_slide({"slide": target})
+        _assert(dup["count"] == before + 1, "duplicate count: %r" % dup)
+        _assert(dup["slide"] == target + 1, "duplicate lands after: %r" % dup)
+        server.tool_impress_set_layout({"slide": target, "layout": "two_content"})
+        _assert(server.tool_impress_read_slide({"slide": target})["layout"] ==
+                "two_content", "layout changed")
+        # delete the duplicate we just made
+        after_del = server.tool_impress_delete_slide({"slide": target + 1})
+        _assert(after_del["count"] == before, "delete count: %r" % after_del)
+        print("PASS: impress_set_layout + impress_duplicate_slide + impress_delete_slide")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:
