@@ -196,6 +196,7 @@ calc_select_range calc_set_active_sheet calc_recalculate
 writer_get_comments writer_get_outline writer_get_paragraphs writer_get_text
 writer_list_figures writer_list_objects writer_list_tables writer_read_table
 writer_find writer_word_count
+impress_overview
 set_view_zoom set_document_modified
 """.split())
 
@@ -7341,6 +7342,133 @@ def tool_document_lifecycle(args):
     }
 
 
+# --------------------------------------------------------------------------- #
+# Tools — Impress (presentations)
+# Slides are addressed by a 1-BASED index everywhere ("slide 3" = the 3rd slide).
+# Placeholders resolve by service where LibreOffice reports it reliably (title,
+# body) and by structure for notes. Layout ints and the placeholder model were
+# measured on LO 25.2 — see the "Phase 0 findings" in docs/PLAN-IMPRESS-MVP.md.
+# --------------------------------------------------------------------------- #
+
+_IMPRESS_LAYOUTS = {          # friendly name -> DrawPage.Layout int (measured)
+    "title_subtitle": 0,      # title slide: title + subtitle
+    "title_content": 1,       # title + one content/outline box
+    "two_content": 3,         # title + two content boxes
+    "title_only": 19,
+    "blank": 20,
+}
+_LAYOUT_NAMES = {v: k for k, v in _IMPRESS_LAYOUTS.items()}
+
+_PRES = "com.sun.star.presentation."
+_TITLE_SVC = _PRES + "TitleTextShape"
+_BODY_SVC = _PRES + "OutlinerShape"          # the content/outline placeholder
+_TEXT_SVC = "com.sun.star.drawing.Text"
+_PAGE_SVC = "com.sun.star.drawing.PageShape"  # the notes-page slide thumbnail
+
+
+def _impress_pages():
+    return _require_impress().getDrawPages()
+
+
+def _impress_slide(pages, one_based):
+    n = pages.getCount()
+    try:
+        i = int(one_based) - 1
+    except (TypeError, ValueError):
+        raise RuntimeError("slide must be a 1-based number, got: %r" % (one_based,))
+    if i < 0 or i >= n:
+        raise RuntimeError("slide %r is out of range 1..%d" % (one_based, n))
+    return pages.getByIndex(i)
+
+
+def _layout_name(page):
+    return _LAYOUT_NAMES.get(page.Layout, "custom(%d)" % page.Layout)
+
+
+def _shape_by_service(page, svc):
+    for i in range(page.getCount()):
+        shp = page.getByIndex(i)
+        try:
+            if shp.supportsService(svc):
+                return shp
+        except Exception:
+            pass
+    return None
+
+
+def _ph_title(page):
+    return _shape_by_service(page, _TITLE_SVC)
+
+
+def _ph_body(page):
+    """The content/outline placeholder. Falls back to the first non-title text
+    shape (a title slide's subtitle reports only the generic presentation.Shape,
+    so it is not found by the OutlinerShape service)."""
+    body = _shape_by_service(page, _BODY_SVC)
+    if body is not None:
+        return body
+    for i in range(page.getCount()):
+        shp = page.getByIndex(i)
+        if shp.supportsService(_TEXT_SVC) and not shp.supportsService(_TITLE_SVC):
+            return shp
+    return None
+
+
+def _ph_notes(page):
+    """The notes text box on the slide's notes page: the text-bearing shape that
+    is not the slide-thumbnail PageShape (Phase-0 finding)."""
+    if not hasattr(page, "getNotesPage"):
+        return None
+    notes = page.getNotesPage()
+    for i in range(notes.getCount()):
+        shp = notes.getByIndex(i)
+        if shp.supportsService(_TEXT_SVC) and not shp.supportsService(_PAGE_SVC):
+            return shp
+    return None
+
+
+def tool_impress_add_slide(args):
+    # insertNewByIndex(n) inserts the new page AFTER 0-based index n (measured),
+    # so 'after' (1-based) maps straight to it; omitting 'after' appends. There
+    # is no reorder API, so there is no "insert at the very front" — build a deck
+    # front-to-back. page.Number reports the resulting 1-based position.
+    pages = _impress_pages()
+    count = pages.getCount()
+    after = args.get("after")
+    if after is None:
+        idx = max(0, count - 1)
+    else:
+        a = int(after)
+        if a < 1 or a > count:
+            raise RuntimeError("after=%r is out of range 1..%d" % (after, count))
+        idx = a - 1
+    layout = args.get("layout", "title_content")
+    if layout not in _IMPRESS_LAYOUTS:
+        raise RuntimeError("unknown layout %r; choose one of %s"
+                           % (layout, sorted(_IMPRESS_LAYOUTS)))
+    page = pages.insertNewByIndex(idx)
+    page.Layout = _IMPRESS_LAYOUTS[layout]
+    return {"slide": page.Number, "count": pages.getCount(), "layout": layout}
+
+
+def tool_impress_overview(args):
+    pages = _impress_pages()
+    slides = []
+    for i in range(pages.getCount()):
+        page = pages.getByIndex(i)
+        title = _ph_title(page)
+        body = _ph_body(page)
+        notes = _ph_notes(page)
+        slides.append({
+            "index": i + 1,
+            "layout": _layout_name(page),
+            "title": title.getString() if title else "",
+            "text_len": len(body.getString()) if body else 0,
+            "has_notes": bool(notes and notes.getString().strip()),
+        })
+    return {"count": pages.getCount(), "slides": slides}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7554,6 +7682,9 @@ TOOLS = {
     "calc_add_sparkline": tool_calc_add_sparkline,
     "calc_add_scale_format": tool_calc_add_scale_format,
     "calc_copy_sheet": tool_calc_copy_sheet,
+    # impress (presentations)
+    "impress_overview": tool_impress_overview,
+    "impress_add_slide": tool_impress_add_slide,
 }
 
 _STR = {"type": "string"}
@@ -8579,6 +8710,15 @@ TOOL_DEFS = [
                              "search": dict(_STR, description="resolve every comment whose text contains this"),
                              "author": dict(_STR, description="resolve every comment by this author"),
                              "resolved": dict(_BOOL, description="true = resolved (default), false = reopen")})},
+    # --- impress (presentations) — slides addressed by 1-based index ---
+    {"name": "impress_overview",
+     "description": "Read the presentation: slide count and, per slide, its 1-based index, layout, title, body text length, and whether it has speaker notes. The 'orient yourself' tool for a deck — call it first.",
+     "inputSchema": _schema()},
+    {"name": "impress_add_slide",
+     "description": "Add a slide and apply a layout. 'after' (1-based) inserts the new slide right after that slide; omit to append at the end. 'layout' picks the placeholders: title_subtitle, title_content, two_content, title_only, or blank. Returns the new slide's 1-based number.",
+     "inputSchema": _schema({"after": dict(_INT, description="insert after this 1-based slide; omit to append"),
+                             "layout": dict(_STR, enum=sorted(_IMPRESS_LAYOUTS),
+                                            description="slide layout (default title_content)")})},
 ]
 
 
@@ -8670,6 +8810,7 @@ list_recent_documents print_document
 lo_health lo_recover checkpoint_document document_watch
 print_settings set_alt_text writer_content_control document_lifecycle
 set_document_properties insert_form_control export_document
+impress_overview impress_add_slide
 """.split())
 
 

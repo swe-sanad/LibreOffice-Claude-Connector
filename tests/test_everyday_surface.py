@@ -483,5 +483,32 @@ class ImpressWiringTest(unittest.TestCase):
         self.assertEqual(m._FILTERS[("impress", "pdf")], "impress_pdf_Export")
 
 
+class ImpressRegistryTest(unittest.TestCase):
+    """Every impress_* tool must be registered; the read-only ones exempt from
+    undo; the everyday ones advertised. Extended as each task lands a tool."""
+
+    ADVERTISED = ("impress_overview", "impress_add_slide")
+    READ_ONLY = ("impress_overview",)
+
+    def test_registered_in_tools_and_defs(self):
+        defs = {d["name"] for d in m.TOOL_DEFS}
+        for name in self.ADVERTISED:
+            self.assertIn(name, m.TOOLS, "%s missing from TOOLS" % name)
+            self.assertIn(name, defs, "%s missing from TOOL_DEFS" % name)
+
+    def test_advertised_in_basic_tier(self):
+        for name in self.ADVERTISED:
+            self.assertIn(name, m._BASIC_TOOLS)
+
+    def test_read_only_are_no_undo(self):
+        for name in self.READ_ONLY:
+            self.assertIn(name, m._NO_UNDO)
+
+    def test_layout_names_match_the_add_slide_enum(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["impress_add_slide"]["inputSchema"]["properties"]["layout"]["enum"]
+        self.assertEqual(sorted(enum), sorted(m._IMPRESS_LAYOUTS))
+
+
 if __name__ == "__main__":
     unittest.main()
