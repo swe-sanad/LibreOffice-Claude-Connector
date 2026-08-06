@@ -487,8 +487,9 @@ class ImpressRegistryTest(unittest.TestCase):
     """Every impress_* tool must be registered; the read-only ones exempt from
     undo; the everyday ones advertised. Extended as each task lands a tool."""
 
-    ADVERTISED = ("impress_overview", "impress_add_slide")
-    READ_ONLY = ("impress_overview",)
+    ADVERTISED = ("impress_overview", "impress_read_slide", "impress_add_slide",
+                  "impress_set_title", "impress_set_content")
+    READ_ONLY = ("impress_overview", "impress_read_slide")
 
     def test_registered_in_tools_and_defs(self):
         defs = {d["name"] for d in m.TOOL_DEFS}

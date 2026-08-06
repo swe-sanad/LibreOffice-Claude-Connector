@@ -53,6 +53,23 @@ def main():
                 "inserted slide landed at position 2: %r" % ov["slides"][1])
         print("PASS: impress_add_slide after a 1-based slide")
 
+        # --- Task 3: set_title + set_content + read_slide -------------------
+        s = server.tool_impress_add_slide({"layout": "title_content"})["slide"]
+        server.tool_impress_set_title({"slide": s, "text": "Quarterly Review"})
+        server.tool_impress_set_content({"slide": s, "bullets": [
+            "Revenue up 12%",
+            {"text": "APAC detail", "level": 1},
+            {"text": "Risks", "level": 0},
+        ]})
+        rs = server.tool_impress_read_slide({"slide": s})
+        _assert(rs["title"] == "Quarterly Review", "title readback: %r" % rs)
+        _assert([b["text"] for b in rs["bullets"]] ==
+                ["Revenue up 12%", "APAC detail", "Risks"],
+                "bullets readback: %r" % rs["bullets"])
+        _assert(rs["bullets"][1]["level"] == 1, "indent level: %r" % rs["bullets"])
+        _assert(rs["bullets"][0]["level"] == 0, "top level: %r" % rs["bullets"])
+        print("PASS: impress_set_title + impress_set_content + impress_read_slide")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

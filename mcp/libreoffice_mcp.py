@@ -196,7 +196,7 @@ calc_select_range calc_set_active_sheet calc_recalculate
 writer_get_comments writer_get_outline writer_get_paragraphs writer_get_text
 writer_list_figures writer_list_objects writer_list_tables writer_read_table
 writer_find writer_word_count
-impress_overview
+impress_overview impress_read_slide
 set_view_zoom set_document_modified
 """.split())
 
@@ -7469,6 +7469,77 @@ def tool_impress_overview(args):
     return {"count": pages.getCount(), "slides": slides}
 
 
+def _bullet_parts(b):
+    """A bullet is either a plain string or {'text':..., 'level':...}."""
+    if isinstance(b, str):
+        return b, 0
+    return str(b.get("text", "")), int(b.get("level", 0) or 0)
+
+
+def tool_impress_set_title(args):
+    page = _impress_slide(_impress_pages(), args["slide"])
+    shp = _ph_title(page)
+    if shp is None:
+        raise RuntimeError("slide %s has no title placeholder; give it a layout "
+                           "with a title (e.g. title_content)" % args["slide"])
+    shp.setString(str(args["text"]))
+    return {"slide": int(args["slide"]), "title": args["text"]}
+
+
+def tool_impress_set_content(args):
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    page = _impress_slide(_impress_pages(), args["slide"])
+    body = _ph_body(page)
+    if body is None:
+        raise RuntimeError("slide %s has no content placeholder; use a layout "
+                           "like 'title_content' or 'two_content'" % args["slide"])
+    bullets = args.get("bullets") or []
+    text = body.getText()
+    text.setString("")
+    cursor = text.createTextCursor()
+    for i, b in enumerate(bullets):
+        txt, _ = _bullet_parts(b)
+        if i:
+            # collapseToEnd after each insert, or multi-line inserts reverse
+            text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+            cursor.collapseToEnd()
+        text.insertString(cursor, txt, False)
+        cursor.collapseToEnd()
+    for b, para in zip(bullets, text.createEnumeration()):
+        _, lvl = _bullet_parts(b)
+        if lvl:                       # default level (0) reads back as None; leave it
+            try:
+                para.NumberingLevel = lvl
+            except Exception:
+                pass
+    return {"slide": int(args["slide"]), "bullets": len(bullets)}
+
+
+def tool_impress_read_slide(args):
+    page = _impress_slide(_impress_pages(), args["slide"])
+    title = _ph_title(page)
+    body = _ph_body(page)
+    bullets = []
+    if body is not None:
+        for para in body.getText().createEnumeration():
+            lvl = getattr(para, "NumberingLevel", 0)
+            bullets.append({"text": para.getString(),
+                            "level": int(lvl) if lvl else 0})
+    shapes = []
+    for i in range(page.getCount()):
+        shp = page.getByIndex(i)
+        if shp.supportsService(_TITLE_SVC) or shp.supportsService(_BODY_SVC):
+            continue
+        shapes.append(shp.Name or ("shape#%d" % i))
+    notes = _ph_notes(page)
+    return {"index": int(args["slide"]),
+            "layout": _layout_name(page),
+            "title": title.getString() if title else "",
+            "bullets": bullets,
+            "shapes": shapes,
+            "notes": notes.getString() if notes else ""}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7684,7 +7755,10 @@ TOOLS = {
     "calc_copy_sheet": tool_calc_copy_sheet,
     # impress (presentations)
     "impress_overview": tool_impress_overview,
+    "impress_read_slide": tool_impress_read_slide,
     "impress_add_slide": tool_impress_add_slide,
+    "impress_set_title": tool_impress_set_title,
+    "impress_set_content": tool_impress_set_content,
 }
 
 _STR = {"type": "string"}
@@ -8719,6 +8793,19 @@ TOOL_DEFS = [
      "inputSchema": _schema({"after": dict(_INT, description="insert after this 1-based slide; omit to append"),
                              "layout": dict(_STR, enum=sorted(_IMPRESS_LAYOUTS),
                                             description="slide layout (default title_content)")})},
+    {"name": "impress_read_slide",
+     "description": "Read one slide in full: its layout, title, body bullets (each with its indent level), the names of any other shapes, and speaker notes. Address it by 1-based 'slide'.",
+     "inputSchema": _schema({"slide": dict(_INT, description="1-based slide number")}, ["slide"])},
+    {"name": "impress_set_title",
+     "description": "Set the title placeholder of slide 'slide' (1-based) to 'text'. The slide needs a layout that has a title (all but 'blank').",
+     "inputSchema": _schema({"slide": _INT, "text": _STR}, ["slide", "text"])},
+    {"name": "impress_set_content",
+     "description": "Fill the content/outline placeholder of slide 'slide' (1-based) with bullet points. 'bullets' is a list of strings, or {'text','level'} objects where level 0 is a top bullet and 1+ indents it. Needs a content layout (e.g. title_content).",
+     "inputSchema": _schema({"slide": _INT,
+                             "bullets": {"type": "array",
+                                         "items": {"type": ["string", "object"]},
+                                         "description": "strings or {text, level} objects"}},
+                            ["slide", "bullets"])},
 ]
 
 
@@ -8810,7 +8897,8 @@ list_recent_documents print_document
 lo_health lo_recover checkpoint_document document_watch
 print_settings set_alt_text writer_content_control document_lifecycle
 set_document_properties insert_form_control export_document
-impress_overview impress_add_slide
+impress_overview impress_read_slide impress_add_slide
+impress_set_title impress_set_content
 """.split())
 
 
