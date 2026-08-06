@@ -5,6 +5,35 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Impress presentations (188 → 200 tools)
+
+The MCP server can now build a presentation end to end, driving a **live**
+LibreOffice Impress — the whole lifecycle in one `impress_*` family (12 tools, 8
+advertised). This closes the largest app-coverage gap against the sibling
+projects and supersedes the existing LibreOffice/PowerPoint MCP servers: it
+matches their core deck-building loop and adds the things a `.pptx` file-writer
+(python-pptx) structurally cannot do — a **real PDF export**, first-class
+**speaker notes**, and the live-office foundation for animations and slideshow
+still to come.
+
+- **Create** — `create_document` now accepts `type:"impress"`; `export_document`
+  and `save_document` learned the Impress PDF/ODP/PPTX filters (the PDF export
+  filter is now document-kind-aware instead of always `calc_pdf_Export`).
+- **Structure** — `impress_add_slide` (with autolayouts), `impress_set_layout`,
+  `impress_duplicate_slide`, `impress_delete_slide`. Slides are addressed by a
+  1-based index throughout.
+- **Content** — `impress_set_title`, `impress_set_content` (bulleted, with
+  indent levels), `impress_insert_image`, `impress_insert_shape`,
+  `impress_insert_text_box`.
+- **Notes & read-back** — `impress_set_notes` (speaker notes),
+  `impress_overview` and `impress_read_slide` for orientation and verification.
+
+Placeholders resolve by UNO service / `IsPlaceholderDependent` rather than shape
+index (probed live on LO 25.2 first — see `docs/PLAN-IMPRESS-MVP.md`). Bridge
+gains `is_impress`/`is_draw`. New live test `tests/integration/test_impress_uno.py`
+builds a deck and exports a PDF; the integration harness now forces the socket
+(`LO_UNO_PIPE=0`) so tests never touch the user's real session.
+
 ## [0.9.6] — 2026-07-26
 
 Reaches deeper into the UNO API, and turns the server from a bag of tools into

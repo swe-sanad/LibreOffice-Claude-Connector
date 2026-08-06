@@ -1,5 +1,11 @@
 # Deferred apps — Impress, Draw, Base
 
+> **Impress: IN PROGRESS / landed as an MVP** — the 12-tool `impress_*` family is
+> built; see [`PLAN-IMPRESS-MVP.md`](PLAN-IMPRESS-MVP.md) for the concrete design,
+> the live Phase-0 findings, and what is deferred to the next increment
+> (transitions, animations, slideshow, PNG export, tables, charts). **Draw and
+> Base remain deferred as below.**
+
 **Status:** deliberately not started. Each needs its own working session; none of
 them is a "add a few tools to the Writer/Calc surface" job. Recorded here so the
 decision is not re-argued from intuition, and so whoever picks it up starts from

@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **188 tools** of the `libreoffice` MCP server (v0.9.6), generated from
+All **200 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -17,7 +17,7 @@ All **188 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 
 | Tool | Description |
 |---|---|
-| `create_document` | Create and open a new empty document ('calc' spreadsheet or 'writer' text document). |
+| `create_document` | Create and open a new empty document ('calc' spreadsheet, 'writer' text document, or 'impress' presentation). |
 | `open_document` | Open a document file (ods/xlsx/csv/odt/docx/...) in LibreOffice. |
 | `save_document` | Save the active document. With 'path': save-as (format from extension or explicit 'format': ods/xlsx/csv/odt/docx/txt). 'format':'pdf' exports a PDF copy. Without 'path': save in place. |
 | `close_document` | Close a document, optionally saving it first (save=true needs an existing file location). Targets a SPECIFIC doc by 'index'/'title'/'url' (recommended when several are open — focus alone can close the wrong one); defaults to the active document. |
@@ -296,3 +296,20 @@ All **188 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 | `list_recent_documents` | List the documents from LibreOffice's File > Recent Documents, newest first, with title and file path — so a user who says 'open the essay I was working on' can be offered the right file without knowing where it lives. |
 | `print_document` | Send a document to a PHYSICAL printer — this consumes real paper. Only call it when the user has actually asked to print, and confirm the printer and page range first if there is any doubt. Targets a specific open doc by index/title/url, else the active one. |
 | `writer_resolve_comment` | Mark Writer comment(s) resolved or unresolved — the write side of what writer_get_comments reports. Pick by 'index' (as listed by writer_get_comments), or by 'search' (comment-text substring) / 'author' to resolve every match. Needs LibreOffice 7.1+. |
+
+## Impress (presentations) — slides addressed by 1-based index
+
+| Tool | Description |
+|---|---|
+| `impress_overview` | Read the presentation: slide count and, per slide, its 1-based index, layout, title, body text length, and whether it has speaker notes. The 'orient yourself' tool for a deck — call it first. |
+| `impress_add_slide` | Add a slide and apply a layout. 'after' (1-based) inserts the new slide right after that slide; omit to append at the end. 'layout' picks the placeholders: title_subtitle, title_content, two_content, title_only, or blank. Returns the new slide's 1-based number. |
+| `impress_read_slide` | Read one slide in full: its layout, title, body bullets (each with its indent level), the names of any other shapes, and speaker notes. Address it by 1-based 'slide'. |
+| `impress_set_title` | Set the title placeholder of slide 'slide' (1-based) to 'text'. The slide needs a layout that has a title (all but 'blank'). |
+| `impress_set_content` | Fill the content/outline placeholder of slide 'slide' (1-based) with bullet points. 'bullets' is a list of strings, or {'text','level'} objects where level 0 is a top bullet and 1+ indents it. Needs a content layout (e.g. title_content). |
+| `impress_set_notes` | Set the speaker notes of slide 'slide' (1-based) to 'text'. Notes are what the presenter sees, not the audience. |
+| `impress_insert_image` | Insert an image from a local file 'path' onto slide 'slide' (1-based). Position/size in millimetres (x_mm/y_mm/width_mm/height_mm); size defaults to the image's own dimensions. |
+| `impress_insert_shape` | Add an auto shape (rectangle, ellipse, line, text) to slide 'slide' (1-based) with optional 'text' and 'fill_color' (hex like '#4472C4'). Position/size in millimetres. |
+| `impress_insert_text_box` | Add a free-floating text box to slide 'slide' (1-based) holding 'text', positioned/sized in millimetres. For text outside the layout placeholders. |
+| `impress_set_layout` | Change the autolayout of slide 'slide' (1-based) to 'layout' (title_subtitle, title_content, two_content, title_only, blank). Reflows the placeholders; existing placeholder text is kept where a matching box remains. |
+| `impress_delete_slide` | Delete slide 'slide' (1-based). Refuses to delete the last remaining slide. |
+| `impress_duplicate_slide` | Duplicate slide 'slide' (1-based); the copy is inserted immediately after it. Returns the new slide's 1-based number. |

@@ -111,6 +111,16 @@ def main():
         _assert(after_del["count"] == before, "delete count: %r" % after_del)
         print("PASS: impress_set_layout + impress_duplicate_slide + impress_delete_slide")
 
+        # --- Task 7: export the whole deck to PDF ---------------------------
+        out = os.path.join(os.environ.get("TEMP", os.getcwd()), "impress_mvp_test.pdf")
+        if os.path.exists(out):
+            os.remove(out)
+        exp = server.tool_export_document({"path": out, "format": "pdf"})
+        _assert(os.path.exists(out) and os.path.getsize(out) > 0,
+                "PDF not written: %r" % exp)
+        os.remove(out)
+        print("PASS: export_document -> impress_pdf_Export (real PDF)")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:
