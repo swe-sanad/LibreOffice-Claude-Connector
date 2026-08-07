@@ -523,5 +523,33 @@ class ImpressRegistryTest(unittest.TestCase):
         self.assertEqual(sorted(enum), sorted(m._IMPRESS_LAYOUTS))
 
 
+class DrawRegistryTest(unittest.TestCase):
+    ADVERTISED = ("draw_overview", "draw_read_page", "draw_insert_shape",
+                  "draw_insert_text_box", "draw_insert_image",
+                  "draw_insert_connector")
+    DISPATCH_ONLY = ("draw_add_page",)
+    READ_ONLY = ("draw_overview", "draw_read_page")
+
+    def test_registered(self):
+        defs = {d["name"] for d in m.TOOL_DEFS}
+        for name in self.ADVERTISED + self.DISPATCH_ONLY:
+            self.assertIn(name, m.TOOLS)
+            self.assertIn(name, defs)
+
+    def test_advertised(self):
+        for name in self.ADVERTISED:
+            self.assertIn(name, m._BASIC_TOOLS)
+
+    def test_read_only_are_no_undo(self):
+        for name in self.READ_ONLY:
+            self.assertIn(name, m._NO_UNDO)
+
+    def test_create_document_accepts_draw(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["create_document"]["inputSchema"]["properties"]["type"]["enum"]
+        self.assertIn("draw", enum)
+        self.assertEqual(m._FACTORY_URLS["draw"], "private:factory/sdraw")
+
+
 if __name__ == "__main__":
     unittest.main()
