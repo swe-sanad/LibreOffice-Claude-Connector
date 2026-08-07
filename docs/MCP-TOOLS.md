@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **200 tools** of the `libreoffice` MCP server (v0.9.6), generated from
+All **212 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -17,7 +17,7 @@ All **200 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 
 | Tool | Description |
 |---|---|
-| `create_document` | Create and open a new empty document ('calc' spreadsheet, 'writer' text document, or 'impress' presentation). |
+| `create_document` | Create and open a new empty document ('calc' spreadsheet, 'writer' text document, 'impress' presentation, or 'draw' drawing). |
 | `open_document` | Open a document file (ods/xlsx/csv/odt/docx/...) in LibreOffice. |
 | `save_document` | Save the active document. With 'path': save-as (format from extension or explicit 'format': ods/xlsx/csv/odt/docx/txt). 'format':'pdf' exports a PDF copy. Without 'path': save in place. |
 | `close_document` | Close a document, optionally saving it first (save=true needs an existing file location). Targets a SPECIFIC doc by 'index'/'title'/'url' (recommended when several are open — focus alone can close the wrong one); defaults to the active document. |
@@ -313,3 +313,20 @@ All **200 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 | `impress_set_layout` | Change the autolayout of slide 'slide' (1-based) to 'layout' (title_subtitle, title_content, two_content, title_only, blank). Reflows the placeholders; existing placeholder text is kept where a matching box remains. |
 | `impress_delete_slide` | Delete slide 'slide' (1-based). Refuses to delete the last remaining slide. |
 | `impress_duplicate_slide` | Duplicate slide 'slide' (1-based); the copy is inserted immediately after it. Returns the new slide's 1-based number. |
+| `impress_set_transition` | Set the slide-change transition on slide 'slide' (1-based) or every slide ('all':true). 'type': none, fade, wipe, push, cover, uncover, dissolve, wheel, cut. 'duration' is the effect length (seconds); 'advance_secs' auto-advances after N seconds (omit = advance on click). |
+| `impress_export_slides` | Render slides to image files in directory 'dir' — one file per slide (slide-01.png, ...). 'format': png, svg, or jpg. Exports all slides unless 'slide' (1-based) is given. This is real rendering, not available to .pptx file writers. |
+| `impress_insert_table` | Insert a table on slide 'slide' (1-based). Give 'rows'+'cols', or a 'data' grid (list of rows) to size and fill it in one call. Position/size in millimetres. |
+| `impress_insert_chart` | Insert a data chart on slide 'slide' (1-based). 'chart_type': column, bar, line, area, pie. 'data' is a grid whose first row is the series headers and first column is the category labels (e.g. [['','2023','2024'],['APAC',10,14],['EMEA',8,9]]). Optional 'title'. Position/size in millimetres. |
+| `impress_slideshow` | Control the on-screen slideshow: action 'start' (optionally 'from_slide', 1-based), 'stop', or 'status'. Starting launches the show in the LibreOffice window, so it needs a GUI session (not a headless office). Returns whether a show is running. |
+
+## Draw (vector drawings) — pages addressed by 1-based index
+
+| Tool | Description |
+|---|---|
+| `draw_overview` | Read a Draw document: page count and, per page, its 1-based index, name, and shape count. The 'orient yourself' tool for a drawing. |
+| `draw_read_page` | List the shapes on Draw page 'page' (1-based): each shape's index, name, kind, and any text. |
+| `draw_add_page` | Append a new page to the Draw document, optionally naming it. Returns the new page's 1-based number. |
+| `draw_insert_shape` | Add an auto shape (rectangle, ellipse, line, text) to Draw page 'page' (1-based, default 1) with optional 'text' and 'fill_color' (hex). Position/size in millimetres. |
+| `draw_insert_text_box` | Add a text box holding 'text' to Draw page 'page' (1-based, default 1). Position/size in millimetres. |
+| `draw_insert_image` | Insert an image from local file 'path' onto Draw page 'page' (1-based, default 1). Position/size in millimetres; size defaults to the image's own dimensions. |
+| `draw_insert_connector` | Draw a connector line on Draw page 'page' (1-based, default 1) from (x1_mm,y1_mm) to (x2_mm,y2_mm). Optionally glue its ends to shapes by 1-based shape index (start_shape/end_shape) so the connector follows them. Draw's diagramming primitive. |

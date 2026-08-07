@@ -5,6 +5,35 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Impress advanced + Draw surface (200 → 212 tools)
+
+Second increment on top of the Impress MVP, plus a new Draw surface.
+
+- **Impress advanced (5 tools):** `impress_set_transition` (per-slide or whole
+  deck, on-click or timed auto-advance), `impress_export_slides` (render each
+  slide to PNG/SVG/JPG via `GraphicExportFilter` — real rendering, not a .pptx
+  writer capability), `impress_insert_table` (sized + filled from a data grid),
+  `impress_insert_chart` (column/bar/line/area/pie, embedded OLE chart fed from a
+  headers+categories grid), `impress_slideshow` (start/stop/status; start needs a
+  GUI session).
+- **Draw surface (`draw_*`, 7 tools):** a separate vector-drawing family —
+  `draw_overview`, `draw_read_page`, `draw_add_page`, `draw_insert_shape`,
+  `draw_insert_text_box`, `draw_insert_image`, and `draw_insert_connector`
+  (points, or glued to shapes by index — the diagramming primitive).
+  `create_document type:"draw"` + Draw PDF/SVG/PNG export filters.
+
+New live suite `tests/integration/test_draw_uno.py`; the Impress suite grew to
+cover every new tool. All exercised on a real LibreOffice 25.2.
+
+**Deliberately deferred (UNO not cooperative on LO 25.2, verified by probe):**
+- *Per-object animations* — the animation-node services
+  (`ParallelTimeContainer`, `AnimateSet`, …) are not instantiable through the
+  document factory, and an animation cannot be verified headless. Not shipped
+  rather than ship something flaky.
+- *Slide background / master-theme editing* — `page.Background` is null with no
+  instantiable fill bean, and the master-style path does not round-trip
+  predictably (set `0x1F3864`, read back `0x729FCF`).
+
 ### Added — Impress presentations (188 → 200 tools)
 
 The MCP server can now build a presentation end to end, driving a **live**

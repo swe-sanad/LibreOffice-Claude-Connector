@@ -180,11 +180,25 @@ tool — no new envelope.
   `export_document` to a temp PDF and assert the file exists and is non-empty.
   Run under the isolated-profile harness (`scripts/run_integration.ps1`), no API key.
 
-## Out of scope (next increments — flagged, not forgotten)
+## Out of scope for the MVP → mostly delivered in increment 2
 
-Slide transitions · per-object animations · running the slideshow · PNG/SVG
-per-slide export · tables · charts (incl. embedding a live Calc chart) ·
-master-slide / theme / template editing · the separate `draw_*` surface · Base.
+The next increment (see the CHANGELOG "Impress advanced + Draw surface" entry)
+landed most of this:
+
+- ✅ **Done:** slide transitions (`impress_set_transition`), PNG/SVG per-slide
+  export (`impress_export_slides`), tables (`impress_insert_table`), charts
+  (`impress_insert_chart`), running the slideshow (`impress_slideshow`), and the
+  separate `draw_*` surface (7 tools).
+- ⛔ **Deferred — UNO not cooperative on LO 25.2 (probed):**
+  - *Per-object animations* — the animation-node services
+    (`ParallelTimeContainer`, `AnimateSet`, …) are not instantiable via the
+    document factory, and an animation can't be verified headless. Not shipped
+    rather than ship a flaky tool.
+  - *Slide background / master-theme editing* — `page.Background` is null with no
+    instantiable fill bean, and the master-style path does not round-trip
+    (set `0x1F3864` → read back `0x729FCF`).
+- **Still genuinely future:** embedding a *live* Calc chart, template galleries,
+  and LibreOffice Base.
 
 ## Definition of done
 
