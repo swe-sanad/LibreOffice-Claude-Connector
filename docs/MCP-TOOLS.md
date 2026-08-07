@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **214 tools** of the `libreoffice` MCP server (v0.9.6), generated from
+All **215 tools** of the `libreoffice` MCP server (v0.9.7), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -286,6 +286,7 @@ All **214 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 | `calc_format_table` | Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range. |
 | `calc_clean_data` | Tidy a pasted or imported range: trim stray whitespace, turn numeric-looking text into real numbers, and drop fully empty rows. Formula cells are never rewritten. Defaults to the sheet's used range. NOTE: LibreOffice does not record bulk range writes for undo, so Ctrl+Z restores the deleted rows but not the trimmed values — say what will change before running it on data the user cannot re-import. |
 | `writer_format_document` | Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). |
+| `diagnose_document` | A read-only health check — the Writer counterpart of calc_detect_errors. Reports the structural problems worth fixing, each naming the tool that fixes it: Writer pseudo-headings (bold body text faking a heading), broken cross-references, images missing alt text, unfilled placeholders and leftover TODO/FIXME markers; Calc broken formula cells. Targets a specific open doc by index/title/url, else the active one. |
 
 ## Everyday tools borrowed from the sibling projects
 

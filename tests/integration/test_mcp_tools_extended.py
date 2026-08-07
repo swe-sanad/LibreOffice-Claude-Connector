@@ -1092,6 +1092,42 @@ def check_upstream_parity(tmpdir):
     server.tool_close_document({"save": False})
 
 
+def check_diagnose_document(tmpdir):
+    """diagnose_document (read-only health check): an un-alt'd image AND a
+    broken cross-reference are both reported, each naming its remediation tool."""
+    server.tool_create_document({"type": "writer"})
+    server.tool_writer_insert_heading({"text": "Report", "level": 1})
+    server.tool_writer_append_text({"text": "See the diagram below."})
+
+    # an image with NO alt text (Description/Title left blank).
+    png = os.path.join(tmpdir, "undocumented.png")
+    with open(png, "wb") as fh:
+        fh.write(_PNG)
+    server.tool_writer_insert_image({"path": png, "width_mm": 20, "height_mm": 20})
+
+    # a cross-reference to a bookmark that does not exist -> broken.
+    server.tool_writer_insert_cross_reference(
+        {"target": "ghost_anchor", "source": "bookmark", "show": "page"})
+
+    d = server.tool_diagnose_document({})
+    _assert(d["kind"] == "writer", d)
+    by_type = {}
+    for i in d["issues"]:
+        by_type.setdefault(i["type"], i)
+    _assert("missing_alt_text" in by_type,
+            "alt-text issue not reported: %r" % d["issues"])
+    _assert("broken_cross_reference" in by_type,
+            "broken cross-reference not reported: %r" % d["issues"])
+    _assert(d["summary"]["images_without_alt_text"] >= 1
+            and d["summary"]["broken_cross_references"] >= 1, d["summary"])
+    # each issue names the tool that fixes it (the whole point of the report).
+    _assert(by_type["missing_alt_text"]["fix"] == "set_alt_text", by_type)
+    _assert(by_type["broken_cross_reference"]["fix"]
+            == "writer_insert_cross_reference", by_type)
+    print("PASS: diagnose_document (alt-text + broken cross-reference reported)")
+    server.tool_close_document({"save": False})
+
+
 def main():
     os.environ["LO_UNO_PORT"] = str(PORT)
     server._desktop()
@@ -1116,6 +1152,8 @@ def main():
     check_fieldtest_fixes(tmpdir)
     print()
     check_upstream_parity(tmpdir)
+    print()
+    check_diagnose_document(tmpdir)
     print("\nALL EXTENDED MCP TOOL CHECKS PASSED (170-tool server drives real "
           "LibreOffice)")
     return 0

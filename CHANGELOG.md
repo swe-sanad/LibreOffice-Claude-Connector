@@ -5,7 +5,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added — Impress advanced + Draw surface (200 → 214 tools)
+### Added — Impress advanced + Draw surface (201 → 215 tools)
 
 Second increment on top of the Impress MVP, plus a new Draw surface.
 
@@ -44,7 +44,7 @@ cover every new tool. All exercised on a real LibreOffice 25.2.
 instantiable via the *document* factory — but they turned out to be creatable via
 the *component-context* factory, so `impress_add_animation` shipped instead.)
 
-### Added — Impress presentations (188 → 200 tools)
+### Added — Impress presentations (189 → 201 tools)
 
 The MCP server can now build a presentation end to end, driving a **live**
 LibreOffice Impress — the whole lifecycle in one `impress_*` family (12 tools, 8
@@ -72,6 +72,18 @@ index (probed live on LO 25.2 first — see `docs/PLAN-IMPRESS-MVP.md`). Bridge
 gains `is_impress`/`is_draw`. New live test `tests/integration/test_impress_uno.py`
 builds a deck and exports a PDF; the integration harness now forces the socket
 (`LO_UNO_PIPE=0`) so tests never touch the user's real session.
+
+## [0.9.7] — 2026-08-04
+
+### Added
+
+- **`diagnose_document`** (188 → 189 tools) — a read-only Writer/Calc health
+  check, the Writer counterpart of `calc_detect_errors`. Builds on the existing
+  lifecycle facts and reports the structural problems worth fixing, each naming
+  the tool that fixes it: Writer pseudo-headings (bold body text faking a
+  heading), broken cross-references, images missing alt text, unfilled
+  placeholder fields and leftover TODO/FIXME markers; Calc broken formula cells.
+  Advertised in the everyday tier.
 
 ## [0.9.6] — 2026-07-26
 
