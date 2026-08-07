@@ -1,54 +1,73 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Sanad Arousi
-"""Regenerate docs/MCP-TOOLS.md from TOOL_DEFS in mcp/libreoffice_mcp.py.
+"""Regenerate docs/MCP-TOOLS.md from the live tool registry.
 
-Parses the source (no `uno` runtime needed), so it runs under any Python 3.8+:
+    "C:/Program Files/LibreOffice/program/python.exe" scripts/gen_mcp_tools_doc.py
 
-    python scripts/gen_mcp_tools_doc.py
+This used to scrape `TOOL_DEFS = [...]` out of one big file with a regex. The
+server is a package now, so it imports the registry instead — which is both
+simpler and honest: the document then describes what the server ACTUALLY
+registers, not what the source happens to look like. It does need LibreOffice's
+Python, because importing the package pulls in the modules (still no running
+office: `uno` itself is imported lazily).
+
+One section per tool module, so the document mirrors the code layout.
 """
 import io
-import json
 import os
-import re
+import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC = os.path.join(ROOT, "mcp", "libreoffice_mcp.py")
 OUT = os.path.join(ROOT, "docs", "MCP-TOOLS.md")
+sys.path.insert(0, os.path.join(ROOT, "mcp"))
+
+import libreoffice_mcp  # noqa: E402
+from loconn import registry  # noqa: E402
+
+TITLES = {
+    "shared": "Cross-application", "calc": "Calc", "writer": "Writer",
+}
 
 
 def main():
-    src = io.open(SRC, encoding="utf-8").read()
-    version = re.search(r'SERVER_VERSION = "([^"]+)"', src).group(1)
-    body = re.search(r"TOOL_DEFS = \[(.*?)\n\]", src, re.S).group(1)
-
+    # group by the module each tool registered from
     sections = []
-    cur = None
-    pattern = (r'# --- (.+?) ---'
-               r'|\{"name": "([a-z_]+)",\s*"description": (".*?"),\s*\n?\s*"inputSchema"')
-    for m in re.finditer(pattern, body, re.S):
-        if m.group(1):
-            cur = {"title": m.group(1), "tools": []}
-            sections.append(cur)
-        else:
-            desc = json.loads(re.sub(r'"\s*\n\s*"', "", m.group(3)))
-            if cur is None:
-                cur = {"title": "misc", "tools": []}
-                sections.append(cur)
-            cur["tools"].append((m.group(2), desc))
+    for definition in registry.TOOL_DEFS:
+        module = registry.TOOLS[definition["name"]].__module__.rsplit(".", 1)[-1]
+        if not sections or sections[-1]["module"] != module:
+            sections.append({"module": module, "tools": []})
+        sections[-1]["tools"].append(definition)
 
     total = sum(len(s["tools"]) for s in sections)
-    out = ["# MCP tool reference", "",
-           "All **%d tools** of the `libreoffice` MCP server (v%s), generated from"
-           % (total, version),
-           "`mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in",
-           "`docs/DEVELOPMENT.md` after adding tools.", ""]
-    for s in sections:
-        out += ["## %s" % s["title"].capitalize(), "",
-                "| Tool | Description |", "|---|---|"]
-        out += ["| `%s` | %s |" % (n, d.replace("|", "\\|")) for n, d in s["tools"]]
+    basic = len(registry.BASIC_TOOLS)
+    out = [
+        "# MCP tool reference", "",
+        "All **%d tools** of the `libreoffice` MCP server (v%s), generated from the"
+        % (total, libreoffice_mcp.SERVER_VERSION),
+        "live registry by `scripts/gen_mcp_tools_doc.py`. Do not edit by hand.", "",
+        "**%d** are advertised by default; the rest are reachable by name through"
+        % basic,
+        "`dispatch`. Set `LO_TOOLS=full` to advertise them all. A ✅ marks a tool in",
+        "the everyday tier.", "",
+        "One section per source module — the document mirrors `mcp/loconn/tools/`.",
+        "",
+    ]
+    for section in sections:
+        app, _, concern = section["module"].partition("_")
+        title = TITLES.get(app, app.title())
+        heading = "%s — %s" % (title, concern) if concern else title
+        out += ["## %s" % heading, "",
+                "| Tool | | Description |", "|---|---|---|"]
+        for definition in section["tools"]:
+            name = definition["name"]
+            out.append("| `%s` | %s | %s |" % (
+                name, "✅" if name in registry.BASIC_TOOLS else "",
+                definition["description"].replace("|", "\\|")))
         out.append("")
+
     io.open(OUT, "w", encoding="utf-8", newline="").write("\n".join(out))
-    print("wrote %s: %d tools in %d sections" % (OUT, total, len(sections)))
+    print("wrote %s: %d tools (%d advertised) in %d sections"
+          % (OUT, total, basic, len(sections)))
 
 
 if __name__ == "__main__":

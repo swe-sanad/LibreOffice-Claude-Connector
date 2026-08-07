@@ -5,6 +5,38 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Changed — the server is a package, not one 9,000-line file
+
+`mcp/libreoffice_mcp.py` had grown to **9,048 lines**. Both sibling projects are
+modular (Nelson keeps one file per tool); this one was not, and every tool had to
+be declared in **four separate global lists** thousands of lines apart — a drift
+bug the offline suite existed to catch after the fact.
+
+- **`mcp/loconn/registry.py`** — `register()` gives each tool ONE declaration
+  site next to its code, and validates at **import** time: a schema with no
+  handler, a handler with no schema, a duplicate name, or a tier naming an
+  unknown tool is now an `ImportError` rather than a runtime surprise.
+- **`mcp/loconn/core.py`** — the shared UNO machinery (connection, document
+  selection, undo grouping, error classification, call timeout) in one place.
+- **`mcp/loconn/tools/<app>_<concern>.py`** — 14 modules, per application then
+  per concern: `calc_{data,sheets,format,analysis}`,
+  `writer_{text,structure,format,tables}`,
+  `shared_{lifecycle,properties,recovery,automation}`, and the `impress` and
+  `draw` families.
+- **`mcp/libreoffice_mcp.py` is now ~240 lines** and holds only the protocol:
+  initialize, tools/list, tools/call, prompts, and the stdin loop.
+
+Behaviour is unchanged, and that is checked rather than asserted: the rebuilt
+registry was compared against the pre-refactor module and matches on tool names,
+every JSON schema, the handler bound to each name, and both tier sets. Only the
+*order* of `tools/list` differs — tools now group by module.
+
+- `scripts/gen_mcp_tools_doc.py` imports the registry instead of scraping
+  `TOOL_DEFS` with a regex, so `docs/MCP-TOOLS.md` now describes what the server
+  actually registers, marks the everyday tier, and mirrors the module layout.
+- `scripts/build_mcpb.py` ships the whole package, globbed — a new tool module
+  can no longer be silently left out of a release.
+
 ### Fixed
 
 - **`print_settings` was broken for Calc** (shipped in 0.9.6). Calc keeps its

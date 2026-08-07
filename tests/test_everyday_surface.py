@@ -14,16 +14,59 @@ import unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "mcp"))
 import libreoffice_mcp as m  # noqa: E402
+# A few helpers/constants moved out of core.py into the tool module that is
+# their sole consumer (module split, docs/ARCHITECTURE.md) — imported directly
+# from their new home instead of expecting `m` (the entry point) to re-export
+# private, single-consumer internals.
+from loconn.tools import calc_analysis as _calc_analysis    # noqa: E402
+from loconn.tools import calc_data as _calc_data            # noqa: E402
+from loconn.tools import calc_format as _calc_format        # noqa: E402
+from loconn.tools import shared_automation as _shared_automation  # noqa: E402
+from loconn.tools import shared_properties as _shared_properties  # noqa: E402
+from loconn.tools import writer_format as _writer_format    # noqa: E402
+from loconn.tools import writer_structure as _writer_structure  # noqa: E402
+from loconn import core as _core                            # noqa: E402
+from loconn.tools import shared_lifecycle as _shared_lifecycle  # noqa: E402
+from loconn.tools import impress as _impress                 # noqa: E402
+
+try:                     # only LibreOffice's own interpreter ships `uno`
+    import uno           # noqa: F401
+    HAS_UNO = True
+except ImportError:      # stock CPython: skip the handful of tests that build
+    HAS_UNO = False      # real UNO structs, and run the other ~165 anywhere
+
+
+def setUpModule():
+    """Make this suite genuinely offline.
+
+    It is advertised as needing no LibreOffice, but `_enter_undo` reaches for
+    the current document, which connects — and with no office running that
+    falls all the way through to AUTO-LAUNCHING one and waiting ~70s for it to
+    boot. The suite passed either way, so the cost hid behind a machine that
+    happened to have LibreOffice open.
+
+    Refusing to connect makes the offline claim true and enforced: any test
+    that starts needing an office fails loudly here instead of silently
+    starting one.
+    """
+    global _real_connect
+    _real_connect = _core._connect
+    def _refuse():
+        raise RuntimeError("the offline suite must not connect to LibreOffice")
+    _core._connect = _refuse
+
+
+def tearDownModule():
+    _core._connect = _real_connect
 
 
 class ToolRegistryTest(unittest.TestCase):
-    """TOOLS and TOOL_DEFS drifting apart is this file's classic bug: a handler
-    with no schema is invisible, a schema with no handler is a runtime error."""
-
-    def test_every_def_has_a_handler_and_vice_versa(self):
-        defs = {d["name"] for d in m.TOOL_DEFS}
-        self.assertEqual(defs - set(m.TOOLS), set(), "schema without a handler")
-        self.assertEqual(set(m.TOOLS) - defs, set(), "handler without a schema")
+    """A handler with no schema is invisible; a schema with no handler is a
+    runtime error — but registry.register() now rejects both at IMPORT time
+    (tests/test_registry.py), so a generic 'do TOOLS and TOOL_DEFS agree'
+    assertion here could no longer fail and was removed. What's left checks
+    that SPECIFIC tools this file cares about actually made it in and are
+    advertised — register() has no opinion on that."""
 
     def test_composites_are_registered(self):
         for name in ("calc_overview", "calc_format_table", "calc_clean_data",
@@ -57,8 +100,8 @@ class DiagnoseDocumentTest(unittest.TestCase):
     def test_body_styles_cover_the_default(self):
         # the default body style must count as "body", or a bold one-liner in a
         # fresh document would never be flagged as a pseudo-heading
-        self.assertIn("Standard", m._BODY_STYLES)
-        self.assertIn("Default Paragraph Style", m._BODY_STYLES)
+        self.assertIn("Standard", _shared_properties._BODY_STYLES)
+        self.assertIn("Default Paragraph Style", _shared_properties._BODY_STYLES)
 
 
 class CalcErrorTableTest(unittest.TestCase):
@@ -66,10 +109,10 @@ class CalcErrorTableTest(unittest.TestCase):
         # the four a student sees on a broken sheet
         for code, marker in ((532, "#DIV/0!"), (524, "#REF!"),
                              (525, "#NAME?"), (519, "#VALUE!")):
-            self.assertIn(marker, m._CALC_ERRORS[code])
+            self.assertIn(marker, _calc_analysis._CALC_ERRORS[code])
 
     def test_every_entry_names_a_marker(self):
-        for code, text in m._CALC_ERRORS.items():
+        for code, text in _calc_analysis._CALC_ERRORS.items():
             self.assertTrue(text.startswith("#"),
                             "code %s should start with the cell marker" % code)
 
@@ -272,24 +315,25 @@ class RecoveryToolsTest(unittest.TestCase):
                 m.TOOLS[tool]({"action": action})
 
 
+@unittest.skipUnless(HAS_UNO, "builds a real com.sun.star.lang.Locale struct")
 class LocaleNumberFormatTest(unittest.TestCase):
     def test_parses_bcp47_tags(self):
         for tag, lang, country in (("ar-LY", "ar", "LY"), ("en_US", "en", "US"),
                                    ("de", "de", "")):
-            loc = m._parse_locale(tag)
+            loc = _calc_format._parse_locale(tag)
             self.assertEqual((loc.Language, loc.Country), (lang, country), tag)
 
     def test_empty_tag_means_the_document_locale(self):
-        loc = m._parse_locale(None)
+        loc = _calc_format._parse_locale(None)
         self.assertEqual((loc.Language, loc.Country), ("", ""))
 
     def test_constants_match_the_uno_api(self):
         # these are fixed by com.sun.star.util.NumberFormat; a wrong value here
         # silently formats money as a date
-        self.assertEqual(m._NUMBER_TYPES["currency"], 8)
-        self.assertEqual(m._NUMBER_TYPES["percent"], 128)
-        self.assertEqual(m._NUMBER_TYPES["date"], 2)
-        self.assertEqual(m._NUMBER_TYPES["number"], 16)
+        self.assertEqual(_calc_format._NUMBER_TYPES["currency"], 8)
+        self.assertEqual(_calc_format._NUMBER_TYPES["percent"], 128)
+        self.assertEqual(_calc_format._NUMBER_TYPES["date"], 2)
+        self.assertEqual(_calc_format._NUMBER_TYPES["number"], 16)
 
 
 class DocumentWatchTest(unittest.TestCase):
@@ -339,26 +383,26 @@ class MetadataPrintFormsTest(unittest.TestCase):
         # the controls a real fillable form needs, beyond the original five
         for kind in ("radio", "combobox", "date", "time", "numeric", "currency",
                      "pattern", "formatted", "groupbox", "file", "imagebutton"):
-            self.assertIn(kind, m._FORM_COMPONENTS)
-        self.assertGreaterEqual(len(m._FORM_COMPONENTS), 19)
+            self.assertIn(kind, _shared_automation._FORM_COMPONENTS)
+        self.assertGreaterEqual(len(_shared_automation._FORM_COMPONENTS), 19)
 
     def test_imagebutton_is_not_treated_as_labelled(self):
         # it has no Label property at all — setting one raises AttributeError,
         # which is how this shipped broken the first time
-        self.assertNotIn("imagebutton", m._FORM_LABELLED)
+        self.assertNotIn("imagebutton", _shared_automation._FORM_LABELLED)
 
     def test_form_kinds_advertised_match_the_implementation(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
         enum = by_name["insert_form_control"]["inputSchema"]["properties"]["kind"]["enum"]
-        self.assertEqual(sorted(enum), sorted(m._FORM_COMPONENTS))
+        self.assertEqual(sorted(enum), sorted(_shared_automation._FORM_COMPONENTS))
 
     def test_print_option_lists_are_per_application(self):
         # offering a Writer switch on a Calc doc just raises at the office
-        self.assertIn("PrintProspectRTL", m._PRINT_SETTINGS_WRITER)
-        self.assertIn("PrintFormulas", m._PRINT_SETTINGS_CALC)
+        self.assertIn("PrintProspectRTL", _shared_properties._PRINT_SETTINGS_WRITER)
+        self.assertIn("PrintFormulas", _shared_properties._PRINT_SETTINGS_CALC)
         # 0.9.6 believed PrintEmptyPages was common to both; it is a Writer
         # document-setting only, and Calc's switches live on the page style
-        self.assertNotIn("PrintEmptyPages", m._PRINT_SETTINGS_CALC)
+        self.assertNotIn("PrintEmptyPages", _shared_properties._PRINT_SETTINGS_CALC)
 
     def test_print_settings_rejects_a_foreign_option(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
@@ -367,7 +411,7 @@ class MetadataPrintFormsTest(unittest.TestCase):
     def test_content_control_kinds_match_the_schema(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
         enum = by_name["writer_content_control"]["inputSchema"]["properties"]["kind"]["enum"]
-        self.assertEqual(sorted(enum), sorted(m._CONTENT_CONTROL_KINDS))
+        self.assertEqual(sorted(enum), sorted(_writer_structure._CONTENT_CONTROL_KINDS))
 
     def test_pdf_accessibility_and_form_options_are_advertised(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
@@ -465,15 +509,15 @@ class CalcParityTest(unittest.TestCase):
         # property here raises UnknownPropertyException at the office
         for prop in ("PrintGrid", "PrintFormulas", "PrintHeaders",
                      "PrintCharts", "PrintZeroValues", "PrintDownFirst"):
-            self.assertIn(prop, m._PRINT_SETTINGS_CALC)
+            self.assertIn(prop, _shared_properties._PRINT_SETTINGS_CALC)
 
     def test_calc_print_options_exclude_invented_names(self):
         # these were guessed in 0.9.6 and do not exist on a Calc page style
         for bogus in ("PrintAllSheets", "PrintEmptyPages", "PrintNotes"):
-            self.assertNotIn(bogus, m._PRINT_SETTINGS_CALC, bogus)
+            self.assertNotIn(bogus, _shared_properties._PRINT_SETTINGS_CALC, bogus)
 
     def test_writer_and_calc_print_lists_stay_disjoint(self):
-        self.assertEqual(set(m._PRINT_SETTINGS_WRITER) & set(m._PRINT_SETTINGS_CALC),
+        self.assertEqual(set(_shared_properties._PRINT_SETTINGS_WRITER) & set(_shared_properties._PRINT_SETTINGS_CALC),
                          set(), "an option in both lists would hide a routing bug")
 
     def test_calc_find_advertises_both_search_modes(self):
@@ -485,39 +529,39 @@ class CalcParityTest(unittest.TestCase):
 class LooksNumericTest(unittest.TestCase):
     def test_accepts_real_numbers(self):
         for text in ("3", "10.5", "-2", "+0.5", "1e3", ".5"):
-            self.assertTrue(m._looks_numeric(text), text)
+            self.assertTrue(_calc_data._looks_numeric(text), text)
 
     def test_rejects_text_and_pythons_float_extras(self):
         # float() accepts all of these; a user does not mean them as numbers
         for text in ("", "abc", "nan", "inf", "-inf", "Infinity", "1_000", "3 4"):
-            self.assertFalse(m._looks_numeric(text), text)
+            self.assertFalse(_calc_data._looks_numeric(text), text)
 
 
 class CleanCellTest(unittest.TestCase):
     def test_trims_text_and_leaves_other_types_alone(self):
-        self.assertEqual(m._clean_cell("  hi  "), "hi")
-        self.assertEqual(m._clean_cell(""), "")
-        self.assertEqual(m._clean_cell(3.5), 3.5)
-        self.assertIsNone(m._clean_cell(None))
+        self.assertEqual(_calc_data._clean_cell("  hi  "), "hi")
+        self.assertEqual(_calc_data._clean_cell(""), "")
+        self.assertEqual(_calc_data._clean_cell(3.5), 3.5)
+        self.assertIsNone(_calc_data._clean_cell(None))
 
     def test_drops_calcs_force_text_marker_from_numeric_text(self):
         # getFormulaArray() renders numeric-LOOKING text with a leading "'";
         # leaving it in place is what kept " 3 " stuck as text (live-verified)
-        self.assertEqual(m._clean_cell("' 3 "), "3")
-        self.assertEqual(m._clean_cell("'10.5"), "10.5")
-        self.assertEqual(m._clean_cell("'-2"), "-2")
+        self.assertEqual(_calc_data._clean_cell("' 3 "), "3")
+        self.assertEqual(_calc_data._clean_cell("'10.5"), "10.5")
+        self.assertEqual(_calc_data._clean_cell("'-2"), "-2")
 
     def test_keeps_the_marker_when_the_body_is_not_a_number(self):
         # dropping it here would silently change what the cell says
-        self.assertEqual(m._clean_cell("'hello "), "'hello")
-        self.assertEqual(m._clean_cell("'nan"), "'nan")
+        self.assertEqual(_calc_data._clean_cell("'hello "), "'hello")
+        self.assertEqual(_calc_data._clean_cell("'nan"), "'nan")
 
 
 class PresetTest(unittest.TestCase):
     def test_preset_enums_match_the_implementations(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
-        pairs = [("calc_format_table", m._TABLE_PRESETS),
-                 ("writer_format_document", m._DOC_PRESETS)]
+        pairs = [("calc_format_table", _calc_format._TABLE_PRESETS),
+                 ("writer_format_document", _writer_format._DOC_PRESETS)]
         for tool, presets in pairs:
             enum = by_name[tool]["inputSchema"]["properties"]["preset"]["enum"]
             self.assertEqual(sorted(enum), sorted(presets),
@@ -533,10 +577,10 @@ class ImpressWiringTest(unittest.TestCase):
         self.assertIn("impress", enum)
 
     def test_impress_factory_url_registered(self):
-        self.assertEqual(m._FACTORY_URLS["impress"], "private:factory/simpress")
+        self.assertEqual(_shared_lifecycle._FACTORY_URLS["impress"], "private:factory/simpress")
 
     def test_impress_pdf_filter_registered(self):
-        self.assertEqual(m._FILTERS[("impress", "pdf")], "impress_pdf_Export")
+        self.assertEqual(_shared_lifecycle._FILTERS[("impress", "pdf")], "impress_pdf_Export")
 
 
 class ImpressRegistryTest(unittest.TestCase):
@@ -578,7 +622,7 @@ class ImpressRegistryTest(unittest.TestCase):
     def test_layout_names_match_the_add_slide_enum(self):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
         enum = by_name["impress_add_slide"]["inputSchema"]["properties"]["layout"]["enum"]
-        self.assertEqual(sorted(enum), sorted(m._IMPRESS_LAYOUTS))
+        self.assertEqual(sorted(enum), sorted(_impress._IMPRESS_LAYOUTS))
 
 
 class DrawRegistryTest(unittest.TestCase):
@@ -606,7 +650,7 @@ class DrawRegistryTest(unittest.TestCase):
         by_name = {d["name"]: d for d in m.TOOL_DEFS}
         enum = by_name["create_document"]["inputSchema"]["properties"]["type"]["enum"]
         self.assertIn("draw", enum)
-        self.assertEqual(m._FACTORY_URLS["draw"], "private:factory/sdraw")
+        self.assertEqual(_shared_lifecycle._FACTORY_URLS["draw"], "private:factory/sdraw")
 
 
 if __name__ == "__main__":

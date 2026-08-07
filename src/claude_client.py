@@ -130,6 +130,28 @@ def extract_text(payload: Dict[str, Any]) -> str:
     return "".join(parts)
 
 
+_SSL_CONTEXT = None
+
+
+def _shared_ssl_context() -> "ssl.SSLContext":
+    """The TLS context, built once per process.
+
+    ``ssl.create_default_context()`` loads the OS trust store, which measured
+    **2.7-5 seconds** on Windows. It used to run in ``ClaudeClient.__init__``,
+    so every client paid it — the offline test suite spent ~30s doing nothing
+    else, and in the extension a user waited that long before the first byte of
+    their transform went out. The store is the same for every client, so build
+    it once and share it. Contexts are safe to reuse across connections.
+
+    ponytail: system CA store only; add a ca_file arg if a TLS-inspecting proxy
+    ever needs a custom bundle.
+    """
+    global _SSL_CONTEXT
+    if _SSL_CONTEXT is None:
+        _SSL_CONTEXT = ssl.create_default_context()
+    return _SSL_CONTEXT
+
+
 def _require_https(url: str) -> None:
     """Reject a base URL that would send the API key in cleartext.
 
@@ -249,11 +271,7 @@ class ClaudeClient:
         self.timeout = float(timeout)
         self.max_retries = int(max_retries)
         self._sleep = sleep
-        # Build the TLS context once from the OS trust store; api.anthropic.com
-        # chains to a public root, so this "just works".
-        # ponytail: system CA store only; add a ca_file arg if a TLS-inspecting
-        # proxy ever needs a custom bundle.
-        self._ssl_context = ssl.create_default_context()
+        self._ssl_context = _shared_ssl_context()
 
     # -- public API -------------------------------------------------------- #
 
