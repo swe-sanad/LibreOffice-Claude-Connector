@@ -121,6 +121,39 @@ def main():
         os.remove(out)
         print("PASS: export_document -> impress_pdf_Export (real PDF)")
 
+        # --- Increment 2, wave 1: transition + table + per-slide export -----
+        server.tool_impress_set_transition({"all": True, "type": "fade",
+                                             "duration": 1.5})
+        pg1 = server._impress_pages().getByIndex(0)
+        _assert(pg1.TransitionType != 0, "transition applied: %r" % pg1.TransitionType)
+        print("PASS: impress_set_transition")
+
+        ts = server.tool_impress_add_slide({"layout": "title_only"})["slide"]
+        server.tool_impress_insert_table({"slide": ts, "data": [
+            ["Region", "Q1", "Q2"], ["APAC", "120", "135"], ["EMEA", "90", "110"]]})
+        model = None
+        pg = server._impress_pages().getByIndex(ts - 1)
+        for i in range(pg.getCount()):
+            shp = pg.getByIndex(i)
+            if hasattr(shp, "Model") and hasattr(shp.Model, "RowCount"):
+                model = shp.Model
+                break
+        _assert(model is not None, "table shape present")
+        _assert(model.RowCount == 3 and model.ColumnCount == 3,
+                "table size: %sx%s" % (model.RowCount, model.ColumnCount))
+        _assert(model.getCellByPosition(0, 0).getString() == "Region",
+                "table cell content")
+        print("PASS: impress_insert_table")
+
+        import tempfile
+        d = os.path.join(tempfile.gettempdir(), "impress_slides_probe")
+        r = server.tool_impress_export_slides({"dir": d, "format": "png"})
+        _assert(r["count"] >= 1 and all(os.path.getsize(f) > 0 for f in r["files"]),
+                "png export: %r" % r)
+        for f in r["files"]:
+            os.remove(f)
+        print("PASS: impress_export_slides (PNG per slide)")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

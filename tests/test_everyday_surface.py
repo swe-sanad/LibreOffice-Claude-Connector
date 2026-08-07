@@ -489,11 +489,13 @@ class ImpressRegistryTest(unittest.TestCase):
 
     ADVERTISED = ("impress_overview", "impress_read_slide", "impress_add_slide",
                   "impress_set_title", "impress_set_content", "impress_set_notes",
-                  "impress_insert_image", "impress_insert_shape")
+                  "impress_insert_image", "impress_insert_shape",
+                  "impress_set_transition", "impress_export_slides",
+                  "impress_insert_table")
     # registered and reachable via dispatch, but not in the everyday tier
     DISPATCH_ONLY = ("impress_insert_text_box", "impress_set_layout",
                      "impress_delete_slide", "impress_duplicate_slide")
-    READ_ONLY = ("impress_overview", "impress_read_slide")
+    READ_ONLY = ("impress_overview", "impress_read_slide", "impress_export_slides")
 
     def test_mutating_impress_tools_are_not_no_undo(self):
         for name in ("impress_add_slide", "impress_set_title", "impress_set_notes",

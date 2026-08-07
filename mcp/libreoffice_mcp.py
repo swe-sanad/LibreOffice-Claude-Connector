@@ -196,7 +196,7 @@ calc_select_range calc_set_active_sheet calc_recalculate
 writer_get_comments writer_get_outline writer_get_paragraphs writer_get_text
 writer_list_figures writer_list_objects writer_list_tables writer_read_table
 writer_find writer_word_count
-impress_overview impress_read_slide
+impress_overview impress_read_slide impress_export_slides
 set_view_zoom set_document_modified
 """.split())
 
@@ -7669,6 +7669,113 @@ def tool_impress_duplicate_slide(args):
             "count": doc.getDrawPages().getCount()}
 
 
+# friendly name -> (TransitionType, TransitionSubType) SMIL constant names,
+# resolved at runtime via uno.getConstantByName so no fragile ints are hardcoded
+_IMPRESS_TRANSITIONS = {
+    "none": None,
+    "fade": ("FADE", "CROSSFADE"),
+    "wipe": ("BARWIPE", "LEFTTORIGHT"),
+    "push": ("PUSHWIPE", "FROMRIGHT"),
+    "cover": ("SLIDEWIPE", "FROMRIGHT"),
+    "uncover": ("SLIDEWIPE", "FROMLEFT"),
+    "dissolve": ("DISSOLVE", "DEFAULT"),
+    "wheel": ("PINWHEELWIPE", "ONEBLADE"),
+    "cut": ("BARWIPE", "LEFTTORIGHT"),
+}
+
+
+def _impress_target_slides(args):
+    """Slides to act on: every slide when 'all' is true, else the one 'slide'."""
+    pages = _impress_pages()
+    if args.get("all"):
+        return [pages.getByIndex(i) for i in range(pages.getCount())]
+    return [_impress_slide(pages, args["slide"])]
+
+
+def tool_impress_set_transition(args):
+    import uno
+    name = str(args.get("type", "fade")).lower()
+    if name not in _IMPRESS_TRANSITIONS:
+        raise RuntimeError("type must be one of %s" % sorted(_IMPRESS_TRANSITIONS))
+    pair = _IMPRESS_TRANSITIONS[name]
+    advance = args.get("advance_secs")   # None -> on click; number -> auto after N s
+    pages = _impress_target_slides(args)
+    for page in pages:
+        if pair is None:
+            page.TransitionType = 0
+        else:
+            page.TransitionType = uno.getConstantByName(
+                "com.sun.star.animations.TransitionType." + pair[0])
+            page.TransitionSubtype = uno.getConstantByName(
+                "com.sun.star.animations.TransitionSubType." + pair[1])
+        if args.get("duration") is not None:
+            page.TransitionDuration = float(args["duration"])
+        if advance is None:
+            page.Change = 0                       # advance on click
+        else:
+            page.Change = 1                       # automatic
+            page.Duration = int(advance)          # seconds to wait
+    return {"slides": len(pages), "type": name}
+
+
+_SLIDE_IMG_FILTERS = {"png": "image/png", "svg": "image/svg+xml",
+                      "jpg": "image/jpeg", "jpeg": "image/jpeg"}
+
+
+def tool_impress_export_slides(args):
+    fmt = str(args.get("format", "png")).lower()
+    media = _SLIDE_IMG_FILTERS.get(fmt)
+    if media is None:
+        raise RuntimeError("format must be one of %s" % sorted(_SLIDE_IMG_FILTERS))
+    out_dir = args["dir"]
+    if not os.path.isdir(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+    pages = _impress_target_slides(args) if (args.get("all") or args.get("slide")) \
+        else [p for p in _impress_target_slides({"all": True})]
+    state = _connect()
+    gef = state["smgr"].createInstanceWithContext(
+        "com.sun.star.drawing.GraphicExportFilter", state["ctx"])
+    written = []
+    all_pages = _impress_pages()
+    for page in pages:
+        n = page.Number
+        path = os.path.join(out_dir, "slide-%02d.%s" % (n, fmt))
+        gef.setSourceDocument(page)
+        gef.filter((_pv("URL", _to_url(path)), _pv("MediaType", media)))
+        written.append(os.path.abspath(path))
+    return {"format": fmt, "count": len(written), "files": written}
+
+
+def tool_impress_insert_table(args):
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    rows = int(args.get("rows", 0))
+    cols = int(args.get("cols", 0))
+    data = args.get("data")
+    if data:
+        rows = rows or len(data)
+        cols = cols or max((len(r) for r in data), default=0)
+    if rows < 1 or cols < 1:
+        raise RuntimeError("need rows>=1 and cols>=1 (or a non-empty 'data' grid)")
+    shape = doc.createInstance("com.sun.star.drawing.TableShape")
+    page.add(shape)
+    _place_shape(shape, args, dx=20, dy=40, dw=200, dh=80)
+    model = shape.Model
+    # a fresh table model is 1x1 — grow to the requested size
+    r_have, c_have = model.RowCount, model.ColumnCount
+    if rows > r_have:
+        model.Rows.insertByIndex(r_have, rows - r_have)
+    if cols > c_have:
+        model.Columns.insertByIndex(c_have, cols - c_have)
+    if data:
+        for r, row in enumerate(data):
+            for c, val in enumerate(row):
+                if r < rows and c < cols:
+                    model.getCellByPosition(c, r).setString(str(val))
+    return {"slide": int(args["slide"]), "rows": rows, "cols": cols,
+            "name": getattr(shape, "Name", "")}
+
+
 TOOLS = {
     # status & selection
     "lo_status": tool_lo_status,
@@ -7895,6 +8002,9 @@ TOOLS = {
     "impress_set_layout": tool_impress_set_layout,
     "impress_delete_slide": tool_impress_delete_slide,
     "impress_duplicate_slide": tool_impress_duplicate_slide,
+    "impress_set_transition": tool_impress_set_transition,
+    "impress_export_slides": tool_impress_export_slides,
+    "impress_insert_table": tool_impress_insert_table,
 }
 
 _STR = {"type": "string"}
@@ -8978,6 +9088,28 @@ TOOL_DEFS = [
     {"name": "impress_duplicate_slide",
      "description": "Duplicate slide 'slide' (1-based); the copy is inserted immediately after it. Returns the new slide's 1-based number.",
      "inputSchema": _schema({"slide": _INT}, ["slide"])},
+    {"name": "impress_set_transition",
+     "description": "Set the slide-change transition on slide 'slide' (1-based) or every slide ('all':true). 'type': none, fade, wipe, push, cover, uncover, dissolve, wheel, cut. 'duration' is the effect length (seconds); 'advance_secs' auto-advances after N seconds (omit = advance on click).",
+     "inputSchema": _schema({"slide": _INT, "all": _BOOL,
+                             "type": dict(_STR, enum=sorted(_IMPRESS_TRANSITIONS)),
+                             "duration": _NUM,
+                             "advance_secs": dict(_NUM, description="auto-advance after N seconds; omit for on-click")})},
+    {"name": "impress_export_slides",
+     "description": "Render slides to image files in directory 'dir' — one file per slide (slide-01.png, ...). 'format': png, svg, or jpg. Exports all slides unless 'slide' (1-based) is given. This is real rendering, not available to .pptx file writers.",
+     "inputSchema": _schema({"dir": dict(_STR, description="output directory (created if missing)"),
+                             "format": dict(_STR, enum=sorted(_SLIDE_IMG_FILTERS)),
+                             "slide": dict(_INT, description="export only this 1-based slide"),
+                             "all": _BOOL},
+                            ["dir"])},
+    {"name": "impress_insert_table",
+     "description": "Insert a table on slide 'slide' (1-based). Give 'rows'+'cols', or a 'data' grid (list of rows) to size and fill it in one call. Position/size in millimetres.",
+     "inputSchema": _schema({"slide": _INT,
+                             "rows": _INT, "cols": _INT,
+                             "data": {"type": "array", "items": {"type": "array"},
+                                      "description": "rows of cell values"},
+                             "x_mm": _NUM, "y_mm": _NUM,
+                             "width_mm": _NUM, "height_mm": _NUM},
+                            ["slide"])},
 ]
 
 
@@ -9072,6 +9204,7 @@ set_document_properties insert_form_control export_document
 impress_overview impress_read_slide impress_add_slide
 impress_set_title impress_set_content impress_set_notes
 impress_insert_image impress_insert_shape
+impress_set_transition impress_export_slides impress_insert_table
 """.split())
 
 
