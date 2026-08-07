@@ -5,6 +5,74 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added — Impress advanced + Draw surface (201 → 215 tools)
+
+Second increment on top of the Impress MVP, plus a new Draw surface.
+
+- **Impress advanced (7 tools):** `impress_set_transition` (per-slide or whole
+  deck, on-click or timed auto-advance), `impress_export_slides` (render each
+  slide to PNG/SVG/JPG via `GraphicExportFilter` — real rendering, not a .pptx
+  writer capability), `impress_insert_table` (sized + filled from a data grid),
+  `impress_insert_chart` (column/bar/line/area/pie, embedded OLE chart fed from a
+  headers+categories grid), `impress_set_background` (solid colour, an image
+  stretched to fill, or both — per slide or whole deck, with optional
+  transparency for a faint watermark; a full-slide rectangle, since LO 25.2
+  exposes no working DrawPage.Background fill; **every variant verified by
+  rendering the slide to PNG and inspecting the pixels**),
+  `impress_add_animation` (**per-object build-in animations** — appear / fade /
+  wipe / push / cover / dissolve / wheel, triggered on-click / with-previous /
+  after-previous; nodes built via the component-context factory, verified in the
+  live node tree and shown to survive a save/reload), `impress_slideshow`
+  (start/stop/status; start needs a GUI session).
+- **Draw surface (`draw_*`, 7 tools):** a separate vector-drawing family —
+  `draw_overview`, `draw_read_page`, `draw_add_page`, `draw_insert_shape`,
+  `draw_insert_text_box`, `draw_insert_image`, and `draw_insert_connector`
+  (points, or glued to shapes by index — the diagramming primitive).
+  `create_document type:"draw"` + Draw PDF/SVG/PNG export filters.
+
+New live suite `tests/integration/test_draw_uno.py`; the Impress suite grew to
+cover every new tool. All exercised on a real LibreOffice 25.2.
+
+**Still deferred:**
+- *Master-slide / theme templates* — the native `page.Background` /
+  `master.Background` fill does not apply (rendering a red master background came
+  out blue). `impress_set_background` covers per-slide colour/image/transparency
+  via the rendered rectangle technique; full master/theme templating (shared
+  layouts, colour schemes) remains future work.
+
+(Per-object animations were initially deferred here — the node services aren't
+instantiable via the *document* factory — but they turned out to be creatable via
+the *component-context* factory, so `impress_add_animation` shipped instead.)
+
+### Added — Impress presentations (189 → 201 tools)
+
+The MCP server can now build a presentation end to end, driving a **live**
+LibreOffice Impress — the whole lifecycle in one `impress_*` family (12 tools, 8
+advertised). This closes the largest app-coverage gap against the sibling
+projects and supersedes the existing LibreOffice/PowerPoint MCP servers: it
+matches their core deck-building loop and adds the things a `.pptx` file-writer
+(python-pptx) structurally cannot do — a **real PDF export**, first-class
+**speaker notes**, and the live-office foundation for animations and slideshow
+still to come.
+
+- **Create** — `create_document` now accepts `type:"impress"`; `export_document`
+  and `save_document` learned the Impress PDF/ODP/PPTX filters (the PDF export
+  filter is now document-kind-aware instead of always `calc_pdf_Export`).
+- **Structure** — `impress_add_slide` (with autolayouts), `impress_set_layout`,
+  `impress_duplicate_slide`, `impress_delete_slide`. Slides are addressed by a
+  1-based index throughout.
+- **Content** — `impress_set_title`, `impress_set_content` (bulleted, with
+  indent levels), `impress_insert_image`, `impress_insert_shape`,
+  `impress_insert_text_box`.
+- **Notes & read-back** — `impress_set_notes` (speaker notes),
+  `impress_overview` and `impress_read_slide` for orientation and verification.
+
+Placeholders resolve by UNO service / `IsPlaceholderDependent` rather than shape
+index (probed live on LO 25.2 first — see `docs/PLAN-IMPRESS-MVP.md`). Bridge
+gains `is_impress`/`is_draw`. New live test `tests/integration/test_impress_uno.py`
+builds a deck and exports a PDF; the integration harness now forces the socket
+(`LO_UNO_PIPE=0`) so tests never touch the user's real session.
+
 ## [0.9.7] — 2026-08-04
 
 ### Added
