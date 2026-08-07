@@ -7876,6 +7876,46 @@ def tool_impress_slideshow(args):
     return {"action": action, "running": running}
 
 
+_BG_SHAPE_NAME = "__mcp_background__"
+
+
+def tool_impress_set_background(args):
+    """Set a solid background colour on a slide (or every slide with 'all':true).
+    Implemented as a full-slide filled rectangle sent to the back — LO 25.2 does
+    not expose a working DrawPage.Background fill via the API (verified by
+    rendering), and this renders identically. Idempotent: replaces its own prior
+    background rectangle rather than stacking."""
+    from com.sun.star.drawing.FillStyle import SOLID
+    from com.sun.star.drawing.LineStyle import NONE as LINE_NONE
+    doc = _require_impress()
+    color = _hex_color(args["color"])
+    pages = _impress_target_slides(args)
+    for page in pages:
+        for i in range(page.getCount()):
+            shp = page.getByIndex(i)
+            if getattr(shp, "Name", "") == _BG_SHAPE_NAME:
+                page.remove(shp)
+                break
+        rect = doc.createInstance("com.sun.star.drawing.RectangleShape")
+        page.add(rect)
+        pos = _uno_struct("com.sun.star.awt.Point"); pos.X = 0; pos.Y = 0
+        siz = _uno_struct("com.sun.star.awt.Size")
+        siz.Width = page.Width; siz.Height = page.Height
+        rect.setPosition(pos); rect.setSize(siz)
+        rect.FillStyle = SOLID
+        rect.FillColor = color
+        try:
+            rect.LineStyle = LINE_NONE
+        except Exception:
+            pass
+        rect.Name = _BG_SHAPE_NAME
+        try:
+            rect.ZOrder = 0          # send behind the slide content
+        except Exception:
+            pass
+    return {"slides": len(pages), "color": args["color"]}
+
+
 def _draw_page(pages, one_based):
     n = pages.getCount()
     try:
@@ -8254,6 +8294,7 @@ TOOLS = {
     "impress_insert_table": tool_impress_insert_table,
     "impress_insert_chart": tool_impress_insert_chart,
     "impress_slideshow": tool_impress_slideshow,
+    "impress_set_background": tool_impress_set_background,
     # draw (vector drawings)
     "draw_overview": tool_draw_overview,
     "draw_read_page": tool_draw_read_page,
@@ -9381,6 +9422,11 @@ TOOL_DEFS = [
      "description": "Control the on-screen slideshow: action 'start' (optionally 'from_slide', 1-based), 'stop', or 'status'. Starting launches the show in the LibreOffice window, so it needs a GUI session (not a headless office). Returns whether a show is running.",
      "inputSchema": _schema({"action": dict(_STR, enum=["start", "stop", "status"]),
                              "from_slide": dict(_INT, description="1-based slide to start from")})},
+    {"name": "impress_set_background",
+     "description": "Set a solid background colour ('color', hex like '#2E4053') on slide 'slide' (1-based) or every slide ('all':true). Renders as a full-slide colour behind the content; calling again replaces it.",
+     "inputSchema": _schema({"slide": _INT, "all": _BOOL,
+                             "color": dict(_STR, description="hex colour, e.g. '#2E4053'")},
+                            ["color"])},
     # --- draw (vector drawings) — pages addressed by 1-based index ---
     {"name": "draw_overview",
      "description": "Read a Draw document: page count and, per page, its 1-based index, name, and shape count. The 'orient yourself' tool for a drawing.",
@@ -9512,7 +9558,7 @@ impress_overview impress_read_slide impress_add_slide
 impress_set_title impress_set_content impress_set_notes
 impress_insert_image impress_insert_shape
 impress_set_transition impress_export_slides impress_insert_table
-impress_insert_chart
+impress_insert_chart impress_set_background
 draw_overview draw_read_page draw_insert_shape draw_insert_text_box
 draw_insert_image draw_insert_connector
 """.split())

@@ -5,17 +5,19 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added — Impress advanced + Draw surface (200 → 212 tools)
+### Added — Impress advanced + Draw surface (200 → 213 tools)
 
 Second increment on top of the Impress MVP, plus a new Draw surface.
 
-- **Impress advanced (5 tools):** `impress_set_transition` (per-slide or whole
+- **Impress advanced (6 tools):** `impress_set_transition` (per-slide or whole
   deck, on-click or timed auto-advance), `impress_export_slides` (render each
   slide to PNG/SVG/JPG via `GraphicExportFilter` — real rendering, not a .pptx
   writer capability), `impress_insert_table` (sized + filled from a data grid),
   `impress_insert_chart` (column/bar/line/area/pie, embedded OLE chart fed from a
-  headers+categories grid), `impress_slideshow` (start/stop/status; start needs a
-  GUI session).
+  headers+categories grid), `impress_set_background` (solid colour per slide or
+  whole deck — a full-slide rectangle, since LO 25.2 exposes no working
+  DrawPage.Background fill; **verified by rendering the slide to PNG**),
+  `impress_slideshow` (start/stop/status; start needs a GUI session).
 - **Draw surface (`draw_*`, 7 tools):** a separate vector-drawing family —
   `draw_overview`, `draw_read_page`, `draw_add_page`, `draw_insert_shape`,
   `draw_insert_text_box`, `draw_insert_image`, and `draw_insert_connector`
@@ -28,11 +30,13 @@ cover every new tool. All exercised on a real LibreOffice 25.2.
 **Deliberately deferred (UNO not cooperative on LO 25.2, verified by probe):**
 - *Per-object animations* — the animation-node services
   (`ParallelTimeContainer`, `AnimateSet`, …) are not instantiable through the
-  document factory, and an animation cannot be verified headless. Not shipped
-  rather than ship something flaky.
-- *Slide background / master-theme editing* — `page.Background` is null with no
-  instantiable fill bean, and the master-style path does not round-trip
-  predictably (set `0x1F3864`, read back `0x729FCF`).
+  document factory, so the effect cannot be constructed; a static slide render
+  also cannot show a temporal effect. Not shipped rather than ship something
+  that does not work.
+- *Master-slide / theme templates* — the native `page.Background` /
+  `master.Background` fill does not apply (rendering a red master background came
+  out blue). `impress_set_background` covers solid per-slide colour via the
+  rendered rectangle technique; full master/theme templating remains future work.
 
 ### Added — Impress presentations (188 → 200 tools)
 

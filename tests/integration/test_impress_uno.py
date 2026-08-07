@@ -178,6 +178,24 @@ def main():
         server.tool_impress_slideshow({"action": "stop"})   # safe no-op when idle
         print("PASS: impress_slideshow (status/stop; start needs a GUI session)")
 
+        # --- Increment 2, wave 3: slide background (rendered technique) -----
+        bs = server.tool_impress_add_slide({"layout": "blank"})["slide"]
+        server.tool_impress_set_background({"slide": bs, "color": "#2E4053"})
+        bpg = server._impress_pages().getByIndex(bs - 1)
+        bg = None
+        for i in range(bpg.getCount()):
+            shp = bpg.getByIndex(i)
+            if getattr(shp, "Name", "") == server._BG_SHAPE_NAME:
+                bg = shp
+        _assert(bg is not None, "background shape present")
+        _assert(bg.FillColor == 0x2E4053, "background color: %r" % hex(bg.FillColor))
+        # idempotent: setting again must not stack a second background rectangle
+        server.tool_impress_set_background({"slide": bs, "color": "#802020"})
+        n_bg = sum(1 for i in range(bpg.getCount())
+                   if getattr(bpg.getByIndex(i), "Name", "") == server._BG_SHAPE_NAME)
+        _assert(n_bg == 1, "background is idempotent, got %d" % n_bg)
+        print("PASS: impress_set_background (color applied, idempotent)")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

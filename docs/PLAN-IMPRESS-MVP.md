@@ -187,18 +187,21 @@ landed most of this:
 
 - ✅ **Done:** slide transitions (`impress_set_transition`), PNG/SVG per-slide
   export (`impress_export_slides`), tables (`impress_insert_table`), charts
-  (`impress_insert_chart`), running the slideshow (`impress_slideshow`), and the
-  separate `draw_*` surface (7 tools).
-- ⛔ **Deferred — UNO not cooperative on LO 25.2 (probed):**
+  (`impress_insert_chart`), slide background colour (`impress_set_background`),
+  running the slideshow (`impress_slideshow`), and the separate `draw_*` surface
+  (7 tools).
+- ⛔ **Deferred — UNO not cooperative on LO 25.2 (probed + rendered):**
   - *Per-object animations* — the animation-node services
     (`ParallelTimeContainer`, `AnimateSet`, …) are not instantiable via the
-    document factory, and an animation can't be verified headless. Not shipped
-    rather than ship a flaky tool.
-  - *Slide background / master-theme editing* — `page.Background` is null with no
-    instantiable fill bean, and the master-style path does not round-trip
-    (set `0x1F3864` → read back `0x729FCF`).
+    document factory, so the effect cannot be built; and a static slide render
+    (the verification tool) cannot show a temporal effect. Not shipped.
+  - *Native background / master-theme templating* — `page.Background` /
+    `master.Background` fill does not apply (a red master background **rendered
+    blue** when exported to PNG). `impress_set_background` instead lays a
+    full-slide rectangle, which renders correctly; full master/theme templating
+    is future work.
 - **Still genuinely future:** embedding a *live* Calc chart, template galleries,
-  and LibreOffice Base.
+  auto-contrast text on dark backgrounds, and LibreOffice Base.
 
 ## Definition of done
 
