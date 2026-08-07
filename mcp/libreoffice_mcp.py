@@ -192,7 +192,7 @@ dispatch batch document_undo
 calc_read_range calc_get_cell_format calc_get_comments calc_get_conditional_formats
 calc_get_formulas calc_get_used_range calc_get_validation calc_list_charts
 calc_list_shapes calc_list_sheets calc_export_range calc_statistics
-calc_select_range calc_set_active_sheet calc_recalculate
+calc_select_range calc_set_active_sheet calc_recalculate calc_find
 writer_get_comments writer_get_outline writer_get_paragraphs writer_get_text
 writer_list_figures writer_list_objects writer_list_tables writer_read_table
 writer_find writer_word_count
@@ -7082,10 +7082,14 @@ _PRINT_SETTINGS_WRITER = (
     "PrintRightPages", "PrintReversed", "PrintProspect", "PrintProspectRTL",
     "PrintPaperFromSetup", "PrintFaxName", "PrintAnnotationMode",
 )
+# Calc keeps its print switches on the PAGE STYLE, not on the document settings
+# object — com.sun.star.document.Settings carries only PrinterName/PrinterSetup
+# for a spreadsheet. Getting this wrong is not a silent no-op: it raises
+# UnknownPropertyException at the office. (Verified on 25.2.3.2.)
 _PRINT_SETTINGS_CALC = (
-    "PrintAllSheets", "PrintEmptyPages", "PrintAnnotations", "PrintGrid",
-    "PrintHeaders", "PrintCharts", "PrintObjects", "PrintDrawing",
-    "PrintDownFirst", "PrintFormulas", "PrintNotes", "PrintZeroValues",
+    "PrintAnnotations", "PrintCharts", "PrintDownFirst", "PrintDrawing",
+    "PrintFormulas", "PrintGrid", "PrintHeaders", "PrintObjects",
+    "PrintZeroValues",
 )
 
 _PAPER_FORMATS = ("A3", "A4", "A5", "B4", "B5", "LETTER", "LEGAL", "TABLOID",
@@ -7122,27 +7126,162 @@ def tool_print_settings(args):
     if printer:
         doc.setPrinter(tuple(printer))
 
-    # --- the document's own print switches ---
+    # --- the print switches themselves ---
+    # Writer keeps them on the document settings; Calc keeps them on the page
+    # style of the active sheet. Same tool, two homes.
+    if kind == "calc":
+        sheet = doc.getCurrentController().getActiveSheet()
+        holder = doc.getStyleFamilies().getByName("PageStyles").getByName(
+            sheet.PageStyle)
+    else:
+        holder = doc.createInstance("com.sun.star.document.Settings")
+
     options = args.get("options") or {}
-    settings = doc.createInstance("com.sun.star.document.Settings")
     for name, value in options.items():
         if name not in wanted:
             raise RuntimeError(
                 "%r is not a print option for a %s document. Available: %s"
                 % (name, kind, ", ".join(wanted)))
-        settings.setPropertyValue(name, bool(value))
+        holder.setPropertyValue(name, bool(value))
         changed.append(name)
 
     current = {}
     for name in wanted:
         try:
-            current[name] = settings.getPropertyValue(name)
+            current[name] = holder.getPropertyValue(name)
         except Exception:
             pass
     return {"document": _doc_info(doc), "application": kind,
             "printer": {p.Name: str(p.Value) for p in doc.getPrinter()},
             "options": current, "changed": changed,
             "available_options": list(wanted)}
+
+
+def tool_calc_find(args):
+    """Search a workbook WITHOUT replacing anything — the read-only counterpart
+    to calc_find_replace, and the Calc twin of writer_find."""
+    doc = _require_calc()
+    sheets = doc.getSheets()
+    if args.get("sheet") not in (None, ""):
+        targets = [_resolve_sheet(doc, args["sheet"])]
+    else:
+        targets = [sheets.getByName(n) for n in sheets.getElementNames()]
+
+    text = args.get("search")
+    style = args.get("style")
+    if not text and not style:
+        raise RuntimeError("Give 'search' (text to look for) and/or 'style' "
+                           "(a cell style name) to search by.")
+    limit = int(args.get("max_results", 200))
+
+    found = []
+    for sheet in targets:
+        if len(found) >= limit:
+            break
+        desc = sheet.createSearchDescriptor()
+        # SearchStyles flips the meaning of SearchString from "this text" to
+        # "cells using this style", so the two are mutually exclusive.
+        desc.SearchString = style if style else text
+        desc.SearchStyles = bool(style)
+        desc.SearchCaseSensitive = bool(args.get("match_case", False))
+        desc.SearchWords = bool(args.get("whole_words", False))
+        desc.SearchRegularExpression = bool(args.get("regex", False)) and not style
+        cells = sheet.findAll(desc)
+        if cells is None:
+            continue
+        for i in range(cells.getCount()):
+            if len(found) >= limit:
+                break
+            addr = cells.getByIndex(i).getRangeAddress()
+            # a hit is a RANGE, not a cell: a style search over a styled A1:B1
+            # comes back as one range, so reporting only its first cell would
+            # silently under-report every match after the first column.
+            for row in range(addr.StartRow, addr.EndRow + 1):
+                for col in range(addr.StartColumn, addr.EndColumn + 1):
+                    if len(found) >= limit:
+                        break
+                    cell = sheet.getCellByPosition(col, row)
+                    found.append({
+                        "sheet": sheet.getName(),
+                        "cell": "%s%d" % (_col_letters(col), row + 1),
+                        "value": cell.getString(),
+                        "formula": cell.getFormula() or None,
+                        "style": cell.CellStyle,
+                    })
+    return {"matches": found, "count": len(found),
+            "truncated": len(found) >= limit,
+            "searched": "style" if style else "text",
+            "sheets_scanned": [s.getName() for s in targets]}
+
+
+def tool_calc_set_document_defaults(args):
+    """Set the workbook's base typography by editing the Default cell style —
+    the Calc twin of writer_set_document_defaults. Applied to Western, Complex
+    (RTL/CTL) and Asian scripts so an Arabic base font actually takes."""
+    doc = _require_calc()
+    default = doc.getStyleFamilies().getByName("CellStyles").getByName("Default")
+    changed = []
+    if args.get("font_name"):
+        name = str(args["font_name"])
+        for prop in ("CharFontName", "CharFontNameComplex", "CharFontNameAsian"):
+            setattr(default, prop, name)
+        changed.append("font_name")
+    if args.get("font_size") is not None:
+        size = float(args["font_size"])
+        for prop in ("CharHeight", "CharHeightComplex", "CharHeightAsian"):
+            setattr(default, prop, size)
+        changed.append("font_size")
+    if not changed:
+        raise RuntimeError("Give font_name and/or font_size.")
+    return {"style": "Default", "changed": changed,
+            "note": "Cells carrying their own explicit formatting keep it; this "
+                    "changes the baseline everything else inherits."}
+
+
+def tool_calc_set_header_footer(args):
+    """Page headers and footers for printing a spreadsheet — the Calc twin of
+    writer_set_header_footer. Each has independent left/centre/right parts."""
+    doc = _require_calc()
+    which = str(args.get("which", "header")).lower()
+    if which not in ("header", "footer"):
+        raise RuntimeError("which must be 'header' or 'footer'.")
+
+    sheet = (_resolve_sheet(doc, args["sheet"]) if args.get("sheet") not in (None, "")
+             else doc.getCurrentController().getActiveSheet())
+    style_name = args.get("style_name") or sheet.PageStyle
+    page = doc.getStyleFamilies().getByName("PageStyles").getByName(style_name)
+
+    enable = args.get("enable")
+    if enable is not None:
+        setattr(page, "HeaderIsOn" if which == "header" else "FooterIsOn",
+                bool(enable))
+    if enable is False:
+        return {"page_style": style_name, "which": which, "enabled": False}
+    # turning content on implicitly: writing to a disabled header does nothing
+    setattr(page, "HeaderIsOn" if which == "header" else "FooterIsOn", True)
+    setattr(page, "HeaderIsShared" if which == "header" else "FooterIsShared",
+            bool(args.get("shared", True)))
+
+    prop = ("RightPageHeaderContent" if which == "header"
+            else "RightPageFooterContent")
+    content = getattr(page, prop)
+    parts = []
+    for key, attr in (("left", "LeftText"), ("center", "CenterText"),
+                      ("right", "RightText")):
+        if args.get(key) is not None:
+            getattr(content, attr).setString(str(args[key]))
+            parts.append(key)
+    if not parts:
+        raise RuntimeError("Give at least one of left/center/right (or "
+                           "enable=false to switch the %s off)." % which)
+    setattr(page, prop, content)      # the struct must be written BACK
+    if args.get("shared", True):      # keep left-hand pages in step
+        try:
+            setattr(page, prop.replace("Right", "Left"), content)
+        except Exception:
+            pass
+    return {"page_style": style_name, "which": which, "enabled": True,
+            "parts_set": parts, "shared": bool(args.get("shared", True))}
 
 
 def tool_set_alt_text(args):
@@ -8482,6 +8621,10 @@ TOOLS = {
     "document_watch": tool_document_watch,
     # lifecycle
     "document_lifecycle": tool_document_lifecycle,
+    # calc counterparts of the Writer supporting tools
+    "calc_find": tool_calc_find,
+    "calc_set_document_defaults": tool_calc_set_document_defaults,
+    "calc_set_header_footer": tool_calc_set_header_footer,
     # print setup, accessibility, content controls
     "print_settings": tool_print_settings,
     "set_alt_text": tool_set_alt_text,
@@ -9027,6 +9170,29 @@ TOOL_DEFS = [
      "inputSchema": _schema({"title": dict(_STR, description="match the document by window-title substring"),
                              "url": dict(_STR, description="match the document by file URL/path substring"),
                              "index": dict(_INT, description="0-based index over open documents")})},
+    {"name": "calc_find",
+     "description": "Search a workbook WITHOUT changing anything — the read-only counterpart to calc_find_replace and the Calc twin of writer_find. Give 'search' for text (optionally 'regex'), or 'style' to list every cell using a named cell style (e.g. every cell styled 'Heading'), which is how you audit formatting. Returns sheet, cell, value, formula and style per hit. Searches every sheet unless 'sheet' is given.",
+     "inputSchema": _schema({"search": dict(_STR, description="text to find"),
+                             "style": dict(_STR, description="find cells using this CELL STYLE instead of text"),
+                             "sheet": _SHEET,
+                             "regex": dict(_BOOL, description="treat 'search' as a regular expression"),
+                             "match_case": _BOOL,
+                             "whole_words": _BOOL,
+                             "max_results": dict(_INT, description="cap the list (default 200)")})},
+    {"name": "calc_set_document_defaults",
+     "description": "Set the workbook's base font and size by editing the 'Default' cell style — the Calc twin of writer_set_document_defaults. Applied to Western, Complex (RTL/CTL) and Asian scripts together, so an Arabic base font actually takes effect. Cells with their own explicit formatting keep it.",
+     "inputSchema": _schema({"font_name": _STR,
+                             "font_size": dict(_NUM, description="points")})},
+    {"name": "calc_set_header_footer",
+     "description": "Set the printed page header or footer of a spreadsheet — the Calc twin of writer_set_header_footer. Each has independent left/center/right parts. Use enable=false to switch it off. Applies to the active sheet's page style unless 'sheet' or 'style_name' says otherwise.",
+     "inputSchema": _schema({"which": dict(_STR, enum=["header", "footer"]),
+                             "left": dict(_STR, description="left-hand text"),
+                             "center": dict(_STR, description="centre text"),
+                             "right": dict(_STR, description="right-hand text"),
+                             "enable": dict(_BOOL, description="false switches it off"),
+                             "shared": dict(_BOOL, description="same on left and right pages (default true)"),
+                             "sheet": _SHEET,
+                             "style_name": dict(_STR, description="page style name (default: the active sheet's)")})},
     {"name": "print_settings",
      "description": "Read or change how a document prints: printer name, paper size, orientation, and the per-application content switches. Writer exposes PrintGraphics/PrintTables/PrintDrawings/PrintControls/PrintPageBackground/PrintBlackFonts/PrintEmptyPages/PrintHiddenText/PrintLeftPages/PrintRightPages/PrintReversed/PrintProspect (booklet)/PrintProspectRTL/...; Calc exposes PrintGrid/PrintHeaders/PrintCharts/PrintObjects/PrintFormulas/PrintNotes/PrintZeroValues/PrintDownFirst/... Call with no arguments to read the current state and the list valid for this document.",
      "inputSchema": _schema({"printer": dict(_STR, description="printer name"),
@@ -9798,7 +9964,7 @@ create_document open_document save_document close_document export_document conve
 calc_overview calc_read_range calc_write_range calc_set_formulas calc_list_sheets
 calc_get_used_range calc_format_table calc_clean_data calc_format_range
 calc_sort_range calc_create_chart calc_add_sheet
-calc_import_csv calc_detect_errors diagnose_document
+calc_import_csv calc_detect_errors calc_find diagnose_document
 writer_get_text writer_append_text writer_replace_selection writer_find_replace
 writer_format_document writer_insert_heading writer_insert_table
 writer_apply_style writer_format_text

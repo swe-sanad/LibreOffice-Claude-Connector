@@ -15,9 +15,9 @@ Two complementary connectors between **Anthropic's Claude** and **LibreOffice**
    the selection in place. Standalone — no Claude Code needed.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the *inverse*: lets Claude Code /
    Desktop / Cowork drive a running LibreOffice as a tool (like the Figma MCP).
-   **215 tools** (Calc, Writer, an Impress presentation family, and a Draw
-   vector-drawing family), of which a **72-tool everyday tier is what `tools/list`
-   advertises** (`LO_TOOLS=full` advertises all 215; `dispatch` reaches the rest
+   **218 tools** (Calc, Writer, an Impress presentation family, and a Draw
+   vector-drawing family), of which a **73-tool everyday tier is what `tools/list`
+   advertises** (`LO_TOOLS=full` advertises all 218; `dispatch` reaches the rest
    either way). Registered with Claude Code at user scope as `libreoffice`.
 
 ## Status
@@ -26,7 +26,7 @@ Verified against real **LibreOffice 25.2.3.2 / bundled Python 3.10.17**:
 
 - ✅ `.oxt`: menu + Tools-Add-Ons + toolbar + **sidebar deck/panel (render confirmed
   in Calc & Writer)**, in-app settings, Windows-DPAPI API-key storage.
-- ✅ MCP server: **215 tools** (72 advertised by default), all exercised against a
+- ✅ MCP server: **218 tools** (73 advertised by default), all exercised against a
   real office by `tests/integration/test_mcp_tools_extended.py`; protocol + core
   tool tests pass. Impress presentations (19 tools): full lifecycle create →
   slides/layouts → title/bullets/notes/images/shapes/tables/charts → background →
