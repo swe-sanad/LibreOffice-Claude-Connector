@@ -154,6 +154,24 @@ def main():
             os.remove(f)
         print("PASS: impress_export_slides (PNG per slide)")
 
+        # --- Increment 2, wave 2: chart -------------------------------------
+        cs = server.tool_impress_add_slide({"layout": "title_only"})["slide"]
+        server.tool_impress_insert_chart({"slide": cs, "chart_type": "column",
+            "title": "Sales", "data": [["", "2023", "2024"],
+                                        ["APAC", 10, 14], ["EMEA", 8, 9]]})
+        cpg = server._impress_pages().getByIndex(cs - 1)
+        chart_model = None
+        for i in range(cpg.getCount()):
+            shp = cpg.getByIndex(i)
+            if hasattr(shp, "CLSID") and getattr(shp, "CLSID", ""):
+                chart_model = shp.Model
+                break
+        _assert(chart_model is not None, "chart OLE shape present")
+        got = chart_model.getData().getData()
+        _assert(len(got) == 2 and abs(got[0][0] - 10.0) < 1e-6,
+                "chart data round-trip: %r" % (got,))
+        print("PASS: impress_insert_chart")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

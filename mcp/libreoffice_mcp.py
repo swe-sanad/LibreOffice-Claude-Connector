@@ -7746,6 +7746,59 @@ def tool_impress_export_slides(args):
     return {"format": fmt, "count": len(written), "files": written}
 
 
+_CHART_CLSID = "12DCAE26-281F-416F-A234-C3086127382E"
+_CHART_DIAGRAMS = {
+    "column": ("BarDiagram", True), "bar": ("BarDiagram", False),
+    "line": ("LineDiagram", None), "area": ("AreaDiagram", None),
+    "pie": ("PieDiagram", None),
+}
+
+
+def _to_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def tool_impress_insert_chart(args):
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    kind = str(args.get("chart_type", "column")).lower()
+    if kind not in _CHART_DIAGRAMS:
+        raise RuntimeError("chart_type must be one of %s" % sorted(_CHART_DIAGRAMS))
+    ole = doc.createInstance("com.sun.star.presentation.OLE2Shape")
+    page.add(ole)
+    _place_shape(ole, args, dx=20, dy=40, dw=160, dh=100)
+    ole.CLSID = _CHART_CLSID
+    model = ole.Model
+    svc, vertical = _CHART_DIAGRAMS[kind]
+    model.setDiagram(model.createInstance("com.sun.star.chart." + svc))
+    if vertical is not None:
+        try:
+            model.Diagram.Vertical = vertical
+        except Exception:
+            pass
+    data = args.get("data")
+    if data and len(data) >= 2:
+        # row 0 = column/series headers (skip the corner cell); col 0 = row labels
+        col_desc = tuple(str(x) for x in data[0][1:])
+        row_desc = tuple(str(r[0]) for r in data[1:])
+        matrix = tuple(tuple(_to_float(v) for v in r[1:]) for r in data[1:])
+        xd = model.getData()
+        xd.setData(matrix)
+        xd.setColumnDescriptions(col_desc)
+        xd.setRowDescriptions(row_desc)
+    if args.get("title"):
+        try:
+            model.HasMainTitle = True
+            model.Title.String = str(args["title"])
+        except Exception:
+            pass
+    return {"slide": int(args["slide"]), "chart_type": kind,
+            "name": getattr(ole, "Name", "")}
+
+
 def tool_impress_insert_table(args):
     doc = _require_impress()
     page = _impress_slide(doc.getDrawPages(), args["slide"])
@@ -8005,6 +8058,7 @@ TOOLS = {
     "impress_set_transition": tool_impress_set_transition,
     "impress_export_slides": tool_impress_export_slides,
     "impress_insert_table": tool_impress_insert_table,
+    "impress_insert_chart": tool_impress_insert_chart,
 }
 
 _STR = {"type": "string"}
@@ -9110,6 +9164,16 @@ TOOL_DEFS = [
                              "x_mm": _NUM, "y_mm": _NUM,
                              "width_mm": _NUM, "height_mm": _NUM},
                             ["slide"])},
+    {"name": "impress_insert_chart",
+     "description": "Insert a data chart on slide 'slide' (1-based). 'chart_type': column, bar, line, area, pie. 'data' is a grid whose first row is the series headers and first column is the category labels (e.g. [['','2023','2024'],['APAC',10,14],['EMEA',8,9]]). Optional 'title'. Position/size in millimetres.",
+     "inputSchema": _schema({"slide": _INT,
+                             "chart_type": dict(_STR, enum=sorted(_CHART_DIAGRAMS)),
+                             "data": {"type": "array", "items": {"type": "array"},
+                                      "description": "grid: row 0 = series headers, col 0 = category labels"},
+                             "title": _STR,
+                             "x_mm": _NUM, "y_mm": _NUM,
+                             "width_mm": _NUM, "height_mm": _NUM},
+                            ["slide", "data"])},
 ]
 
 
@@ -9205,6 +9269,7 @@ impress_overview impress_read_slide impress_add_slide
 impress_set_title impress_set_content impress_set_notes
 impress_insert_image impress_insert_shape
 impress_set_transition impress_export_slides impress_insert_table
+impress_insert_chart
 """.split())
 
 
