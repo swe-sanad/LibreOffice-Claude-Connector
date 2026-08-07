@@ -15,9 +15,9 @@ Two complementary connectors between **Anthropic's Claude** and **LibreOffice**
    the selection in place. Standalone — no Claude Code needed.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the *inverse*: lets Claude Code /
    Desktop / Cowork drive a running LibreOffice as a tool (like the Figma MCP).
-   **213 tools** (Calc, Writer, an Impress presentation family, and a Draw
-   vector-drawing family), of which a **70-tool everyday tier is what `tools/list`
-   advertises** (`LO_TOOLS=full` advertises all 213; `dispatch` reaches the rest
+   **214 tools** (Calc, Writer, an Impress presentation family, and a Draw
+   vector-drawing family), of which a **71-tool everyday tier is what `tools/list`
+   advertises** (`LO_TOOLS=full` advertises all 214; `dispatch` reaches the rest
    either way). Registered with Claude Code at user scope as `libreoffice`.
 
 ## Status
@@ -26,16 +26,17 @@ Verified against real **LibreOffice 25.2.3.2 / bundled Python 3.10.17**:
 
 - ✅ `.oxt`: menu + Tools-Add-Ons + toolbar + **sidebar deck/panel (render confirmed
   in Calc & Writer)**, in-app settings, Windows-DPAPI API-key storage.
-- ✅ MCP server: **213 tools** (70 advertised by default), all exercised against a
+- ✅ MCP server: **214 tools** (71 advertised by default), all exercised against a
   real office by `tests/integration/test_mcp_tools_extended.py`; protocol + core
-  tool tests pass. Impress presentations (18 tools): full lifecycle create →
+  tool tests pass. Impress presentations (19 tools): full lifecycle create →
   slides/layouts → title/bullets/notes/images/shapes/tables/charts → background →
-  transitions → read-back → PDF and per-slide PNG/SVG export (rendered output
-  eyeballed), live-tested by `tests/integration/test_impress_uno.py`. Draw
+  transitions → per-object animations → read-back → PDF and per-slide PNG/SVG
+  export (rendered output eyeballed; animations verified in the node tree +
+  save/reload), live-tested by `tests/integration/test_impress_uno.py`. Draw
   (7 tools): pages, shapes, text, images, connectors, export —
-  `tests/integration/test_draw_uno.py`. (Per-object animations and full
-  master/theme templating are deferred — the LO 25.2 UNO factory won't
-  instantiate the needed objects; see docs/PLAN-IMPRESS-MVP.md.)
+  `tests/integration/test_draw_uno.py`. (Full master/theme templating deferred —
+  the native slide-background fill API won't apply on LO 25.2; see
+  docs/PLAN-IMPRESS-MVP.md.)
 - ✅ 111 offline unit tests; all UNO integration tests; `.oxt` installs and both the
   ProtocolHandler and sidebar factory register.
 - **Needs an API key (not done here):** a live Claude Transform from the GUI dialogs.

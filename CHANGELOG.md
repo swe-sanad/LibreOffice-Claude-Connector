@@ -5,11 +5,11 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
-### Added — Impress advanced + Draw surface (200 → 213 tools)
+### Added — Impress advanced + Draw surface (200 → 214 tools)
 
 Second increment on top of the Impress MVP, plus a new Draw surface.
 
-- **Impress advanced (6 tools):** `impress_set_transition` (per-slide or whole
+- **Impress advanced (7 tools):** `impress_set_transition` (per-slide or whole
   deck, on-click or timed auto-advance), `impress_export_slides` (render each
   slide to PNG/SVG/JPG via `GraphicExportFilter` — real rendering, not a .pptx
   writer capability), `impress_insert_table` (sized + filled from a data grid),
@@ -18,7 +18,11 @@ Second increment on top of the Impress MVP, plus a new Draw surface.
   stretched to fill, or both — per slide or whole deck, with optional
   transparency for a faint watermark; a full-slide rectangle, since LO 25.2
   exposes no working DrawPage.Background fill; **every variant verified by
-  rendering the slide to PNG and inspecting the pixels**), `impress_slideshow`
+  rendering the slide to PNG and inspecting the pixels**),
+  `impress_add_animation` (**per-object build-in animations** — appear / fade /
+  wipe / push / cover / dissolve / wheel, triggered on-click / with-previous /
+  after-previous; nodes built via the component-context factory, verified in the
+  live node tree and shown to survive a save/reload), `impress_slideshow`
   (start/stop/status; start needs a GUI session).
 - **Draw surface (`draw_*`, 7 tools):** a separate vector-drawing family —
   `draw_overview`, `draw_read_page`, `draw_add_page`, `draw_insert_shape`,
@@ -29,16 +33,16 @@ Second increment on top of the Impress MVP, plus a new Draw surface.
 New live suite `tests/integration/test_draw_uno.py`; the Impress suite grew to
 cover every new tool. All exercised on a real LibreOffice 25.2.
 
-**Deliberately deferred (UNO not cooperative on LO 25.2, verified by probe):**
-- *Per-object animations* — the animation-node services
-  (`ParallelTimeContainer`, `AnimateSet`, …) are not instantiable through the
-  document factory, so the effect cannot be constructed; a static slide render
-  also cannot show a temporal effect. Not shipped rather than ship something
-  that does not work.
+**Still deferred:**
 - *Master-slide / theme templates* — the native `page.Background` /
   `master.Background` fill does not apply (rendering a red master background came
-  out blue). `impress_set_background` covers solid per-slide colour via the
-  rendered rectangle technique; full master/theme templating remains future work.
+  out blue). `impress_set_background` covers per-slide colour/image/transparency
+  via the rendered rectangle technique; full master/theme templating (shared
+  layouts, colour schemes) remains future work.
+
+(Per-object animations were initially deferred here — the node services aren't
+instantiable via the *document* factory — but they turned out to be creatable via
+the *component-context* factory, so `impress_add_animation` shipped instead.)
 
 ### Added — Impress presentations (188 → 200 tools)
 

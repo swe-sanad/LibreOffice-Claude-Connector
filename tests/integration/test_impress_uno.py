@@ -205,6 +205,21 @@ def main():
         _assert(bg.FillTransparence == 60, "fill transparency: %r" % bg.FillTransparence)
         print("PASS: impress_set_background (color, image, transparency, idempotent)")
 
+        # --- Per-object animations -----------------------------------------
+        aslide = server.tool_impress_add_slide({"layout": "title_content"})["slide"]
+        server.tool_impress_set_title({"slide": aslide, "text": "Animated"})
+        server.tool_impress_insert_shape({"slide": aslide, "kind": "ellipse",
+            "x_mm": 40, "y_mm": 80, "width_mm": 40, "height_mm": 30, "text": "pop"})
+        # animate shape 1 (appear on click) and shape 2 (fade after previous)
+        r1 = server.tool_impress_add_animation({"slide": aslide, "shape": 1,
+                                                "effect": "appear", "trigger": "on_click"})
+        _assert(r1["animations"] == 1, "first animation attached: %r" % r1)
+        server.tool_impress_add_animation({"slide": aslide, "shape": 2,
+            "effect": "fade", "trigger": "after_previous", "duration": 0.8})
+        rs = server.tool_impress_read_slide({"slide": aslide})
+        _assert(rs["animations"] == 2, "two animations on the slide: %r" % rs["animations"])
+        print("PASS: impress_add_animation (attached + counted in the live node tree)")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

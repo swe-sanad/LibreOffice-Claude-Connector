@@ -492,7 +492,7 @@ class ImpressRegistryTest(unittest.TestCase):
                   "impress_insert_image", "impress_insert_shape",
                   "impress_set_transition", "impress_export_slides",
                   "impress_insert_table", "impress_insert_chart",
-                  "impress_set_background")
+                  "impress_set_background", "impress_add_animation")
     # registered and reachable via dispatch, but not in the everyday tier
     DISPATCH_ONLY = ("impress_insert_text_box", "impress_set_layout",
                      "impress_delete_slide", "impress_duplicate_slide",

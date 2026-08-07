@@ -7441,6 +7441,24 @@ def _ph_body(page):
     return None
 
 
+def _count_animations(page):
+    """Number of per-object animation effects attached to the slide's main
+    sequence (each ParallelTimeContainer child holding a targeted node)."""
+    try:
+        seq = page.AnimationNode
+    except Exception:
+        return 0
+    n = 0
+    try:
+        for grp in seq.createEnumeration():
+            for eff in grp.createEnumeration():
+                if getattr(eff, "Target", None) is not None:
+                    n += 1
+    except Exception:
+        pass
+    return n
+
+
 def _ph_notes(page):
     """The notes text box on the slide's notes page: the text-bearing shape that
     is not the slide-thumbnail PageShape (Phase-0 finding)."""
@@ -7564,7 +7582,8 @@ def tool_impress_read_slide(args):
             "title": title.getString() if title else "",
             "bullets": bullets,
             "shapes": shapes,
-            "notes": notes.getString() if notes else ""}
+            "notes": notes.getString() if notes else "",
+            "animations": _count_animations(page)}
 
 
 def tool_impress_set_notes(args):
@@ -7947,6 +7966,69 @@ def tool_impress_set_background(args):
             "transparency": transp}
 
 
+# per-object animation triggers -> com.sun.star.presentation.EffectNodeType names
+_ANIM_TRIGGERS = {"on_click": "ON_CLICK", "with_previous": "WITH_PREVIOUS",
+                  "after_previous": "AFTER_PREVIOUS"}
+# effects: 'appear' (instant) + the shared transition vocabulary as a reveal
+_ANIM_EFFECTS = ["appear"] + [k for k, v in _IMPRESS_TRANSITIONS.items() if v]
+
+
+def tool_impress_add_animation(args):
+    """Attach a per-object animation to a shape. Animation nodes are only
+    creatable through the component-context service manager (not the document
+    factory) on LO 25.2 — hence smgr.createInstanceWithContext below."""
+    import uno
+    from com.sun.star.animations.AnimationFill import HOLD
+    doc = _require_impress()
+    page = _impress_slide(doc.getDrawPages(), args["slide"])
+    idx = int(args["shape"]) - 1
+    if idx < 0 or idx >= page.getCount():
+        raise RuntimeError("shape %r is out of range 1..%d"
+                           % (args["shape"], page.getCount()))
+    shape = page.getByIndex(idx)
+    effect = str(args.get("effect", "appear")).lower()
+    if effect not in _ANIM_EFFECTS:
+        raise RuntimeError("effect must be one of %s" % sorted(_ANIM_EFFECTS))
+    trigger = str(args.get("trigger", "on_click")).lower()
+    if trigger not in _ANIM_TRIGGERS:
+        raise RuntimeError("trigger must be one of %s" % sorted(_ANIM_TRIGGERS))
+    duration = float(args.get("duration", 0.5))
+    state = _connect()
+    smgr, ctx = state["smgr"], state["ctx"]
+
+    def mk(name):
+        return smgr.createInstanceWithContext("com.sun.star.animations." + name, ctx)
+
+    par = mk("ParallelTimeContainer")
+    try:
+        nv = uno.createUnoStruct("com.sun.star.beans.NamedValue")
+        nv.Name = "node-type"
+        nv.Value = uno.getConstantByName(
+            "com.sun.star.presentation.EffectNodeType." + _ANIM_TRIGGERS[trigger])
+        par.UserData = (nv,)
+    except Exception:
+        pass
+    if effect == "appear":
+        node = mk("AnimateSet")
+        node.AttributeName = "Visibility"
+        node.To = uno.Any("boolean", True)
+    else:
+        tname, sname = _IMPRESS_TRANSITIONS[effect]
+        node = mk("TransitionFilter")
+        node.Transition = uno.getConstantByName(
+            "com.sun.star.animations.TransitionType." + tname)
+        node.Subtype = uno.getConstantByName(
+            "com.sun.star.animations.TransitionSubType." + sname)
+        node.Duration = duration
+    node.Target = shape
+    node.Fill = HOLD
+    par.appendChild(node)
+    page.AnimationNode.appendChild(par)
+    return {"slide": int(args["slide"]), "shape": int(args["shape"]),
+            "effect": effect, "trigger": trigger,
+            "animations": _count_animations(page)}
+
+
 def _draw_page(pages, one_based):
     n = pages.getCount()
     try:
@@ -8326,6 +8408,7 @@ TOOLS = {
     "impress_insert_chart": tool_impress_insert_chart,
     "impress_slideshow": tool_impress_slideshow,
     "impress_set_background": tool_impress_set_background,
+    "impress_add_animation": tool_impress_add_animation,
     # draw (vector drawings)
     "draw_overview": tool_draw_overview,
     "draw_read_page": tool_draw_read_page,
@@ -9459,6 +9542,13 @@ TOOL_DEFS = [
                              "color": dict(_STR, description="hex colour, e.g. '#2E4053'"),
                              "image": dict(_STR, description="local image file to stretch across the slide"),
                              "transparency": dict(_INT, description="0 (opaque) to 100 (invisible)")})},
+    {"name": "impress_add_animation",
+     "description": "Animate a shape on slide 'slide' (1-based). 'shape' is the 1-based shape index (see impress_read_slide). 'effect': appear, fade, wipe, push, cover, uncover, dissolve, wheel, or cut. 'trigger': on_click (default), with_previous, or after_previous. 'duration' in seconds. This is a per-object build-in animation — something .pptx file writers cannot do.",
+     "inputSchema": _schema({"slide": _INT, "shape": _INT,
+                             "effect": dict(_STR, enum=sorted(_ANIM_EFFECTS)),
+                             "trigger": dict(_STR, enum=sorted(_ANIM_TRIGGERS)),
+                             "duration": _NUM},
+                            ["slide", "shape"])},
     # --- draw (vector drawings) — pages addressed by 1-based index ---
     {"name": "draw_overview",
      "description": "Read a Draw document: page count and, per page, its 1-based index, name, and shape count. The 'orient yourself' tool for a drawing.",
@@ -9590,7 +9680,7 @@ impress_overview impress_read_slide impress_add_slide
 impress_set_title impress_set_content impress_set_notes
 impress_insert_image impress_insert_shape
 impress_set_transition impress_export_slides impress_insert_table
-impress_insert_chart impress_set_background
+impress_insert_chart impress_set_background impress_add_animation
 draw_overview draw_read_page draw_insert_shape draw_insert_text_box
 draw_insert_image draw_insert_connector
 """.split())
