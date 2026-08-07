@@ -318,7 +318,7 @@ All **213 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 | `impress_insert_table` | Insert a table on slide 'slide' (1-based). Give 'rows'+'cols', or a 'data' grid (list of rows) to size and fill it in one call. Position/size in millimetres. |
 | `impress_insert_chart` | Insert a data chart on slide 'slide' (1-based). 'chart_type': column, bar, line, area, pie. 'data' is a grid whose first row is the series headers and first column is the category labels (e.g. [['','2023','2024'],['APAC',10,14],['EMEA',8,9]]). Optional 'title'. Position/size in millimetres. |
 | `impress_slideshow` | Control the on-screen slideshow: action 'start' (optionally 'from_slide', 1-based), 'stop', or 'status'. Starting launches the show in the LibreOffice window, so it needs a GUI session (not a headless office). Returns whether a show is running. |
-| `impress_set_background` | Set a solid background colour ('color', hex like '#2E4053') on slide 'slide' (1-based) or every slide ('all':true). Renders as a full-slide colour behind the content; calling again replaces it. |
+| `impress_set_background` | Set a slide background on slide 'slide' (1-based) or every slide ('all':true): a solid 'color' (hex like '#2E4053'), an 'image' (local file, stretched to fill), or both, with optional 'transparency' (0 opaque..100 invisible — e.g. 70 for a faint watermark). Renders behind the content; calling again replaces it. |
 
 ## Draw (vector drawings) — pages addressed by 1-based index
 

@@ -14,10 +14,12 @@ Second increment on top of the Impress MVP, plus a new Draw surface.
   slide to PNG/SVG/JPG via `GraphicExportFilter` — real rendering, not a .pptx
   writer capability), `impress_insert_table` (sized + filled from a data grid),
   `impress_insert_chart` (column/bar/line/area/pie, embedded OLE chart fed from a
-  headers+categories grid), `impress_set_background` (solid colour per slide or
-  whole deck — a full-slide rectangle, since LO 25.2 exposes no working
-  DrawPage.Background fill; **verified by rendering the slide to PNG**),
-  `impress_slideshow` (start/stop/status; start needs a GUI session).
+  headers+categories grid), `impress_set_background` (solid colour, an image
+  stretched to fill, or both — per slide or whole deck, with optional
+  transparency for a faint watermark; a full-slide rectangle, since LO 25.2
+  exposes no working DrawPage.Background fill; **every variant verified by
+  rendering the slide to PNG and inspecting the pixels**), `impress_slideshow`
+  (start/stop/status; start needs a GUI session).
 - **Draw surface (`draw_*`, 7 tools):** a separate vector-drawing family —
   `draw_overview`, `draw_read_page`, `draw_add_page`, `draw_insert_shape`,
   `draw_insert_text_box`, `draw_insert_image`, and `draw_insert_connector`

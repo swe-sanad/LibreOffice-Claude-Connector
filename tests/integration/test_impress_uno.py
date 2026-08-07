@@ -194,7 +194,16 @@ def main():
         n_bg = sum(1 for i in range(bpg.getCount())
                    if getattr(bpg.getByIndex(i), "Name", "") == server._BG_SHAPE_NAME)
         _assert(n_bg == 1, "background is idempotent, got %d" % n_bg)
-        print("PASS: impress_set_background (color applied, idempotent)")
+        # image background at 60% transparency (bitmap fill, still one bg shape)
+        bgpng = os.path.abspath(os.path.join(_HERE, "..", "..", "ext", "icons", "icon.png"))
+        r = server.tool_impress_set_background({"slide": bs, "image": bgpng,
+                                                "transparency": 60})
+        _assert(r["image"] == "icon.png" and r["transparency"] == 60,
+                "image bg echo: %r" % r)
+        bg = next(bpg.getByIndex(i) for i in range(bpg.getCount())
+                  if getattr(bpg.getByIndex(i), "Name", "") == server._BG_SHAPE_NAME)
+        _assert(bg.FillTransparence == 60, "fill transparency: %r" % bg.FillTransparence)
+        print("PASS: impress_set_background (color, image, transparency, idempotent)")
 
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0

@@ -7880,15 +7880,30 @@ _BG_SHAPE_NAME = "__mcp_background__"
 
 
 def tool_impress_set_background(args):
-    """Set a solid background colour on a slide (or every slide with 'all':true).
-    Implemented as a full-slide filled rectangle sent to the back — LO 25.2 does
-    not expose a working DrawPage.Background fill via the API (verified by
-    rendering), and this renders identically. Idempotent: replaces its own prior
-    background rectangle rather than stacking."""
-    from com.sun.star.drawing.FillStyle import SOLID
+    """Set a slide background — a solid 'color' (hex), an 'image' (local file
+    stretched to fill), or both — on one slide or every slide ('all':true), with
+    an optional 'transparency' (0 opaque .. 100 invisible). Implemented as a
+    full-slide filled rectangle sent to the back: LO 25.2 exposes no working
+    DrawPage.Background fill (verified by rendering), and this renders identically.
+    Idempotent: replaces its own prior background rectangle rather than stacking."""
+    from com.sun.star.drawing.FillStyle import SOLID, BITMAP
     from com.sun.star.drawing.LineStyle import NONE as LINE_NONE
     doc = _require_impress()
-    color = _hex_color(args["color"])
+    color = args.get("color")
+    image = args.get("image")
+    if not color and not image:
+        raise RuntimeError("give 'color' (hex like '#2E4053') and/or 'image' (file path)")
+    graphic = None
+    if image:
+        if not os.path.exists(image):
+            raise RuntimeError("Image file not found: %s" % image)
+        state = _connect()
+        gp = state["smgr"].createInstanceWithContext(
+            "com.sun.star.graphic.GraphicProvider", state["ctx"])
+        graphic = gp.queryGraphic((_pv("URL", _to_url(image)),))
+        if graphic is None:
+            raise RuntimeError("Could not load image: %s" % image)
+    transp = args.get("transparency")
     pages = _impress_target_slides(args)
     for page in pages:
         for i in range(page.getCount()):
@@ -7902,18 +7917,34 @@ def tool_impress_set_background(args):
         siz = _uno_struct("com.sun.star.awt.Size")
         siz.Width = page.Width; siz.Height = page.Height
         rect.setPosition(pos); rect.setSize(siz)
-        rect.FillStyle = SOLID
-        rect.FillColor = color
         try:
             rect.LineStyle = LINE_NONE
         except Exception:
             pass
+        if image:
+            from com.sun.star.drawing.BitmapMode import STRETCH
+            rect.FillStyle = BITMAP
+            rect.FillBitmap = graphic          # XGraphic accepted by pyuno here
+            try:
+                rect.FillBitmapMode = STRETCH
+            except Exception:
+                pass
+        else:
+            rect.FillStyle = SOLID
+            rect.FillColor = _hex_color(color)
+        if transp is not None:
+            try:
+                rect.FillTransparence = max(0, min(100, int(transp)))
+            except Exception:
+                pass
         rect.Name = _BG_SHAPE_NAME
         try:
             rect.ZOrder = 0          # send behind the slide content
         except Exception:
             pass
-    return {"slides": len(pages), "color": args["color"]}
+    return {"slides": len(pages), "color": color,
+            "image": os.path.basename(image) if image else None,
+            "transparency": transp}
 
 
 def _draw_page(pages, one_based):
@@ -9423,10 +9454,11 @@ TOOL_DEFS = [
      "inputSchema": _schema({"action": dict(_STR, enum=["start", "stop", "status"]),
                              "from_slide": dict(_INT, description="1-based slide to start from")})},
     {"name": "impress_set_background",
-     "description": "Set a solid background colour ('color', hex like '#2E4053') on slide 'slide' (1-based) or every slide ('all':true). Renders as a full-slide colour behind the content; calling again replaces it.",
+     "description": "Set a slide background on slide 'slide' (1-based) or every slide ('all':true): a solid 'color' (hex like '#2E4053'), an 'image' (local file, stretched to fill), or both, with optional 'transparency' (0 opaque..100 invisible — e.g. 70 for a faint watermark). Renders behind the content; calling again replaces it.",
      "inputSchema": _schema({"slide": _INT, "all": _BOOL,
-                             "color": dict(_STR, description="hex colour, e.g. '#2E4053'")},
-                            ["color"])},
+                             "color": dict(_STR, description="hex colour, e.g. '#2E4053'"),
+                             "image": dict(_STR, description="local image file to stretch across the slide"),
+                             "transparency": dict(_INT, description="0 (opaque) to 100 (invisible)")})},
     # --- draw (vector drawings) — pages addressed by 1-based index ---
     {"name": "draw_overview",
      "description": "Read a Draw document: page count and, per page, its 1-based index, name, and shape count. The 'orient yourself' tool for a drawing.",
