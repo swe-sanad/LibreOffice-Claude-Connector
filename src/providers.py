@@ -26,11 +26,13 @@ try:                                  # packaged in the .oxt (claudeconn package
     from .claude_client import (
         DEFAULT_MAX_TOKENS, DEFAULT_MAX_RETRIES, DEFAULT_MODEL, DEFAULT_TIMEOUT,
         ClaudeConfigError, ClaudeResult, _post_json, _require_https,
+        _shared_ssl_context,
     )
 except ImportError:                   # flat layout (tests / dev)
     from claude_client import (
         DEFAULT_MAX_TOKENS, DEFAULT_MAX_RETRIES, DEFAULT_MODEL, DEFAULT_TIMEOUT,
         ClaudeConfigError, ClaudeResult, _post_json, _require_https,
+        _shared_ssl_context,
     )
 
 # Sensible local default; overridden via settings (base_url).
@@ -66,7 +68,9 @@ class OpenAICompatibleClient:
         self.timeout = float(timeout)
         self.max_retries = int(max_retries)
         self._sleep = sleep
-        self._ssl_context = ssl.create_default_context()
+        # shared, not per-instance: building it loads the OS trust store, which
+        # costs seconds on Windows (see claude_client._shared_ssl_context)
+        self._ssl_context = _shared_ssl_context()
 
     def send(
         self,
