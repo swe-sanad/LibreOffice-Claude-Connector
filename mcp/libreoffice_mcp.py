@@ -196,7 +196,7 @@ calc_select_range calc_set_active_sheet calc_recalculate
 writer_get_comments writer_get_outline writer_get_paragraphs writer_get_text
 writer_list_figures writer_list_objects writer_list_tables writer_read_table
 writer_find writer_word_count
-impress_overview impress_read_slide impress_export_slides
+impress_overview impress_read_slide impress_export_slides impress_slideshow
 draw_overview draw_read_page
 set_view_zoom set_document_modified
 """.split())
@@ -7850,6 +7850,32 @@ def tool_impress_insert_table(args):
 # GraphicProvider). Pages are addressed by a 1-based index.
 # --------------------------------------------------------------------------- #
 
+def tool_impress_slideshow(args):
+    """Control the on-screen slideshow. start() launches the presentation in the
+    LibreOffice window — it needs a GUI session (a headless office has no display),
+    so this is for driving a LibreOffice the user actually has open."""
+    doc = _require_impress()
+    pres = doc.Presentation
+    action = str(args.get("action", "status")).lower()
+    if action == "start":
+        if args.get("from_slide"):
+            try:
+                pres.FirstPage = int(args["from_slide"])
+            except Exception:
+                pass
+        pres.start()
+    elif action in ("stop", "end"):
+        pres.end()
+    elif action != "status":
+        raise RuntimeError("action must be start, stop, or status")
+    running = False
+    try:
+        running = bool(pres.isRunning())
+    except Exception:
+        pass
+    return {"action": action, "running": running}
+
+
 def _draw_page(pages, one_based):
     n = pages.getCount()
     try:
@@ -8227,6 +8253,7 @@ TOOLS = {
     "impress_export_slides": tool_impress_export_slides,
     "impress_insert_table": tool_impress_insert_table,
     "impress_insert_chart": tool_impress_insert_chart,
+    "impress_slideshow": tool_impress_slideshow,
     # draw (vector drawings)
     "draw_overview": tool_draw_overview,
     "draw_read_page": tool_draw_read_page,
@@ -9350,6 +9377,10 @@ TOOL_DEFS = [
                              "x_mm": _NUM, "y_mm": _NUM,
                              "width_mm": _NUM, "height_mm": _NUM},
                             ["slide", "data"])},
+    {"name": "impress_slideshow",
+     "description": "Control the on-screen slideshow: action 'start' (optionally 'from_slide', 1-based), 'stop', or 'status'. Starting launches the show in the LibreOffice window, so it needs a GUI session (not a headless office). Returns whether a show is running.",
+     "inputSchema": _schema({"action": dict(_STR, enum=["start", "stop", "status"]),
+                             "from_slide": dict(_INT, description="1-based slide to start from")})},
     # --- draw (vector drawings) — pages addressed by 1-based index ---
     {"name": "draw_overview",
      "description": "Read a Draw document: page count and, per page, its 1-based index, name, and shape count. The 'orient yourself' tool for a drawing.",

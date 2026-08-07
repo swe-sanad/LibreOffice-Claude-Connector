@@ -172,6 +172,12 @@ def main():
                 "chart data round-trip: %r" % (got,))
         print("PASS: impress_insert_chart")
 
+        # --- Increment 2, wave 3: slideshow control (safe paths headless) ---
+        st = server.tool_impress_slideshow({"action": "status"})
+        _assert(st["running"] in (True, False), "status returns a bool: %r" % st)
+        server.tool_impress_slideshow({"action": "stop"})   # safe no-op when idle
+        print("PASS: impress_slideshow (status/stop; start needs a GUI session)")
+
         print("\nALL IMPRESS TOOL CHECKS PASSED")
         return 0
     finally:

@@ -494,7 +494,8 @@ class ImpressRegistryTest(unittest.TestCase):
                   "impress_insert_table", "impress_insert_chart")
     # registered and reachable via dispatch, but not in the everyday tier
     DISPATCH_ONLY = ("impress_insert_text_box", "impress_set_layout",
-                     "impress_delete_slide", "impress_duplicate_slide")
+                     "impress_delete_slide", "impress_duplicate_slide",
+                     "impress_slideshow")
     READ_ONLY = ("impress_overview", "impress_read_slide", "impress_export_slides")
 
     def test_mutating_impress_tools_are_not_no_undo(self):

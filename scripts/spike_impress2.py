@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Sanad Arousi
 #
-# Phase-0 probe round 3: reliable Impress slide-background recipe.
+# Phase-0 probe round 4: is a per-shape entrance animation reliably scriptable?
 #   powershell -File scripts/run_integration.ps1 -Test scripts/spike_impress2.py -Port 2003
 import os
 import sys
@@ -14,56 +14,49 @@ def main():
     desktop = server._desktop()
     doc = desktop.loadComponentFromURL("private:factory/simpress", "_blank", 0, ())
     try:
-        from com.sun.star.drawing.FillStyle import SOLID
         page = doc.getDrawPages().getByIndex(0)
-        master = doc.getMasterPages().getByIndex(0)
+        page.Layout = 1
+        title = page.getByIndex(0)
 
-        print("=== master.Background ===")
+        print("=== animation root ===")
+        root = page.AnimationNode
+        print("  root type:", root.Type if hasattr(root, "Type") else "?",
+              "hasChildren:", hasattr(root, "createEnumeration"))
+
+        print("=== try building an appear effect via MainSequence ===")
         try:
-            mbg = master.Background
-            print("  master.Background:", mbg)
+            from com.sun.star.animations import AnimationNodeType
+            # A high-level helper exists in some builds:
+            # doc.createInstance("com.sun.star.presentation.CustomAnimationPreset")?
+            for svc in ("com.sun.star.animations.ParallelTimeContainer",
+                        "com.sun.star.animations.SequenceTimeContainer",
+                        "com.sun.star.animations.Command",
+                        "com.sun.star.animations.AnimateSet"):
+                try:
+                    obj = doc.createInstance(svc)
+                    print("  createInstance", svc.rsplit(".", 1)[-1], "->", obj is not None)
+                except Exception as exc:
+                    print("  createInstance", svc.rsplit(".", 1)[-1], "FAILED:", exc)
         except Exception as exc:
-            print("  master.Background FAILED:", exc)
+            print("  import/setup FAILED:", exc)
 
-        # Recipe: instantiate the fill bean via the GLOBAL service manager,
-        # not the document, then assign to page.Background and reassign.
-        print("=== fill bean via global smgr ===")
-        smgr = server._state["smgr"]
-        for svc in ("com.sun.star.drawing.FillProperties",):
-            try:
-                obj = smgr.createInstance(svc)
-                print("  smgr.createInstance", svc, "->", obj)
-            except Exception as exc:
-                print("  smgr.createInstance", svc, "FAILED:", exc)
-
-        # Recipe: set on page via reassign using a bean cloned from a shape's
-        # fill? Try assigning a RectangleShape's props is not valid. Instead try
-        # the documented empty-string service on the DrawPage's own factory.
-        print("=== page as its own factory ===")
+        print("=== try the whole append-a-node dance (AnimateSet visibility) ===")
         try:
-            bean = page.Background            # None
-            print("  before:", bean)
-            # In LO the Background bean is created by the page's model:
-            bean = doc.createInstance("com.sun.star.drawing.FillProperties")
-            print("  doc.createInstance FillProperties ok")
+            from com.sun.star.animations.AnimationNodeType import PAR, SEQ
+            main_seq = page.AnimationNode          # SequenceTimeContainer (root)
+            par = doc.createInstance("com.sun.star.animations.ParallelTimeContainer")
+            aset = doc.createInstance("com.sun.star.animations.AnimateSet")
+            aset.Target = title
+            aset.AttributeName = "Visibility"
+            import uno
+            aset.To = uno.Any("boolean", True)
+            par.appendChild(aset)
+            main_seq.appendChild(par)
+            # count nodes now
+            n = sum(1 for _ in main_seq.createEnumeration())
+            print("  appended; main_seq child count:", n)
         except Exception as exc:
-            print("  doc factory FAILED:", exc)
-
-        # Recipe that historically works: set FillStyle/FillColor on the page's
-        # background via a freshly built PropertySet from the page itself.
-        print("=== try page.setPropertyValue with master-derived bean ===")
-        try:
-            # get a background bean off the master if it exposes one
-            mbg = master.Background
-            if mbg is not None:
-                mbg.FillStyle = SOLID
-                mbg.FillColor = 0x1F3864
-                master.Background = mbg
-                print("  master bg set; readback:", hex(master.Background.FillColor))
-            else:
-                print("  master.Background is None too")
-        except Exception as exc:
-            print("  master bg recipe FAILED:", exc)
+            print("  append dance FAILED:", type(exc).__name__, exc)
     finally:
         doc.close(False)
 
