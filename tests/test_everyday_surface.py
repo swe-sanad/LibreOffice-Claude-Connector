@@ -43,6 +43,24 @@ class ToolRegistryTest(unittest.TestCase):
             self.assertIn(name, m._BASIC_TOOLS)
 
 
+class DiagnoseDocumentTest(unittest.TestCase):
+    """The read-only Writer/Calc health check must be wired like its siblings:
+    a handler with a schema, advertised in the everyday tier, and exempt from
+    undo grouping (it never edits)."""
+
+    def test_registered_advertised_and_read_only(self):
+        self.assertIn("diagnose_document", m.TOOLS)
+        self.assertIn("diagnose_document", {d["name"] for d in m.TOOL_DEFS})
+        self.assertIn("diagnose_document", m._BASIC_TOOLS)
+        self.assertIn("diagnose_document", m._NO_UNDO)  # it only reads
+
+    def test_body_styles_cover_the_default(self):
+        # the default body style must count as "body", or a bold one-liner in a
+        # fresh document would never be flagged as a pseudo-heading
+        self.assertIn("Standard", m._BODY_STYLES)
+        self.assertIn("Default Paragraph Style", m._BODY_STYLES)
+
+
 class CalcErrorTableTest(unittest.TestCase):
     def test_covers_the_errors_users_actually_hit(self):
         # the four a student sees on a broken sheet
@@ -504,6 +522,91 @@ class PresetTest(unittest.TestCase):
             enum = by_name[tool]["inputSchema"]["properties"]["preset"]["enum"]
             self.assertEqual(sorted(enum), sorted(presets),
                              "%s advertises presets it cannot apply" % tool)
+
+
+class ImpressWiringTest(unittest.TestCase):
+    """Task 1 wiring: create_document/export must know about presentations."""
+
+    def test_create_document_accepts_impress(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["create_document"]["inputSchema"]["properties"]["type"]["enum"]
+        self.assertIn("impress", enum)
+
+    def test_impress_factory_url_registered(self):
+        self.assertEqual(m._FACTORY_URLS["impress"], "private:factory/simpress")
+
+    def test_impress_pdf_filter_registered(self):
+        self.assertEqual(m._FILTERS[("impress", "pdf")], "impress_pdf_Export")
+
+
+class ImpressRegistryTest(unittest.TestCase):
+    """Every impress_* tool must be registered; the read-only ones exempt from
+    undo; the everyday ones advertised. Extended as each task lands a tool."""
+
+    ADVERTISED = ("impress_overview", "impress_read_slide", "impress_add_slide",
+                  "impress_set_title", "impress_set_content", "impress_set_notes",
+                  "impress_insert_image", "impress_insert_shape",
+                  "impress_set_transition", "impress_export_slides",
+                  "impress_insert_table", "impress_insert_chart",
+                  "impress_set_background", "impress_add_animation")
+    # registered and reachable via dispatch, but not in the everyday tier
+    DISPATCH_ONLY = ("impress_insert_text_box", "impress_set_layout",
+                     "impress_delete_slide", "impress_duplicate_slide",
+                     "impress_slideshow")
+    READ_ONLY = ("impress_overview", "impress_read_slide", "impress_export_slides")
+
+    def test_mutating_impress_tools_are_not_no_undo(self):
+        for name in ("impress_add_slide", "impress_set_title", "impress_set_notes",
+                     "impress_insert_image", "impress_delete_slide",
+                     "impress_duplicate_slide"):
+            self.assertNotIn(name, m._NO_UNDO, "%s mutates" % name)
+
+    def test_registered_in_tools_and_defs(self):
+        defs = {d["name"] for d in m.TOOL_DEFS}
+        for name in self.ADVERTISED + self.DISPATCH_ONLY:
+            self.assertIn(name, m.TOOLS, "%s missing from TOOLS" % name)
+            self.assertIn(name, defs, "%s missing from TOOL_DEFS" % name)
+
+    def test_advertised_in_basic_tier(self):
+        for name in self.ADVERTISED:
+            self.assertIn(name, m._BASIC_TOOLS)
+
+    def test_read_only_are_no_undo(self):
+        for name in self.READ_ONLY:
+            self.assertIn(name, m._NO_UNDO)
+
+    def test_layout_names_match_the_add_slide_enum(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["impress_add_slide"]["inputSchema"]["properties"]["layout"]["enum"]
+        self.assertEqual(sorted(enum), sorted(m._IMPRESS_LAYOUTS))
+
+
+class DrawRegistryTest(unittest.TestCase):
+    ADVERTISED = ("draw_overview", "draw_read_page", "draw_insert_shape",
+                  "draw_insert_text_box", "draw_insert_image",
+                  "draw_insert_connector")
+    DISPATCH_ONLY = ("draw_add_page",)
+    READ_ONLY = ("draw_overview", "draw_read_page")
+
+    def test_registered(self):
+        defs = {d["name"] for d in m.TOOL_DEFS}
+        for name in self.ADVERTISED + self.DISPATCH_ONLY:
+            self.assertIn(name, m.TOOLS)
+            self.assertIn(name, defs)
+
+    def test_advertised(self):
+        for name in self.ADVERTISED:
+            self.assertIn(name, m._BASIC_TOOLS)
+
+    def test_read_only_are_no_undo(self):
+        for name in self.READ_ONLY:
+            self.assertIn(name, m._NO_UNDO)
+
+    def test_create_document_accepts_draw(self):
+        by_name = {d["name"]: d for d in m.TOOL_DEFS}
+        enum = by_name["create_document"]["inputSchema"]["properties"]["type"]["enum"]
+        self.assertIn("draw", enum)
+        self.assertEqual(m._FACTORY_URLS["draw"], "private:factory/sdraw")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **191 tools** of the `libreoffice` MCP server (v0.9.6), generated from
+All **218 tools** of the `libreoffice` MCP server (v0.9.7), generated from
 `mcp/libreoffice_mcp.py`'s `TOOL_DEFS`. Regenerate with the snippet in
 `docs/DEVELOPMENT.md` after adding tools.
 
@@ -17,7 +17,7 @@ All **191 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 
 | Tool | Description |
 |---|---|
-| `create_document` | Create and open a new empty document ('calc' spreadsheet or 'writer' text document). |
+| `create_document` | Create and open a new empty document ('calc' spreadsheet, 'writer' text document, 'impress' presentation, or 'draw' drawing). |
 | `open_document` | Open a document file (ods/xlsx/csv/odt/docx/...) in LibreOffice. |
 | `save_document` | Save the active document. With 'path': save-as (format from extension or explicit 'format': ods/xlsx/csv/odt/docx/txt). 'format':'pdf' exports a PDF copy. Without 'path': save in place. |
 | `close_document` | Close a document, optionally saving it first (save=true needs an existing file location). Targets a SPECIFIC doc by 'index'/'title'/'url' (recommended when several are open — focus alone can close the wrong one); defaults to the active document. |
@@ -289,6 +289,7 @@ All **191 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 | `calc_format_table` | Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range. |
 | `calc_clean_data` | Tidy a pasted or imported range: trim stray whitespace, turn numeric-looking text into real numbers, and drop fully empty rows. Formula cells are never rewritten. Defaults to the sheet's used range. NOTE: LibreOffice does not record bulk range writes for undo, so Ctrl+Z restores the deleted rows but not the trimmed values — say what will change before running it on data the user cannot re-import. |
 | `writer_format_document` | Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). |
+| `diagnose_document` | A read-only health check — the Writer counterpart of calc_detect_errors. Reports the structural problems worth fixing, each naming the tool that fixes it: Writer pseudo-headings (bold body text faking a heading), broken cross-references, images missing alt text, unfilled placeholders and leftover TODO/FIXME markers; Calc broken formula cells. Targets a specific open doc by index/title/url, else the active one. |
 
 ## Everyday tools borrowed from the sibling projects
 
@@ -299,3 +300,39 @@ All **191 tools** of the `libreoffice` MCP server (v0.9.6), generated from
 | `list_recent_documents` | List the documents from LibreOffice's File > Recent Documents, newest first, with title and file path — so a user who says 'open the essay I was working on' can be offered the right file without knowing where it lives. |
 | `print_document` | Send a document to a PHYSICAL printer — this consumes real paper. Only call it when the user has actually asked to print, and confirm the printer and page range first if there is any doubt. Targets a specific open doc by index/title/url, else the active one. |
 | `writer_resolve_comment` | Mark Writer comment(s) resolved or unresolved — the write side of what writer_get_comments reports. Pick by 'index' (as listed by writer_get_comments), or by 'search' (comment-text substring) / 'author' to resolve every match. Needs LibreOffice 7.1+. |
+
+## Impress (presentations) — slides addressed by 1-based index
+
+| Tool | Description |
+|---|---|
+| `impress_overview` | Read the presentation: slide count and, per slide, its 1-based index, layout, title, body text length, and whether it has speaker notes. The 'orient yourself' tool for a deck — call it first. |
+| `impress_add_slide` | Add a slide and apply a layout. 'after' (1-based) inserts the new slide right after that slide; omit to append at the end. 'layout' picks the placeholders: title_subtitle, title_content, two_content, title_only, or blank. Returns the new slide's 1-based number. |
+| `impress_read_slide` | Read one slide in full: its layout, title, body bullets (each with its indent level), the names of any other shapes, and speaker notes. Address it by 1-based 'slide'. |
+| `impress_set_title` | Set the title placeholder of slide 'slide' (1-based) to 'text'. The slide needs a layout that has a title (all but 'blank'). |
+| `impress_set_content` | Fill the content/outline placeholder of slide 'slide' (1-based) with bullet points. 'bullets' is a list of strings, or {'text','level'} objects where level 0 is a top bullet and 1+ indents it. Needs a content layout (e.g. title_content). |
+| `impress_set_notes` | Set the speaker notes of slide 'slide' (1-based) to 'text'. Notes are what the presenter sees, not the audience. |
+| `impress_insert_image` | Insert an image from a local file 'path' onto slide 'slide' (1-based). Position/size in millimetres (x_mm/y_mm/width_mm/height_mm); size defaults to the image's own dimensions. |
+| `impress_insert_shape` | Add an auto shape (rectangle, ellipse, line, text) to slide 'slide' (1-based) with optional 'text' and 'fill_color' (hex like '#4472C4'). Position/size in millimetres. |
+| `impress_insert_text_box` | Add a free-floating text box to slide 'slide' (1-based) holding 'text', positioned/sized in millimetres. For text outside the layout placeholders. |
+| `impress_set_layout` | Change the autolayout of slide 'slide' (1-based) to 'layout' (title_subtitle, title_content, two_content, title_only, blank). Reflows the placeholders; existing placeholder text is kept where a matching box remains. |
+| `impress_delete_slide` | Delete slide 'slide' (1-based). Refuses to delete the last remaining slide. |
+| `impress_duplicate_slide` | Duplicate slide 'slide' (1-based); the copy is inserted immediately after it. Returns the new slide's 1-based number. |
+| `impress_set_transition` | Set the slide-change transition on slide 'slide' (1-based) or every slide ('all':true). 'type': none, fade, wipe, push, cover, uncover, dissolve, wheel, cut. 'duration' is the effect length (seconds); 'advance_secs' auto-advances after N seconds (omit = advance on click). |
+| `impress_export_slides` | Render slides to image files in directory 'dir' — one file per slide (slide-01.png, ...). 'format': png, svg, or jpg. Exports all slides unless 'slide' (1-based) is given. This is real rendering, not available to .pptx file writers. |
+| `impress_insert_table` | Insert a table on slide 'slide' (1-based). Give 'rows'+'cols', or a 'data' grid (list of rows) to size and fill it in one call. Position/size in millimetres. |
+| `impress_insert_chart` | Insert a data chart on slide 'slide' (1-based). 'chart_type': column, bar, line, area, pie. 'data' is a grid whose first row is the series headers and first column is the category labels (e.g. [['','2023','2024'],['APAC',10,14],['EMEA',8,9]]). Optional 'title'. Position/size in millimetres. |
+| `impress_slideshow` | Control the on-screen slideshow: action 'start' (optionally 'from_slide', 1-based), 'stop', or 'status'. Starting launches the show in the LibreOffice window, so it needs a GUI session (not a headless office). Returns whether a show is running. |
+| `impress_set_background` | Set a slide background on slide 'slide' (1-based) or every slide ('all':true): a solid 'color' (hex like '#2E4053'), an 'image' (local file, stretched to fill), or both, with optional 'transparency' (0 opaque..100 invisible — e.g. 70 for a faint watermark). Renders behind the content; calling again replaces it. |
+| `impress_add_animation` | Animate a shape on slide 'slide' (1-based). 'shape' is the 1-based shape index (see impress_read_slide). 'effect': appear, fade, wipe, push, cover, uncover, dissolve, wheel, or cut. 'trigger': on_click (default), with_previous, or after_previous. 'duration' in seconds. This is a per-object build-in animation — something .pptx file writers cannot do. |
+
+## Draw (vector drawings) — pages addressed by 1-based index
+
+| Tool | Description |
+|---|---|
+| `draw_overview` | Read a Draw document: page count and, per page, its 1-based index, name, and shape count. The 'orient yourself' tool for a drawing. |
+| `draw_read_page` | List the shapes on Draw page 'page' (1-based): each shape's index, name, kind, and any text. |
+| `draw_add_page` | Append a new page to the Draw document, optionally naming it. Returns the new page's 1-based number. |
+| `draw_insert_shape` | Add an auto shape (rectangle, ellipse, line, text) to Draw page 'page' (1-based, default 1) with optional 'text' and 'fill_color' (hex). Position/size in millimetres. |
+| `draw_insert_text_box` | Add a text box holding 'text' to Draw page 'page' (1-based, default 1). Position/size in millimetres. |
+| `draw_insert_image` | Insert an image from local file 'path' onto Draw page 'page' (1-based, default 1). Position/size in millimetres; size defaults to the image's own dimensions. |
+| `draw_insert_connector` | Draw a connector line on Draw page 'page' (1-based, default 1) from (x1_mm,y1_mm) to (x2_mm,y2_mm). Optionally glue its ends to shapes by 1-based shape index (start_shape/end_shape) so the connector follows them. Draw's diagramming primitive. |
