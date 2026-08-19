@@ -68,9 +68,29 @@ const child = spawn(py, ["-u", server], {
   env: process.env,
   windowsHide: true,
 });
-process.stdin.pipe(child.stdin);
-child.stdout.pipe(process.stdout);
-child.stderr.pipe(process.stderr);
+
+// A bare `.pipe()` does not forward stream errors, and Node's default action
+// for an unhandled 'error' event is to THROW — killing this whole launcher
+// instantly and silently (no stderr, no exit-code log below) the moment
+// either end of a pipe goes away, e.g. Claude Desktop reclaiming this as an
+// idle Electron UtilityProcess. That is indistinguishable, from Claude
+// Desktop's side, from the server just vanishing ("Server transport closed
+// unexpectedly"). Log-and-swallow instead so a transient EPIPE/ECONNRESET on
+// one pipe doesn't take down a healthy Python server underneath it.
+function safePipe(src, dst) {
+  const onError = (err) => {
+    if (err && err.code !== "EPIPE" && err.code !== "ECONNRESET") {
+      console.error("[libreoffice-connector] stream error: " + err.message);
+    }
+  };
+  src.on("error", onError);
+  dst.on("error", onError);
+  src.pipe(dst);
+}
+safePipe(process.stdin, child.stdin);
+safePipe(child.stdout, process.stdout);
+safePipe(child.stderr, process.stderr);
+
 child.on("error", (err) => {
   console.error("[libreoffice-connector] failed to start server: " + err.message);
   process.exit(1);
