@@ -39,6 +39,22 @@ every JSON schema, the handler bound to each name, and both tier sets. Only the
 
 ### Fixed
 
+- **The `.mcpb` launcher (`mcpb/index.js`) could crash silently and disconnect
+  the server from Claude Desktop**, usually after an idle period of anywhere
+  from a few minutes to over an hour. `process.stdin.pipe(child.stdin)` and
+  friends forward data but not errors: the instant either end of a piped
+  stream errored (e.g. `EPIPE` when Claude Desktop's host side of the pipe
+  closed — observed alongside `UtilityProcess spawn timeout` in the same log,
+  consistent with Electron reclaiming an idle utility process), Node's default
+  action for an unhandled `'error'` event is to throw, killing the whole
+  launcher before it ever reached our own `child.on("exit")` handler. That is
+  why every bad disconnect in the logs showed Claude Desktop's generic
+  "Server transport closed unexpectedly" / "Server disconnected" with **no**
+  `"[libreoffice-connector] server exited code=... signal=..."` line from us —
+  the crash bypassed that logging entirely. Piping now goes through a
+  `safePipe()` helper that attaches `'error'` listeners to both ends of each
+  stream and logs-and-swallows instead of crashing, so a transient broken pipe
+  no longer takes down a healthy Python server underneath it.
 - **`print_settings` was broken for Calc** (shipped in 0.9.6). Calc keeps its
   print switches on the **page style**, not on `com.sun.star.document.Settings`
   — which for a spreadsheet carries only `PrinterName`/`PrinterSetup`. Every
