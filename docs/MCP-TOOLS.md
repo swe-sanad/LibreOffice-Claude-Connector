@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **218 tools** of the `libreoffice` MCP server (v0.9.7), generated from the
+All **218 tools** of the `libreoffice` MCP server (v0.9.8), generated from the
 live registry by `scripts/gen_mcp_tools_doc.py`. Do not edit by hand.
 
 **73** are advertised by default; the rest are reachable by name through

@@ -5,6 +5,8 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.9.8] — 2026-08-19
+
 ### Changed — the server is a package, not one 9,000-line file
 
 `mcp/libreoffice_mcp.py` had grown to **9,048 lines**. Both sibling projects are

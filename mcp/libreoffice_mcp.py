@@ -21,7 +21,7 @@ from loconn.core import *                    # noqa: E402,F401,F403
 from loconn import tools as _tools           # noqa: E402,F401 - self-registering
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.9.7"
+SERVER_VERSION = "0.9.8"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # TOOLS, TOOL_DEFS, _BASIC_TOOLS, _NO_UNDO, _full_tier, _advertised_tools all
