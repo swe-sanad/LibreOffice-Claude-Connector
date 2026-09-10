@@ -10,29 +10,78 @@ from ..registry import register
 
 
 
+_CHAR_KEYS = ("bold", "italic", "underline", "font_name", "font_size", "font_color")
+
+
+def _apply_char_format(rng, args):
+    """Character props shared by writer_format_text (runs) and
+    writer_format_paragraph (whole paragraphs). Returns the keys applied."""
+    applied = []
+    if "bold" in args:
+        rng.CharWeight = 150.0 if args["bold"] else 100.0
+        applied.append("bold")
+    if "italic" in args:
+        rng.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
+                                    "ITALIC" if args["italic"] else "NONE")
+        applied.append("italic")
+    if "underline" in args:
+        rng.CharUnderline = 1 if args["underline"] else 0
+        applied.append("underline")
+    if "font_name" in args:
+        rng.CharFontName = args["font_name"]
+        applied.append("font_name")
+    if "font_size" in args:
+        rng.CharHeight = float(args["font_size"])
+        applied.append("font_size")
+    if "font_color" in args:
+        rng.CharColor = _hex_color(args["font_color"])
+        applied.append("font_color")
+    return applied
+
+
 def tool_writer_format_text(args):
     doc = _require_writer()
-    desc = doc.createSearchDescriptor()
-    desc.SearchString = args["search"]
-    desc.setPropertyValue("SearchCaseSensitive",
-                          bool(args.get("match_case", False)))
-    found = doc.findAll(desc)
-    for i in range(found.getCount()):
-        rng = found.getByIndex(i)
-        if "bold" in args:
-            rng.CharWeight = 150.0 if args["bold"] else 100.0
-        if "italic" in args:
-            rng.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
-                                        "ITALIC" if args["italic"] else "NONE")
-        if "underline" in args:
-            rng.CharUnderline = 1 if args["underline"] else 0
-        if "font_name" in args:
-            rng.CharFontName = args["font_name"]
-        if "font_size" in args:
-            rng.CharHeight = float(args["font_size"])
-        if "font_color" in args:
-            rng.CharColor = _hex_color(args["font_color"])
-    return {"matches_formatted": found.getCount()}
+    if not any(k in args for k in _CHAR_KEYS):
+        raise RuntimeError("Give at least one of: %s." % ", ".join(_CHAR_KEYS))
+    if args.get("search"):
+        desc = doc.createSearchDescriptor()
+        desc.SearchString = args["search"]
+        desc.setPropertyValue("SearchCaseSensitive",
+                              bool(args.get("match_case", False)))
+        found = doc.findAll(desc)
+        for i in range(found.getCount()):
+            _apply_char_format(found.getByIndex(i), args)
+        return {"matches_formatted": found.getCount(), "scope": "search"}
+    if "start" not in args:
+        raise RuntimeError("Give 'search', or 'start' (+ count / char_start / "
+                           "char_end) to target paragraphs by index.")
+    start = int(args["start"])
+    cnt = int(args.get("count", 1))
+    text = doc.getText()
+    n = 0
+    for i, para in _writer_paragraphs(doc):
+        if i < start:
+            continue
+        if i >= start + cnt:
+            break
+        target = para
+        if "char_start" in args or "char_end" in args:
+            cur = text.createTextCursorByRange(para.getStart())
+            cs = int(args.get("char_start", 0))
+            ce = args.get("char_end")
+            length = len(para.getString())
+            ce = length if ce is None else min(int(ce), length)
+            if cs < 0 or cs >= ce:
+                raise RuntimeError("char_start/char_end %s..%s invalid for a %d-char"
+                                   " paragraph." % (cs, ce, length))
+            cur.goRight(cs, False)
+            cur.goRight(ce - cs, True)
+            target = cur
+        _apply_char_format(target, args)
+        n += 1
+    if n == 0:
+        raise RuntimeError("No body paragraph at index %d." % start)
+    return {"paragraphs_formatted": n, "scope": "range"}
 
 
 def tool_writer_insert_image(args):
@@ -103,19 +152,22 @@ def _apply_para_format(target, args):
     if "style_name" in args:
         target.ParaStyleName = args["style_name"]
         applied.append("style_name")
+    if "keep_with_next" in args:
+        target.ParaKeepTogether = bool(args["keep_with_next"])
+        applied.append("keep_with_next")
+    applied += _apply_char_format(target, args)
     return applied
+
+
+_PARA_KEYS = ("align", "line_spacing_percent", "space_above_mm", "space_below_mm",
+              "indent_left_mm", "indent_right_mm", "first_line_indent_mm",
+              "style_name", "keep_with_next") + _CHAR_KEYS
 
 
 def tool_writer_format_paragraph(args):
     doc = _require_writer()
-    if not any(k in args for k in ("align", "line_spacing_percent",
-                                   "space_above_mm", "space_below_mm",
-                                   "indent_left_mm", "indent_right_mm",
-                                   "first_line_indent_mm", "style_name")):
-        raise RuntimeError("Give at least one paragraph property: align, "
-                           "line_spacing_percent, space_above_mm, space_below_mm, "
-                           "indent_left_mm, indent_right_mm, first_line_indent_mm, "
-                           "style_name.")
+    if not any(k in args for k in _PARA_KEYS):
+        raise RuntimeError("Give at least one property: %s." % ", ".join(_PARA_KEYS))
     # index-range targeting (0-based, pairs with writer_get_paragraphs);
     # takes precedence over search when 'start'/'count' are given.
     if "start" in args or "count" in args:
@@ -763,17 +815,22 @@ def tool_writer_format_document(args):
 
 TOOL_DEFS = [
     {"name": "writer_format_text",
-     "description": "Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string.",
-     "inputSchema": _schema({"search": _STR, "match_case": _BOOL,
+     "description": "Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string — or, by index, to body paragraphs start..start+count (default 1), optionally only characters char_start..char_end inside that single paragraph (0-based offsets, end exclusive). Use the index form to bold a lead phrase without hitting the same words elsewhere.",
+     "inputSchema": _schema({"search": dict(_STR, description="format every match; omit to target by index"),
+                             "match_case": _BOOL,
+                             "start": dict(_INT, description="first body paragraph index (0-based)"),
+                             "count": dict(_INT, description="how many paragraphs from start (default 1)"),
+                             "char_start": dict(_INT, description="first character offset inside the paragraph"),
+                             "char_end": dict(_INT, description="end offset (exclusive; default: paragraph end)"),
                              "bold": _BOOL, "italic": _BOOL, "underline": _BOOL,
                              "font_name": _STR, "font_size": _NUM,
-                             "font_color": dict(_STR, description="'#RRGGBB'")}, ["search"])},
+                             "font_color": dict(_STR, description="'#RRGGBB'")})},
     {"name": "writer_insert_image",
      "description": "Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size).",
      "inputSchema": _schema({"path": _STR, "width_mm": _INT, "height_mm": _INT}, ["path"])},
     # --- writer paragraph / page / table styling ---
     {"name": "writer_format_paragraph",
-     "description": "Paragraph formatting for Writer. Targets body paragraphs by 0-based 'start'/'count' (the index space writer_get_paragraphs reports), else paragraphs matching 'search', else ALL body paragraphs. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title') — e.g. restyle one heading by index with start + style_name.",
+     "description": "Paragraph formatting for Writer. Targets body paragraphs by 0-based 'start'/'count' (the index space writer_get_paragraphs reports), else paragraphs matching 'search', else ALL body paragraphs. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), keep_with_next (stop headings orphaning at a page bottom), a named paragraph style (e.g. 'Quotations', 'Title'), and/or whole-paragraph character props (font_size, font_name, bold, italic, font_color) — e.g. set every bullet in a range to 10.5 pt.",
      "inputSchema": _schema({"search": dict(_STR, description="format paragraphs containing this text; omit for all"),
                              "start": dict(_INT, description="first paragraph index (0-based); overrides search"),
                              "count": dict(_INT, description="how many paragraphs from 'start' (default: to end)"),
@@ -783,7 +840,11 @@ TOOL_DEFS = [
                              "space_above_mm": _NUM, "space_below_mm": _NUM,
                              "indent_left_mm": _NUM, "indent_right_mm": _NUM,
                              "first_line_indent_mm": _NUM,
-                             "style_name": dict(_STR, description="named paragraph style to apply")})},
+                             "keep_with_next": dict(_BOOL, description="keep the paragraph on the same page as the next one"),
+                             "style_name": dict(_STR, description="named paragraph style to apply"),
+                             "font_size": dict(_NUM, description="pt, whole paragraph"),
+                             "font_name": _STR, "bold": _BOOL, "italic": _BOOL,
+                             "font_color": dict(_STR, description="'#RRGGBB'")})},
     {"name": "writer_set_page_style",
      "description": "Page styling for Writer: paper size (a4/a5/a3/letter/legal, or width_mm+height_mm), orientation (portrait/landscape), page margins (mm), and column count. Applies to the document's page style.",
      "inputSchema": _schema({"paper": dict(_STR, enum=["a4", "a5", "a3", "letter", "legal"]),

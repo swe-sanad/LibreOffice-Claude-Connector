@@ -39,10 +39,10 @@ def tool_lo_status(_args):
            "tool_tier": os.environ.get("LO_TOOLS", "basic").strip().lower(),
            "documents": [_doc_info(doc) for doc in _open_docs()]}
     if advertised < len(TOOLS):
-        out["more_tools"] = ("%d further tools are available via dispatch "
-                            "(use dispatch with tool='list' for the catalog); "
-                            "set LO_TOOLS=full to advertise them all directly."
-                            % (len(TOOLS) - advertised))
+        out["more_tools"] = ("%d further tools are callable via dispatch {tool, args}. "
+                            "dispatch tool='list' returns ALL %d grouped by application "
+                            "(filter='writer' narrows it); set LO_TOOLS=full to advertise "
+                            "them all directly." % (len(TOOLS) - advertised, len(TOOLS)))
     if _state.get("transport") == "socket":
         tip = ("Connected over a socket, so Claude can only reach a LibreOffice "
                "it launched itself. Installing the agent-acceptor extension "

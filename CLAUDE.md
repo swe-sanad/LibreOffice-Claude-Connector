@@ -15,9 +15,9 @@ Two complementary connectors between **Anthropic's Claude** and **LibreOffice**
    the selection in place. Standalone — no Claude Code needed.
 2. **The MCP server** (`mcp/libreoffice_mcp.py`) — the *inverse*: lets Claude Code /
    Desktop / Cowork drive a running LibreOffice as a tool (like the Figma MCP).
-   **218 tools** (Calc, Writer, an Impress presentation family, and a Draw
-   vector-drawing family), of which a **73-tool everyday tier is what `tools/list`
-   advertises** (`LO_TOOLS=full` advertises all 218; `dispatch` reaches the rest
+   **220 tools** (Calc, Writer, an Impress presentation family, and a Draw
+   vector-drawing family), of which a **74-tool everyday tier is what `tools/list`
+   advertises** (`LO_TOOLS=full` advertises all 220; `dispatch` reaches the rest
    either way). Registered with Claude Code at user scope as `libreoffice`.
 
 ## Status
@@ -26,7 +26,7 @@ Verified against real **LibreOffice 25.2.3.2 / bundled Python 3.10.17**:
 
 - ✅ `.oxt`: menu + Tools-Add-Ons + toolbar + **sidebar deck/panel (render confirmed
   in Calc & Writer)**, in-app settings, Windows-DPAPI API-key storage.
-- ✅ MCP server: **218 tools** (73 advertised by default), all exercised against a
+- ✅ MCP server: **220 tools** (74 advertised by default), all exercised against a
   real office by `tests/integration/test_mcp_tools_extended.py`; protocol + core
   tool tests pass. Impress presentations (19 tools): full lifecycle create →
   slides/layouts → title/bullets/notes/images/shapes/tables/charts → background →
@@ -71,7 +71,7 @@ src/                    # extension source (single source of truth)
 ext/                    # .oxt packaging: description.xml, META-INF/manifest.xml, Addons.xcu,
                         #   ProtocolHandler.xcu, registry/.../{Sidebar,Factories}.xcu, icons/
 mcp/libreoffice_mcp.py  # MCP PROTOCOL layer only: initialize/tools/prompts + stdin loop
-mcp/loconn/             # the server package (218 tools), runs under LO python.exe
+mcp/loconn/             # the server package (220 tools), runs under LO python.exe
   registry.py           #   register() — ONE declaration site per tool; validates at import
   core.py               #   shared UNO machinery: connect, documents, undo, errors, timeout
   tools/<app>_<concern>.py  # calc_{data,sheets,format,analysis},
@@ -167,6 +167,14 @@ powershell -ExecutionPolicy Bypass -File scripts\start_office_socket.ps1   # →
   mutators but cannot rescue `calc_write_range`. Table in `docs/KNOWN-GAPS.md`.
 - **UNO layout props are 1/100 mm**; LibreOffice round-trips through twips, so values
   come back ±1–2 (15mm → 1499). Assert with tolerance.
+- **A module's own `TOOL_DEFS` shadows the registry's** under `from ..core import *` —
+  anything that needs EVERY tool must import `registry.TOOL_DEFS` explicitly (the
+  dispatch catalog listed 16 tools for a whole release because of this).
+- **Every cursor parked at an insert point rides to the END of the inserted text** —
+  after `insertString(cursor, s, False)` the cursor is collapsed after `s`, and a second
+  cursor created at the start moves too. To format the run you just inserted, select it
+  backwards (`goLeft(len_utf16, True)`). `setAllPropertiesToDefault()` on a split
+  paragraph does NOT drop the neighbour's list — set `NumberingStyleName = ""`.
 - **Network calls run OFF the UI thread** (`uno_ui.run_with_progress`); document
   reads/writes stay on the main thread. Don't touch UNO from the worker thread.
 

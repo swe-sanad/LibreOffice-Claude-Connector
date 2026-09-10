@@ -5,7 +5,7 @@
 from ..core import *      # noqa: F401,F403 - shared UNO machinery
 from ..core import (_schema, _STR, _BOOL, _INT, _NUM, _RANGE, _SHEET,
                     _GRID)  # noqa: F401
-from ..registry import register
+from ..registry import register, TOOL_DEFS as _ALL_TOOL_DEFS
 
 
 
@@ -356,6 +356,52 @@ def tool_list_macros(_args):
     return out
 
 
+_APP_GROUPS = ("writer", "calc", "impress", "draw")
+_ESCAPE_HATCHES = {"dispatch", "dispatch_uno", "uno_exec", "batch", "run_macro",
+                   "basic_module", "inspect_ods", "lo_screenshot"}
+
+
+def _usage(description):
+    """First sentence of a tool description, capped — the full catalog of 200+
+    tools has to fit in ONE tool result without the client truncating it."""
+    s = str(description).split(". ")[0].strip()
+    return s if len(s) <= 110 else s[:107].rstrip() + "..."
+
+
+def _catalog(filt=None):
+    """Every registered tool, grouped by application, one line each. `filt` is
+    a group name or a substring of the tool name (e.g. 'writer', 'paragraph')."""
+    filt = str(filt).strip().lower() if filt else ""
+    groups = {}
+    # registry.TOOL_DEFS, NOT this module's own TOOL_DEFS (which shadows the
+    # star-import) — that shadowing is why the catalog used to show 16 tools.
+    for d in _ALL_TOOL_DEFS:
+        name = d["name"]
+        head = name.split("_")[0]
+        if name in _ESCAPE_HATCHES:
+            group = "escape-hatch"
+        elif head in _APP_GROUPS:
+            group = head
+        elif head == "lo":
+            group = "server"
+        else:
+            group = "document"
+        if filt and filt != group and filt not in name:
+            continue
+        groups.setdefault(group, []).append(
+            {"name": name, "usage": _usage(d["description"]),
+             "advertised": name in _BASIC_TOOLS})
+    total = sum(len(v) for v in groups.values())
+    out = {"count": total, "total_registered": len(_ALL_TOOL_DEFS), "groups": groups,
+           "note": ("Every tool listed is callable: the advertised ones directly, "
+                    "ALL of them via dispatch {tool, args}. Pass filter='writer' "
+                    "(a group) or filter='paragraph' (a name substring) to narrow.")}
+    if filt and total == 0:
+        out["note"] = "No tool matches %r. Groups: %s." % (
+            filt, ", ".join(_APP_GROUPS + ("document", "server", "escape-hatch")))
+    return out
+
+
 def tool_dispatch(args):
     """Portmanteau facade: run ANY of this server's tools by name — for MCP
     clients with a tool-count cap. args: {"tool": "<name>", "args": {...}}. Omit
@@ -363,8 +409,7 @@ def tool_dispatch(args):
     NOT replace the discrete tools; it fans out to the very same handlers."""
     name = args.get("tool") or args.get("name")
     if not name or str(name).lower() in ("list", "help", "?"):
-        return {"tools": [{"name": d["name"], "description": d["description"]}
-                          for d in TOOL_DEFS]}
+        return _catalog(args.get("filter"))
     name = str(name)
     if name == "dispatch":
         raise RuntimeError("Refusing to dispatch to 'dispatch' (recursion).")
@@ -800,8 +845,9 @@ TOOL_DEFS = [
      "description": "Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable).",
      "inputSchema": _schema()},
     {"name": "dispatch",
-     "description": "Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog of names + one-line usage. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible.",
+     "description": "Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog — ALL registered tools, grouped by application (writer/calc/impress/draw/document/server/escape-hatch), one line each; add filter='writer' or filter='paragraph' to narrow it. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible.",
      "inputSchema": _schema({"tool": dict(_STR, description="tool name to run; omit or 'list' for the catalog"),
+                             "filter": dict(_STR, description="with 'list': a group name (writer, calc, ...) or a tool-name substring"),
                              "args": {"type": "object", "description": "arguments for that tool"}})},
 ]
 

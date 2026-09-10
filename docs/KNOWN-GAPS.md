@@ -432,3 +432,43 @@ restores the deleted rows but not the trimmed values.
 - **Alternating row banding in `calc_format_table`** — per-row `CellBackColor` is
   O(rows) UNO calls. The cheap route is one conditional format keyed on
   `MOD(ROW();2)` plus a named cell style; left as a marked `ponytail:` note.
+
+---
+
+# Session 9 field report (2026-09-10) — Writer in-place editing, issue #15 (218 → 220)
+
+Filed by another session after restructuring a real 3-page CV `.odt` in place ended
+in one `uno_exec` script. All nine items shipped in **v0.10.0**; live-verified by
+`tests/integration/test_writer_inplace_uno.py` (the issue's acceptance scenario,
+zero `uno_exec`). Full list in `CHANGELOG.md`.
+
+## Root causes worth remembering
+
+1. **`dispatch list` showed 16 tools, not 218 — since the 0.9.8 package split.**
+   Every tool module defines `TOOL_DEFS = [...]`; under `from ..core import *`
+   that shadows `registry.TOOL_DEFS`, so the catalog only listed the module it
+   lived in. Nothing failed — the result was just short. The agent trusted it and
+   concluded 200 tools did not exist. Now imports `registry.TOOL_DEFS` explicitly
+   and a test compares the catalog against the registry.
+2. **A UNO cursor parked at an insert point rides to the END of the inserted
+   text.** `insertString(cursor, s, False)` leaves the cursor collapsed after
+   `s`, and a second cursor created at the same start moves too — so "set bold
+   on the run I just inserted" formatted the NEXT run for two attempts. Select
+   backwards from the end (`goLeft(n_utf16, True)`).
+3. **`setAllPropertiesToDefault()` on a freshly split paragraph does not remove
+   the neighbour's list.** It reset spacing and runs but the paragraph stayed a
+   bullet. `NumberingStyleName = ""` is what removes it.
+4. **`set_alt_text` shared arg names with `_select_doc`** (`title`, `url`), so
+   every `title=` call went looking for a document by that title. Any tool that
+   takes `_select_doc(args)` must not also use `title`/`url`/`index` for itself.
+
+## Still open
+
+- `tests/integration/test_mcp_tools_extended.py` references helpers that moved
+  into tool modules in 0.9.8 (`server._page_style`, …) and dies after its Calc
+  section (`close_document` on the last doc also disposes the headless bridge).
+  The `tool_<name>` re-export on the entry module fixes half of it; the private
+  helpers need `from loconn.tools.writer_format import _page_style` in the test.
+- `list_style` on `writer_apply_list` sets `NumberingStyleName`; fresh
+  `NumberingRules` get auto names (e.g. `35069947721`) that may not be in the
+  NumberingStyles family — `copy_from_index` is the robust path for those.

@@ -1,9 +1,9 @@
 # MCP tool reference
 
-All **218 tools** of the `libreoffice` MCP server (v0.9.8), generated from the
+All **220 tools** of the `libreoffice` MCP server (v0.10.0), generated from the
 live registry by `scripts/gen_mcp_tools_doc.py`. Do not edit by hand.
 
-**73** are advertised by default; the rest are reachable by name through
+**74** are advertised by default; the rest are reachable by name through
 `dispatch`. Set `LO_TOOLS=full` to advertise them all. A ✅ marks a tool in
 the everyday tier.
 
@@ -125,7 +125,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `batch` |  | Run several tool calls in one round-trip. 'operations' is a list of {tool, args}; returns each result/error in order. stop_on_error (default true) halts on the first failure. Cuts latency on long multi-step document builds. |
 | `run_python_macro` |  | Invoke a PYTHON macro via the script provider (complements run_macro's Basic). 'name' is a full vnd.sun.star.script: URI, or 'file.py$function' resolved at 'location' (user/share/document; default user). Returns the macro's return value. |
 | `list_macros` |  | Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable). |
-| `dispatch` | ✅ | Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog of names + one-line usage. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible. |
+| `dispatch` | ✅ | Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog — ALL registered tools, grouped by application (writer/calc/impress/draw/document/server/escape-hatch), one line each; add filter='writer' or filter='paragraph' to narrow it. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible. |
 
 ## Cross-application — lifecycle
 
@@ -179,9 +179,9 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 
 | Tool | | Description |
 |---|---|---|
-| `writer_format_text` | ✅ | Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string. |
+| `writer_format_text` | ✅ | Apply character formatting (bold/italic/underline/font/size/color) to every match of a search string — or, by index, to body paragraphs start..start+count (default 1), optionally only characters char_start..char_end inside that single paragraph (0-based offsets, end exclusive). Use the index form to bold a lead phrase without hitting the same words elsewhere. |
 | `writer_insert_image` | ✅ | Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size). |
-| `writer_format_paragraph` |  | Paragraph formatting for Writer. Targets body paragraphs by 0-based 'start'/'count' (the index space writer_get_paragraphs reports), else paragraphs matching 'search', else ALL body paragraphs. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), and/or a named paragraph style (e.g. 'Quotations', 'Title') — e.g. restyle one heading by index with start + style_name. |
+| `writer_format_paragraph` |  | Paragraph formatting for Writer. Targets body paragraphs by 0-based 'start'/'count' (the index space writer_get_paragraphs reports), else paragraphs matching 'search', else ALL body paragraphs. Set alignment, line spacing (percent, e.g. 150 = 1.5x), space above/below (mm), left/right/first-line indent (mm), keep_with_next (stop headings orphaning at a page bottom), a named paragraph style (e.g. 'Quotations', 'Title'), and/or whole-paragraph character props (font_size, font_name, bold, italic, font_color) — e.g. set every bullet in a range to 10.5 pt. |
 | `writer_set_page_style` |  | Page styling for Writer: paper size (a4/a5/a3/letter/legal, or width_mm+height_mm), orientation (portrait/landscape), page margins (mm), and column count. Applies to the document's page style. |
 | `writer_set_header_footer` |  | Enable/disable and set the text of the Writer page header or footer. |
 | `writer_list_objects` |  | Enumerate objects in the active Writer doc — graphics, text frames, embedded/OLE objects, and draw shapes (rectangle/ellipse/line/text) — with name, type, anchor, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs. |
@@ -203,13 +203,13 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 
 | Tool | | Description |
 |---|---|---|
-| `writer_insert_heading` | ✅ | Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document. |
+| `writer_insert_heading` | ✅ | Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document — or BEFORE body paragraph at_index (0-based, the writer_get_paragraphs space). markup=true parses **bold**, *italic*, [text](url). |
 | `writer_get_outline` |  | List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs. |
 | `writer_add_conditional_section` |  | Writer's analog of conditional formatting: append text wrapped in a named CONDITIONAL SECTION that is HIDDEN when 'condition' evaluates true (LibreOffice field syntax, e.g. '1==1', 'user_field=="x"'). The condition is evaluated by Writer's layout when the document is viewed/printed. Set visible=false to hide the section immediately regardless of condition. |
 | `writer_insert_field` |  | Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes. |
 | `writer_insert_toc` |  | Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings. |
 | `writer_update_indexes` |  | Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits. |
-| `writer_apply_list` |  | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. Errors if the range matches no paragraph or none could be changed. |
+| `writer_apply_list` |  | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. To MATCH the document's own bullets, pass list_style (the numbering style name writer_get_paragraphs detail=true reports) or copy_from_index (reuse an existing list paragraph's rules + level). Errors if the range matches no paragraph or none could be changed. |
 | `writer_content_control` | ✅ | Insert a Word-compatible content control (Form > Content Controls): rich_text, plain_text, checkbox, dropdown, combobox, date or picture. Unlike form controls these sit IN the text flow rather than floating over it, survive round-tripping to .docx, and can be bound to XML data via 'xpath'. Wrap existing text with 'search', or append with 'text'. |
 | `writer_add_section` |  | Insert a named text section at the end, optionally multi-column and/or write-protected, wrapping optional text. |
 | `writer_bookmarks` |  | Bookmark lifecycle: action 'list', 'insert' (at a 'search' match or the end), 'delete', 'get' (anchored text), or 'set' (replace anchored text). |
@@ -220,7 +220,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `writer_insert_caption` | ✅ | Insert an auto-numbering caption, e.g. 'Figure 1 — Site plan'. 'category' names the number sequence (Figure/Table/...; numbers increment across captions sharing a category, and LibreOffice renumbers them automatically). Anchor it to a TABLE or an IMAGE by name — the usual case, and the caption then sits above the table / below the figure by convention — or to a text 'search' match, or append at the end. Use writer_list_tables / writer_list_figures to get the names. |
 | `writer_captions` | ✅ | List or re-word existing captions. action 'list' returns every auto-numbered caption (index, category, number, label) — including ones made with LibreOffice's own Insert > Caption. action 'set' rewrites the LABEL of the caption picked by 'index', 'search' or 'category', leaving the number a live field so renumbering still works. To delete a caption outright use writer_delete_paragraphs. |
 | `writer_set_line_numbering` |  | Turn document line numbering on ('enable', default true) or off, and set 'interval' (number every Nth line), 'count_empty_lines', and left 'distance_mm' (Tools > Line Numbering). |
-| `writer_list_figures` |  | List images/figures with name, size (mm), anchor type, and the anchoring paragraph's text (often the caption/context) — discovery for writer_replace_image / writer_set_image_layout. |
+| `writer_list_figures` |  | List images/figures with name, size (mm), anchor type, the anchoring paragraph's text (context) and index (anchor_index — the paragraph you must not delete), plus url/title/description when set — discovery for writer_replace_image / writer_set_image_layout / set_alt_text. |
 
 ## Writer — tables
 
@@ -243,15 +243,17 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 |---|---|---|
 | `writer_get_text` | ✅ | Get the full body text of the active Writer document. |
 | `writer_replace_selection` | ✅ | Replace the current Writer selection with text (or insert at the caret if nothing is selected). |
-| `writer_append_text` | ✅ | Append text at the end of the Writer document ('\n' becomes a paragraph break). new_paragraph=false continues the last paragraph. |
+| `writer_append_text` | ✅ | Append text at the end of the Writer document ('\n' becomes a paragraph break). new_paragraph=false continues the last paragraph. at_index inserts BEFORE that body paragraph instead (0-based, the writer_get_paragraphs space). markup=true turns **bold**, *italic* and [text](url) into runs. |
+| `writer_insert_paragraphs` | ✅ | Insert a BLOCK of paragraphs in one call, each with its own style/list/spacing — before body paragraph 'at_index' (default: append). paragraphs: [{text, style?, list?: 'bullet'\|'number'\|<numbering style name>, level?, space_above_mm?, space_below_mm?, markup?}]. Inline markup (**bold**, *italic*, [text](url)) is ON by default here. Returns next_index so the next block can follow this one. |
 | `writer_find_replace` | ✅ | Find & replace text across the Writer document. Keeps the formatting of what it replaced: a match spanning several formatting runs (part bold, part not) would otherwise come back chopped along the OLD run boundaries — the replacement now takes the formatting of the match's first character. Set preserve_formatting=false for LibreOffice's raw behaviour. With regex=true, 'search' is an ICU regular expression and $1..$n backreferences work in 'replace'. |
 | `writer_insert_page_break` |  | Insert a page break at the end of the Writer document. |
 | `writer_add_comment` |  | Add a comment/annotation. Anchors to the first match of 'search' if given, else to the current selection, else at the document end. |
 | `writer_get_comments` | ✅ | List the document's comments: [{author, text, anchor, resolved}]. |
 | `writer_word_count` |  | Document statistics for the active Writer doc: word, paragraph, character counts and page count. |
-| `writer_get_paragraphs` |  | List body paragraphs as [{index, text, style, is_heading}] so callers can target a paragraph by 0-based index or applied style instead of a unique search string. Index counts only body paragraphs (skips tables/frames). |
-| `writer_set_paragraph_text` |  | Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks. |
-| `writer_delete_paragraphs` |  | Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports. Deleting every paragraph leaves one empty paragraph (Writer requires at least one). |
+| `writer_get_paragraphs` |  | List body paragraphs as [{index, text, style, is_heading}] so callers can target a paragraph by 0-based index or applied style instead of a unique search string. Index counts only body paragraphs (skips tables/frames). start/count read a slice of a long document. detail=true adds numbering {style, level}, space_above_mm/space_below_mm, keep_with_next, tab_stops, runs [{text, bold, italic, size_pt, color, url}] and anchored_objects (image names anchored to that paragraph) — what an in-place edit needs to plan around. |
+| `writer_set_paragraph_text` |  | Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks. markup=true parses **bold**, *italic*, [text](url). |
+| `writer_delete_paragraphs` |  | Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports (it skips tables — pass include_tables=true to also remove the tables that sit inside the deleted span). Deleting every paragraph leaves one empty paragraph (Writer requires at least one). |
+| `writer_page_map` |  | Where the page breaks fall: [{page, first_paragraph_index, last_paragraph_index}] over body paragraphs, plus page_count — the read you need before trimming a document to fit N pages. Needs a view (walks the view cursor). |
 | `writer_track_changes` |  | Manage tracked changes: action enable/disable recording, accept_all, reject_all, or list/status (returns recording state + pending redlines with author/type/comment). |
 | `writer_insert_horizontal_rule` |  | Insert a horizontal divider line at the document end (a paragraph in the 'Horizontal Line' style). |
 | `writer_redact` |  | Black out every occurrence of a search term (black text on black background). NOTE: visual redaction only — the underlying text still exists in the file. |

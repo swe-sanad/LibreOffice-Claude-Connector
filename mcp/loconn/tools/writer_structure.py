@@ -15,9 +15,16 @@ def tool_writer_insert_heading(args):
     level = int(args.get("level", 1))
     if not 1 <= level <= 6:
         raise RuntimeError("level must be 1..6")
-    text, cursor = _append_paragraph(doc, style="Heading %d" % level)
-    text.insertString(cursor, args["text"], False)
-    return {"heading": args["text"], "level": level}
+    at = args.get("at_index")
+    if at is not None:
+        text, cursor = _paragraph_before(doc, int(at), style="Heading %d" % level)
+    else:
+        text, cursor = _append_paragraph(doc, style="Heading %d" % level)
+    _insert_runs(text, cursor, args["text"], bool(args.get("markup")))
+    out = {"heading": args["text"], "level": level}
+    if at is not None:
+        out["at_index"] = int(at)
+    return out
 
 
 def tool_writer_get_outline(_args):
@@ -151,40 +158,36 @@ def tool_writer_update_indexes(_args):
     return {"indexes_updated": indexes, "fields_refreshed": True}
 
 
-def _make_numbering_rules(doc, ordered):
-    """A bullet (default) or ordered NumberingRules, applied directly to
-    paragraphs so lists work regardless of the build's localized list-STYLE
-    names (e.g. 'List 1' / 'Numbering 1' instead of 'List Bullet')."""
-    import uno
-    from com.sun.star.style.NumberingType import ARABIC, CHAR_SPECIAL
-    rules = doc.createInstance("com.sun.star.text.NumberingRules")
-    if ordered:
-        level = (_pv("NumberingType", ARABIC), _pv("Prefix", ""),
-                 _pv("Suffix", "."))
-    else:
-        level = (_pv("NumberingType", CHAR_SPECIAL),
-                 _pv("BulletChar", u"•"), _pv("BulletFontName", "OpenSymbol"),
-                 _pv("Prefix", ""), _pv("Suffix", ""))
-    uno.invoke(rules, "replaceByIndex",
-               (0, _any_seq("com.sun.star.beans.PropertyValue", level)))
-    return rules
-
-
 def tool_writer_apply_list(args):
     doc = _require_writer()
     ordered = bool(args.get("ordered", False))
     start = int(args.get("start", 0))
     count = args.get("count")
     end = start + int(count) - 1 if count is not None else None
-    rules = _make_numbering_rules(doc, ordered)
+    level = int(args.get("level", 0))
+    list_style = args.get("list_style")
+    src = args.get("copy_from_index")
+    rules = None
+    if src is not None:
+        src_para = next((p for i, p in _writer_paragraphs(doc) if i == int(src)), None)
+        if src_para is None or src_para.NumberingRules is None:
+            raise RuntimeError("copy_from_index %s is not a list paragraph." % src)
+        rules = src_para.NumberingRules
+        if "level" not in args:
+            level = int(src_para.NumberingLevel)
+    elif not list_style:
+        rules = _make_numbering_rules(doc, ordered)
     changed = matched = 0
     last_err = None
     for i, para in _writer_paragraphs(doc):
         if i >= start and (end is None or i <= end):
             matched += 1
             try:
-                para.NumberingRules = rules
-                para.NumberingLevel = 0
+                if rules is not None:
+                    para.NumberingRules = rules
+                else:
+                    para.NumberingStyleName = str(list_style)
+                para.NumberingLevel = level
                 changed += 1
             except Exception as exc:
                 last_err = exc
@@ -198,7 +201,9 @@ def tool_writer_apply_list(args):
                                     " (%s)" % type(last_err).__name__ if last_err
                                     else ""))
     return {"ordered": ordered, "paragraphs_changed": changed,
-            "paragraphs_matched": matched}
+            "paragraphs_matched": matched, "level": level,
+            "source": ("copy_from_index" if src is not None else
+                       "list_style" if list_style else "new_rules")}
 
 
 def tool_writer_add_section(args):
@@ -601,6 +606,7 @@ def tool_writer_list_figures(_args):
     paragraph they anchor to (often the caption or surrounding context)."""
     doc = _require_writer()
     graphics = doc.getGraphicObjects()
+    anchor_index = _anchor_index_map(doc)
     out = []
     for nm in graphics.getElementNames():
         g = graphics.getByName(nm)
@@ -618,6 +624,16 @@ def tool_writer_list_figures(_args):
             entry["context"] = g.getAnchor().getString()[:80]
         except Exception:
             pass
+        if nm in anchor_index:
+            entry["anchor_index"] = anchor_index[nm]
+        for key, prop in (("url", "HyperLinkURL"), ("title", "Title"),
+                          ("description", "Description")):
+            try:
+                val = getattr(g, prop)
+                if val:
+                    entry[key] = val
+            except Exception:
+                pass
         out.append(entry)
     return {"figures": out, "count": len(out)}
 
@@ -700,8 +716,11 @@ def tool_writer_content_control(args):
 
 TOOL_DEFS = [
     {"name": "writer_insert_heading",
-     "description": "Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document.",
-     "inputSchema": _schema({"text": _STR, "level": dict(_INT, minimum=1, maximum=6)}, ["text"])},
+     "description": "Append a heading paragraph (styles 'Heading 1'..'Heading 6') at the end of the document — or BEFORE body paragraph at_index (0-based, the writer_get_paragraphs space). markup=true parses **bold**, *italic*, [text](url).",
+     "inputSchema": _schema({"text": _STR, "level": dict(_INT, minimum=1, maximum=6),
+                             "at_index": dict(_INT, description="insert before this body paragraph instead of appending"),
+                             "markup": dict(_BOOL, description="parse inline markup (default false)")},
+                            ["text"])},
     {"name": "writer_get_outline",
      "description": "List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs.",
      "inputSchema": _schema()},
@@ -725,10 +744,13 @@ TOOL_DEFS = [
      "description": "Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits.",
      "inputSchema": _schema()},
     {"name": "writer_apply_list",
-     "description": "Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. Errors if the range matches no paragraph or none could be changed.",
+     "description": "Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. To MATCH the document's own bullets, pass list_style (the numbering style name writer_get_paragraphs detail=true reports) or copy_from_index (reuse an existing list paragraph's rules + level). Errors if the range matches no paragraph or none could be changed.",
      "inputSchema": _schema({"ordered": dict(_BOOL, description="numbered list (default false = bulleted)"),
                              "start": dict(_INT, description="first paragraph index (default 0)"),
-                             "count": dict(_INT, description="how many paragraphs (default: to end)")})},
+                             "count": dict(_INT, description="how many paragraphs (default: to end)"),
+                             "list_style": dict(_STR, description="existing numbering style name to apply instead of fresh rules"),
+                             "copy_from_index": dict(_INT, description="reuse the NumberingRules (and level) of this list paragraph"),
+                             "level": dict(_INT, description="list level, 0-based (default 0, or the source paragraph's)")})},
     {"name": "writer_content_control",
      "description": "Insert a Word-compatible content control (Form > Content Controls): rich_text, plain_text, checkbox, dropdown, combobox, date or picture. Unlike form controls these sit IN the text flow rather than floating over it, survive round-tripping to .docx, and can be bound to XML data via 'xpath'. Wrap existing text with 'search', or append with 'text'.",
      "inputSchema": _schema({"kind": dict(_STR, enum=list(_CONTENT_CONTROL_KINDS)),
@@ -803,7 +825,7 @@ TOOL_DEFS = [
                              "count_empty_lines": _BOOL,
                              "distance_mm": _NUM})},
     {"name": "writer_list_figures",
-     "description": "List images/figures with name, size (mm), anchor type, and the anchoring paragraph's text (often the caption/context) — discovery for writer_replace_image / writer_set_image_layout.",
+     "description": "List images/figures with name, size (mm), anchor type, the anchoring paragraph's text (context) and index (anchor_index — the paragraph you must not delete), plus url/title/description when set — discovery for writer_replace_image / writer_set_image_layout / set_alt_text.",
      "inputSchema": _schema()},
 ]
 
