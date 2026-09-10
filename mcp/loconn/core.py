@@ -9,13 +9,13 @@ wholesale; nothing here knows what a tool is.
 
 import json
 import os
+import re
 import sys
 
 from .registry import (TOOLS, TOOL_DEFS, BASIC_TOOLS as _BASIC_TOOLS,
                        NO_UNDO as _NO_UNDO, advertised)
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.9.7"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # ../../src from mcp/loconn/core.py — the shared uno_bridge the .oxt also uses
@@ -927,6 +927,144 @@ def _advertised_tools():
     back to basic rather than erroring — a typo in a GUI config field must not
     leave the user with no tools at all."""
     return advertised(_full_tier())
+
+
+# --------------------------------------------------------------------------- #
+# Writer: positional insert + inline markup (issue #15)
+# --------------------------------------------------------------------------- #
+
+def _paragraph_before(doc, index, style=None):
+    """Return (text, cursor) inside a NEW empty paragraph inserted before body
+    paragraph `index` (the writer_get_paragraphs index space); index == count
+    appends. The new paragraph is reset to its style defaults so it does not
+    inherit the neighbour's list/spacing direct formatting."""
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    paras = [p for _, p in _writer_paragraphs(doc)]
+    n = len(paras)
+    if index < 0 or index > n:
+        raise RuntimeError("at_index %d out of range (0..%d)." % (index, n))
+    if index == n:
+        return _append_paragraph(doc, style)
+    text = doc.getText()
+    cursor = text.createTextCursorByRange(paras[index].getStart())
+    text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+    cursor.collapseToStart()
+    cursor.goLeft(1, False)          # back into the empty paragraph just made
+    try:
+        cursor.setAllPropertiesToDefault()
+        cursor.NumberingStyleName = ""   # setAllPropertiesToDefault leaves the list
+    except Exception:
+        pass
+    cursor.ParaStyleName = style if style else "Standard"
+    return text, cursor
+
+
+# **bold**, *italic*, [text](url) — deliberately no nesting/escaping.
+_MARKUP_RE = re.compile(r"\*\*(.+?)\*\*|\*(.+?)\*|\[([^\]]+)\]\(([^)\s]+)\)")
+
+
+def _parse_markup(s):
+    """'a **b** [c](u)' -> [(text, bold, italic, url), ...]."""
+    runs, pos = [], 0
+    for m in _MARKUP_RE.finditer(s):
+        if m.start() > pos:
+            runs.append((s[pos:m.start()], False, False, None))
+        if m.group(1) is not None:
+            runs.append((m.group(1), True, False, None))
+        elif m.group(2) is not None:
+            runs.append((m.group(2), False, True, None))
+        else:
+            runs.append((m.group(3), False, False, m.group(4)))
+        pos = m.end()
+    if pos < len(s):
+        runs.append((s[pos:], False, False, None))
+    return runs or [("", False, False, None)]
+
+
+def _insert_runs(text, cursor, line, markup):
+    """Insert one paragraph's worth of text at `cursor` (collapsed on exit).
+    With markup, every run gets EXPLICIT weight/posture/url so a plain run after
+    a bold one does not inherit the bold from the character before it."""
+    if not markup:
+        text.insertString(cursor, line, False)
+        cursor.collapseToEnd()
+        return
+    runs = _parse_markup(line)
+    styled = any(b or i or u for _, b, i, u in runs)
+    for run, bold, italic, url in runs:
+        if not run:
+            continue
+        text.insertString(cursor, run, False)
+        cursor.collapseToEnd()
+        if styled:
+            # Every cursor parked at the insert point rides to the END of the
+            # inserted text, so select the run backwards from there. Writer
+            # counts UTF-16 units, not code points.
+            cursor.goLeft(len(run.encode("utf-16-le")) // 2, True)
+            cursor.CharWeight = 150.0 if bold else 100.0
+            cursor.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
+                                           "ITALIC" if italic else "NONE")
+            cursor.HyperLinkURL = url or ""
+            cursor.collapseToEnd()
+
+
+def _insert_text(text, cursor, s, markup=False):
+    """Insert `s` at `cursor`; '\\n' becomes a paragraph break. Each new
+    paragraph keeps the previous one's style (the append-text contract)."""
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    for k, line in enumerate(s.split("\n")):
+        if k:
+            text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+            cursor.collapseToEnd()
+        _insert_runs(text, cursor, line, markup)
+
+
+def _make_numbering_rules(doc, ordered):
+    """A bullet (default) or ordered NumberingRules, applied directly to
+    paragraphs so lists work regardless of the build's localized list-STYLE
+    names (e.g. 'List 1' / 'Numbering 1' instead of 'List Bullet')."""
+    import uno
+    from com.sun.star.style.NumberingType import ARABIC, CHAR_SPECIAL
+    rules = doc.createInstance("com.sun.star.text.NumberingRules")
+    if ordered:
+        level = (_pv("NumberingType", ARABIC), _pv("Prefix", ""),
+                 _pv("Suffix", "."))
+    else:
+        level = (_pv("NumberingType", CHAR_SPECIAL),
+                 _pv("BulletChar", u"•"), _pv("BulletFontName", "OpenSymbol"),
+                 _pv("Prefix", ""), _pv("Suffix", ""))
+    uno.invoke(rules, "replaceByIndex",
+               (0, _any_seq("com.sun.star.beans.PropertyValue", level)))
+    return rules
+
+
+def _anchor_index_map(doc):
+    """{image name: body-paragraph index it anchors to}. Images anchored in a
+    header/footer/frame (a different XText) are left out."""
+    text = doc.getText()
+    pending = []
+    graphics = doc.getGraphicObjects()
+    for nm in graphics.getElementNames():
+        try:
+            anchor = graphics.getByName(nm).getAnchor()
+            cur = text.createTextCursorByRange(anchor.getStart())
+            cur.gotoStartOfParagraph(False)
+            pending.append((nm, cur))
+        except Exception:
+            continue
+    out = {}
+    if not pending:
+        return out
+    for i, para in _writer_paragraphs(doc):
+        for nm, cur in pending:
+            try:
+                if nm not in out and text.compareRegionStarts(cur, para) == 0:
+                    out[nm] = i
+            except Exception:
+                pass
+        if len(out) == len(pending):
+            break
+    return out
 
 
 # `from .core import *` skips names beginning with an underscore, and nearly

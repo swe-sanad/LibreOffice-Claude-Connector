@@ -19,9 +19,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from loconn.core import *                    # noqa: E402,F401,F403
 from loconn import tools as _tools           # noqa: E402,F401 - self-registering
+# The integration tests (and one-shot scripts) call tools as
+# `libreoffice_mcp.tool_<name>(args)`, as they did before the package split.
+globals().update({"tool_" + _n: _f for _n, _f in TOOLS.items()})
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.9.8"
+SERVER_VERSION = "0.10.0"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # TOOLS, TOOL_DEFS, _BASIC_TOOLS, _NO_UNDO, _full_tier, _advertised_tools all

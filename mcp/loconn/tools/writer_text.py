@@ -23,16 +23,6 @@ def tool_writer_replace_selection(args):
     ub = _bridge()
     doc = _require_writer()
     text = args["text"]
-
-def tool_writer_get_text(_args):
-    doc = _require_writer()
-    return {"text": doc.getText().getString()}
-
-
-def tool_writer_replace_selection(args):
-    ub = _bridge()
-    doc = _require_writer()
-    text = args["text"]
     _t, has_selection = ub.get_writer_selection(doc)
     if has_selection:
         ub.replace_writer_selection(doc, text)
@@ -42,14 +32,70 @@ def tool_writer_replace_selection(args):
 
 
 def tool_writer_append_text(args):
-    ub = _bridge()
     doc = _require_writer()
-    if bool(args.get("new_paragraph", True)):
+    at = args.get("at_index")
+    if at is not None:
+        text, cursor = _paragraph_before(doc, int(at), style="Standard")
+    elif bool(args.get("new_paragraph", True)):
         text, cursor = _append_paragraph(doc, style="Standard")
     else:
         text, cursor = _writer_end_cursor(doc)
-    ub._insert_multiline(text, cursor, args["text"], False)
-    return {"appended": len(args["text"])}
+    _insert_text(text, cursor, args["text"], markup=bool(args.get("markup")))
+    out = {"appended": len(args["text"])}
+    if at is not None:
+        out["at_index"] = int(at)
+    return out
+
+
+def tool_writer_insert_paragraphs(args):
+    """Insert a whole block of styled paragraphs before body paragraph
+    'at_index' (default: append). One call for the 80-paragraph rebuild."""
+    doc = _require_writer()
+    items = args.get("paragraphs")
+    if not items:
+        raise RuntimeError("Give 'paragraphs': a non-empty list of {text, ...}.")
+    n_body = sum(1 for _ in _writer_paragraphs(doc))
+    at = int(args.get("at_index", n_body))
+    markup = bool(args.get("markup", True))
+    text, cursor = _paragraph_before(doc, at)
+    from com.sun.star.text.ControlCharacter import PARAGRAPH_BREAK
+    bullet = number = None
+    for k, item in enumerate(items):
+        if isinstance(item, str):
+            item = {"text": item}
+        if k:
+            text.insertControlCharacter(cursor, PARAGRAPH_BREAK, False)
+            cursor.collapseToEnd()
+            try:
+                cursor.setAllPropertiesToDefault()   # no inherited spacing/runs
+            except Exception:
+                pass
+        cursor.ParaStyleName = item.get("style") or "Standard"
+        lst = item.get("list")
+        if not lst:
+            try:
+                cursor.NumberingStyleName = ""   # the split paragraph keeps the
+            except Exception:                    # neighbour's list otherwise
+                pass
+        else:
+            if lst in ("bullet", "number"):
+                if lst == "bullet":
+                    bullet = bullet or _make_numbering_rules(doc, False)
+                    cursor.NumberingRules = bullet
+                else:
+                    number = number or _make_numbering_rules(doc, True)
+                    cursor.NumberingRules = number
+            else:
+                cursor.NumberingStyleName = str(lst)
+            cursor.NumberingLevel = int(item.get("level", 0))
+        if "space_above_mm" in item:
+            cursor.ParaTopMargin = _mm100(item["space_above_mm"])
+        if "space_below_mm" in item:
+            cursor.ParaBottomMargin = _mm100(item["space_below_mm"])
+        _insert_runs(text, cursor, str(item.get("text", "")),
+                     item.get("markup", markup))
+    return {"inserted": len(items), "at_index": at,
+            "next_index": at + len(items)}
 
 
 # Character properties carried across a format-preserving replacement. Kept to
@@ -211,17 +257,80 @@ def tool_writer_word_count(_args):
     return out
 
 
-def tool_writer_get_paragraphs(_args):
-    doc = _require_writer()
-    out = []
-    enum = doc.getText().createEnumeration()
-    i = 0
-    while enum.hasMoreElements():
-        para = enum.nextElement()
+_TAB_ALIGN_NAMES = {0: "left", 1: "center", 2: "right", 3: "decimal", 4: "default"}
+
+
+def _para_detail(para):
+    """The extra facts an in-place edit needs to plan around (issue #15 §5)."""
+    d = {}
+    try:
+        if para.NumberingIsNumber and para.NumberingRules is not None:
+            d["numbering"] = {"style": para.NumberingStyleName or None,
+                              "level": int(para.NumberingLevel)}
+    except Exception:
+        pass
+    for key, prop in (("space_above_mm", "ParaTopMargin"),
+                      ("space_below_mm", "ParaBottomMargin")):
         try:
-            if not para.supportsService("com.sun.star.text.Paragraph"):
-                continue
+            d[key] = round(getattr(para, prop) / 100.0, 1)
         except Exception:
+            pass
+    try:
+        d["keep_with_next"] = bool(para.ParaKeepTogether)
+    except Exception:
+        pass
+    try:
+        d["tab_stops"] = [{"position_mm": round(ts.Position / 100.0, 1),
+                           "align": str(_enum_value(ts.Alignment)).lower()}
+                          for ts in para.ParaTabStops]
+    except Exception:
+        pass
+    runs = []
+    try:
+        pe = para.createEnumeration()
+        while pe.hasMoreElements():
+            portion = pe.nextElement()
+            try:
+                if portion.TextPortionType != "Text" or not portion.getString():
+                    continue
+            except Exception:
+                continue
+            run = {"text": portion.getString()}
+            try:
+                run["bold"] = portion.CharWeight > 100
+                run["italic"] = _enum_value(portion.CharPosture) not in (0, "NONE")
+                run["size_pt"] = portion.CharHeight
+                run["color"] = ("#%06X" % portion.CharColor
+                                if portion.CharColor not in (-1, None) else None)
+            except Exception:
+                pass
+            try:
+                if portion.HyperLinkURL:
+                    run["url"] = portion.HyperLinkURL
+            except Exception:
+                pass
+            runs.append(run)
+    except Exception:
+        pass
+    d["runs"] = runs
+    return d
+
+
+def tool_writer_get_paragraphs(args):
+    doc = _require_writer()
+    start = int(args.get("start", 0))
+    cnt = args.get("count")
+    detail = bool(args.get("detail"))
+    anchors = {}
+    if detail:
+        by_name = _anchor_index_map(doc)
+        for nm, idx in by_name.items():
+            anchors.setdefault(idx, []).append(nm)
+    out = []
+    total = 0
+    for i, para in _writer_paragraphs(doc):
+        total = i + 1
+        if i < start or (cnt is not None and i >= start + int(cnt)):
             continue
         try:
             level = int(para.getPropertyValue("OutlineLevel"))
@@ -231,10 +340,14 @@ def tool_writer_get_paragraphs(_args):
             style = para.getPropertyValue("ParaStyleName")
         except Exception:
             style = None
-        out.append({"index": i, "text": para.getString(),
-                    "style": style, "is_heading": level > 0})
-        i += 1
-    return {"paragraphs": out}
+        entry = {"index": i, "text": para.getString(),
+                 "style": style, "is_heading": level > 0}
+        if detail:
+            entry.update(_para_detail(para))
+            if i in anchors:
+                entry["anchored_objects"] = anchors[i]
+        out.append(entry)
+    return {"paragraphs": out, "total": total}
 
 
 def tool_writer_set_paragraph_text(args):
@@ -245,9 +358,40 @@ def tool_writer_set_paragraph_text(args):
         if i == target:
             cursor = text.createTextCursorByRange(para.getStart())
             cursor.gotoEndOfParagraph(True)
-            cursor.setString(args["text"])   # single paragraph; no break handling
+            cursor.setString("")              # single paragraph; no break handling
+            _insert_runs(text, cursor, args["text"], bool(args.get("markup")))
             return {"index": target, "text": args["text"]}
     raise RuntimeError("No body paragraph at index %d." % target)
+
+
+def _remove_tables_in_span(doc, start, end):
+    """Remove the text tables that sit between body paragraph `start` and body
+    paragraph `end` (exclusive; None = to the end of the document)."""
+    text = doc.getText()
+    enum = text.createEnumeration()
+    i = 0
+    inside = False
+    removed = []
+    while enum.hasMoreElements():
+        el = enum.nextElement()
+        try:
+            is_para = el.supportsService("com.sun.star.text.Paragraph")
+        except Exception:
+            is_para = False
+        if is_para:
+            if i == start:
+                inside = True
+            if end is not None and i == end:
+                break
+            i += 1
+        elif inside:
+            try:
+                if el.supportsService("com.sun.star.text.TextTable"):
+                    removed.append(el.getName())
+                    text.removeTextContent(el)
+            except Exception:
+                pass
+    return removed
 
 
 def tool_writer_delete_paragraphs(args):
@@ -263,13 +407,18 @@ def tool_writer_delete_paragraphs(args):
                            % (start, n))
     end = min(start + count, n)          # exclusive; clamp to the last paragraph
     deleted = end - start
+    tables_removed = []
+    if bool(args.get("include_tables")):
+        tables_removed = _remove_tables_in_span(doc, start,
+                                                end if end < n else None)
+        paras = [p for _, p in _writer_paragraphs(doc)]
     text = doc.getText()
     if start == 0 and end == n:
         # Text must keep one paragraph — collapse everything to a single empty one.
         cur = text.createTextCursorByRange(text.getStart())
         cur.gotoRange(text.getEnd(), True)
         cur.setString("")
-        return {"deleted": deleted, "remaining": 1,
+        return {"deleted": deleted, "remaining": 1, "tables_removed": tables_removed,
                 "note": "all paragraphs removed; one empty paragraph remains"}
     if end < n:
         # Consume paras[start..end-1] and their trailing breaks; paras[end]
@@ -282,7 +431,33 @@ def tool_writer_delete_paragraphs(args):
     cur = text.createTextCursorByRange(left)
     cur.gotoRange(right, True)
     cur.setString("")
-    return {"deleted": deleted, "start": start, "remaining": n - deleted}
+    return {"deleted": deleted, "start": start, "remaining": n - deleted,
+            "tables_removed": tables_removed}
+
+
+def tool_writer_page_map(_args):
+    """Which body paragraphs fall on which page — for fit-to-N-pages work.
+    Walks the view cursor to each paragraph start (needs a view; O(paragraphs))."""
+    doc = _require_writer()
+    ctrl = doc.getCurrentController()
+    if ctrl is None:
+        raise RuntimeError("No view on this document (headless without a "
+                           "controller) — page positions need a layout.")
+    vc = ctrl.getViewCursor()
+    pages = []
+    for i, para in _writer_paragraphs(doc):
+        vc.gotoRange(para.getStart(), False)
+        page = int(vc.getPage())
+        if pages and pages[-1]["page"] == page:
+            pages[-1]["last_paragraph_index"] = i
+        else:
+            pages.append({"page": page, "first_paragraph_index": i,
+                          "last_paragraph_index": i})
+    try:
+        page_count = int(ctrl.PageCount)
+    except Exception:
+        page_count = len(pages)
+    return {"pages": pages, "page_count": page_count}
 
 
 def tool_writer_track_changes(args):
@@ -568,8 +743,18 @@ TOOL_DEFS = [
      "description": "Replace the current Writer selection with text (or insert at the caret if nothing is selected).",
      "inputSchema": _schema({"text": _STR}, ["text"])},
     {"name": "writer_append_text",
-     "description": "Append text at the end of the Writer document ('\\n' becomes a paragraph break). new_paragraph=false continues the last paragraph.",
-     "inputSchema": _schema({"text": _STR, "new_paragraph": _BOOL}, ["text"])},
+     "description": "Append text at the end of the Writer document ('\\n' becomes a paragraph break). new_paragraph=false continues the last paragraph. at_index inserts BEFORE that body paragraph instead (0-based, the writer_get_paragraphs space). markup=true turns **bold**, *italic* and [text](url) into runs.",
+     "inputSchema": _schema({"text": _STR, "new_paragraph": _BOOL,
+                             "at_index": dict(_INT, description="insert before this body paragraph instead of appending"),
+                             "markup": dict(_BOOL, description="parse **bold**, *italic*, [text](url) (default false)")},
+                            ["text"])},
+    {"name": "writer_insert_paragraphs",
+     "description": "Insert a BLOCK of paragraphs in one call, each with its own style/list/spacing — before body paragraph 'at_index' (default: append). paragraphs: [{text, style?, list?: 'bullet'|'number'|<numbering style name>, level?, space_above_mm?, space_below_mm?, markup?}]. Inline markup (**bold**, *italic*, [text](url)) is ON by default here. Returns next_index so the next block can follow this one.",
+     "inputSchema": _schema({"at_index": dict(_INT, description="insert before this body paragraph (default: end)"),
+                             "paragraphs": {"type": "array", "items": {"type": "object"},
+                                            "description": "[{text, style?, list?, level?, space_above_mm?, space_below_mm?, markup?}]"},
+                             "markup": dict(_BOOL, description="default true; per-item 'markup' overrides")},
+                            ["paragraphs"])},
     {"name": "writer_find_replace",
      "description": "Find & replace text across the Writer document. Keeps the formatting of what it replaced: a match spanning several formatting runs (part bold, part not) would otherwise come back chopped along the OLD run boundaries — the replacement now takes the formatting of the match's first character. Set preserve_formatting=false for LibreOffice's raw behaviour. With regex=true, 'search' is an ICU regular expression and $1..$n backreferences work in 'replace'.",
      "inputSchema": _schema({"search": _STR, "replace": _STR,
@@ -596,16 +781,24 @@ TOOL_DEFS = [
      "description": "Document statistics for the active Writer doc: word, paragraph, character counts and page count.",
      "inputSchema": _schema()},
     {"name": "writer_get_paragraphs",
-     "description": "List body paragraphs as [{index, text, style, is_heading}] so callers can target a paragraph by 0-based index or applied style instead of a unique search string. Index counts only body paragraphs (skips tables/frames).",
-     "inputSchema": _schema()},
+     "description": "List body paragraphs as [{index, text, style, is_heading}] so callers can target a paragraph by 0-based index or applied style instead of a unique search string. Index counts only body paragraphs (skips tables/frames). start/count read a slice of a long document. detail=true adds numbering {style, level}, space_above_mm/space_below_mm, keep_with_next, tab_stops, runs [{text, bold, italic, size_pt, color, url}] and anchored_objects (image names anchored to that paragraph) — what an in-place edit needs to plan around.",
+     "inputSchema": _schema({"start": dict(_INT, description="first paragraph index (default 0)"),
+                             "count": dict(_INT, description="how many paragraphs (default: to end)"),
+                             "detail": dict(_BOOL, description="include numbering/spacing/tab stops/runs/anchored images")})},
     {"name": "writer_set_paragraph_text",
-     "description": "Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks.",
-     "inputSchema": _schema({"index": _INT, "text": _STR}, ["index", "text"])},
+     "description": "Replace the text of the body paragraph at a 0-based 'index' (the index space writer_get_paragraphs reports). Single paragraph — newlines are not turned into paragraph breaks. markup=true parses **bold**, *italic*, [text](url).",
+     "inputSchema": _schema({"index": _INT, "text": _STR,
+                             "markup": dict(_BOOL, description="parse inline markup (default false)")},
+                            ["index", "text"])},
     {"name": "writer_delete_paragraphs",
-     "description": "Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports. Deleting every paragraph leaves one empty paragraph (Writer requires at least one).",
+     "description": "Delete body paragraphs by 0-based index: 'count' paragraphs starting at 'start' (default 1), including their paragraph breaks. The index space is the one writer_get_paragraphs reports (it skips tables — pass include_tables=true to also remove the tables that sit inside the deleted span). Deleting every paragraph leaves one empty paragraph (Writer requires at least one).",
      "inputSchema": _schema({"start": _INT,
-                             "count": dict(_INT, description="how many paragraphs to delete (default 1)")},
+                             "count": dict(_INT, description="how many paragraphs to delete (default 1)"),
+                             "include_tables": dict(_BOOL, description="also remove tables lying inside the span (default false)")},
                             ["start"])},
+    {"name": "writer_page_map",
+     "description": "Where the page breaks fall: [{page, first_paragraph_index, last_paragraph_index}] over body paragraphs, plus page_count — the read you need before trimming a document to fit N pages. Needs a view (walks the view cursor).",
+     "inputSchema": _schema()},
     {"name": "writer_track_changes",
      "description": "Manage tracked changes: action enable/disable recording, accept_all, reject_all, or list/status (returns recording state + pending redlines with author/type/comment).",
      "inputSchema": _schema({"action": dict(_STR, enum=["enable", "disable", "accept_all", "reject_all", "list", "status"])})},
@@ -647,5 +840,5 @@ TOOL_DEFS = [
 ]
 
 register(globals(), TOOL_DEFS,
-         basic=['writer_append_text', 'writer_find_replace', 'writer_get_comments', 'writer_get_text', 'writer_replace_selection', 'writer_resolve_comment'],
-         read_only=['writer_find', 'writer_get_comments', 'writer_get_paragraphs', 'writer_get_text', 'writer_word_count'])
+         basic=['writer_append_text', 'writer_find_replace', 'writer_get_comments', 'writer_get_text', 'writer_insert_paragraphs', 'writer_replace_selection', 'writer_resolve_comment'],
+         read_only=['writer_find', 'writer_get_comments', 'writer_get_paragraphs', 'writer_get_text', 'writer_page_map', 'writer_word_count'])

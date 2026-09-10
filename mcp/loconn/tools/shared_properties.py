@@ -454,13 +454,17 @@ def tool_set_alt_text(args):
     """Give an image or shape alternative text. Without this a tagged PDF is
     still inaccessible: the structure is there but every picture is silent."""
     ub = _bridge()
-    doc = _select_doc(args) or _current_doc()
+    # NOT _select_doc(args): its 'title'/'url' selectors collide with the alt
+    # text and hyperlink args here, and made every title= call raise unless
+    # the alt text happened to be a substring of an open document's title.
+    doc = _current_doc()
     name = args.get("name")
     title = args.get("title")
     description = args.get("description")
     decorative = args.get("decorative")
-    if title is None and description is None and decorative is None:
-        raise RuntimeError("Give 'title', 'description', or decorative=true.")
+    url = args.get("url")
+    if title is None and description is None and decorative is None and url is None:
+        raise RuntimeError("Give 'title', 'description', 'url', or decorative=true.")
 
     def pages():
         if ub.is_calc(doc):
@@ -494,6 +498,8 @@ def tool_set_alt_text(args):
                     shape.Decorative = bool(decorative)
                 except Exception:
                     pass       # LibreOffice < 7.5 has no Decorative flag
+            if url is not None:
+                shape.HyperLinkURL = str(url)   # a linked logo; read back by writer_list_figures
             updated.append(shape_name)
             if name:
                 break
@@ -864,7 +870,7 @@ TOOL_DEFS = [
                              "title": dict(_STR, description="short label"),
                              "description": dict(_STR, description="the longer alt text"),
                              "decorative": dict(_BOOL, description="purely ornamental — skipped by screen readers"),
-                             "index": _INT, "url": _STR})},
+                             "url": dict(_STR, description="hyperlink the image/shape should open (e.g. a linked logo)")})},
     {"name": "list_styles",
      "description": "List style names by family: 'paragraph', 'character', 'cell', 'page', 'frame', 'numbering', ... Omit 'family' for all families. in_use_only filters to styles actually applied.",
      "inputSchema": _schema({"family": dict(_STR, description="style family (omit for all)"),
