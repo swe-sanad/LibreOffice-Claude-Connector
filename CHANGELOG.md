@@ -5,6 +5,72 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-09-10
+
+Closes [#15](https://github.com/swe-sanad/LibreOffice-Claude-Connector/issues/15):
+the Writer gaps that made an agent restructuring a real CV in place give up on
+the discrete tools and write one `uno_exec` script. 218 → **220 tools** (74
+advertised). The issue's acceptance scenario now runs with zero `uno_exec`
+calls, checked live by `tests/integration/test_writer_inplace_uno.py`.
+
+### Fixed — `dispatch list` showed 16 tools, not 218
+
+Every tool module defines its own `TOOL_DEFS`, and under `from ..core import *`
+that name shadowed the registry's list — so the catalog had only ever listed
+`shared_automation`'s own tools. Callers reasonably concluded the other 200 did
+not exist. The catalog now reads `registry.TOOL_DEFS`, returns **every** tool
+grouped by application (`writer` / `calc` / `impress` / `draw` / `document` /
+`server` / `escape-hatch`) with a one-line usage and an `advertised` flag,
+takes `filter` (a group name or a name substring), and is locked by a test that
+compares it against the registry. `lo_status.more_tools` says the same thing.
+
+### Fixed — `set_alt_text` raised on almost every `title=`
+
+It passed its args through the document selector, whose `title`/`url`
+selectors collide with the alt-text and hyperlink arguments — any title that
+was not a substring of an open document's title raised "matches nothing". It
+now targets the active document, and gained `url` (a linked logo), which
+`writer_list_figures` reads back.
+
+### Added — Writer in-place editing
+
+- **`writer_insert_paragraphs`** (advertised) — insert a whole block before
+  `at_index`: `[{text, style?, list?: bullet|number|<numbering style>, level?,
+  space_above_mm?, space_below_mm?}]`, inline markup on by default; returns
+  `next_index`.
+- **`writer_page_map`** — `[{page, first_paragraph_index, last_paragraph_index}]`
+  from the view cursor, for fit-to-N-pages work.
+- **`at_index`** on `writer_append_text` and `writer_insert_heading` — insert
+  before a body paragraph instead of only at the end.
+- **Inline markup** (`**bold**`, `*italic*`, `[text](url)`) via `markup: true`
+  on `writer_append_text`, `writer_insert_heading`, `writer_set_paragraph_text`
+  (off by default there, so literal asterisks keep working).
+- **`writer_format_text` by index** — `start`/`count`, plus `char_start`/
+  `char_end` inside one paragraph; `search` is no longer required.
+- **`writer_format_paragraph`** — `font_size`, `font_name`, `bold`, `italic`,
+  `font_color` over the range, and `keep_with_next`.
+- **`writer_apply_list`** — `list_style`, `level`, and `copy_from_index` to
+  reuse the document's own (auto-named) bullet rules instead of fresh ones.
+- **`writer_get_paragraphs`** — `start`/`count` slices; `detail: true` adds
+  `numbering {style, level}`, `space_above_mm`/`space_below_mm`,
+  `keep_with_next`, `tab_stops`, `runs [{text, bold, italic, size_pt, color,
+  url}]` and `anchored_objects`; the response carries `total`.
+- **`writer_list_figures`** — `anchor_index`, `url`, `title`, `description`.
+- **`writer_delete_paragraphs include_tables`** — removes the tables lying
+  inside the deleted span (the index space skips them, so they used to survive).
+
+### Changed
+
+- `libreoffice_mcp` re-exports `tool_<name>` for every registered tool again,
+  as the integration tests and one-shot scripts expect since before the split.
+- `_make_numbering_rules` moved to `core.py` (shared by two modules).
+
+### Known
+
+- `tests/integration/test_mcp_tools_extended.py` still reaches for private
+  helpers that moved into tool modules in 0.9.8 (`_page_style`, …) and fails
+  after its Calc section — pre-existing, tracked in `docs/KNOWN-GAPS.md`.
+
 ## [0.9.8] — 2026-08-19
 
 ### Changed — the server is a package, not one 9,000-line file
