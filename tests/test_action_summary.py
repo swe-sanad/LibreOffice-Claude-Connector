@@ -8,10 +8,16 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mcp"))
 
 import libreoffice_mcp as srv  # noqa: E402
+import loconn.core as core  # noqa: E402
+
+
+def _no_office():
+    raise RuntimeError("offline unit test: never connect to or launch LibreOffice")
 
 
 class TestActionSummary(unittest.TestCase):
@@ -48,6 +54,13 @@ class TestActionSummary(unittest.TestCase):
 
 
 class TestTwoBlockResponse(unittest.TestCase):
+    def setUp(self):
+        # Every tools/call runs inside an undo context on the current document,
+        # which connects to (or auto-launches) a real LibreOffice. Stay offline.
+        patcher = mock.patch.object(core, "_connect", _no_office)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_success_returns_summary_then_json(self):
         srv.TOOLS["_probe_ok"] = lambda a: {"cells_filled": 3, "range": "A1:C1"}
         try:
