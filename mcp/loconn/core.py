@@ -593,6 +593,11 @@ def _doc_info(doc):
             "url": doc.getURL() if hasattr(doc, "getURL") else ""}
 
 
+def _open_docs_info():
+    """What lo_status and list_documents list: _doc_info for each open doc."""
+    return [_doc_info(doc) for doc in _open_docs()]
+
+
 def _writer_end_cursor(doc):
     text = doc.getText()
     return text, text.createTextCursorByRange(text.getEnd())
