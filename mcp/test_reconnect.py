@@ -24,6 +24,14 @@ def _call(name):
 
 
 def main():
+    # Every tools/call runs inside an undo context on the current document,
+    # which connects to (or auto-launches) a real LibreOffice. Stay offline.
+    import loconn.core as core
+
+    def _no_office():
+        raise RuntimeError("offline test: never connect to or launch LibreOffice")
+    core._connect = _no_office
+
     # 1) classifier: a lost/disposed bridge vs a genuine tool error
     class DisposedException(Exception):
         pass
@@ -38,7 +46,7 @@ def main():
     srv._state.update(ctx="x", smgr="y", desktop="z")
     srv._reset_connection()
     assert srv._state == {"ctx": None, "smgr": None, "desktop": None,
-                          "transport": None}
+                          "transport": None, "arg_sep": None}
 
     # 3) a disposed bridge is reset + retried ONCE, and the retry succeeds
     calls = {"n": 0}
