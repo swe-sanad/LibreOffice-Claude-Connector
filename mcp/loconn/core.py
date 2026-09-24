@@ -589,6 +589,14 @@ def _doc_info(doc):
         title = doc.getTitle()
     except Exception:
         title = doc.getURL() if hasattr(doc, "getURL") else "?"
+    if not isinstance(title, str):
+        # A chart being edited in place is listed among the documents, and its
+        # getTitle() is XChartDocument.getTitle(): the title *shape*, not a string.
+        try:
+            title = doc.getCurrentController().getFrame().getTitle()
+        except Exception:
+            title = ""
+        title = title or (doc.getURL() if hasattr(doc, "getURL") else "") or "?"
     return {"title": title, "type": _doc_kind(doc),
             "url": doc.getURL() if hasattr(doc, "getURL") else ""}
 

@@ -11,6 +11,7 @@ from ..registry import register
 
 
 def tool_list_documents(_args):
+    from .shared_recovery import tool_lo_status  # defined in a sibling module
     return tool_lo_status(_args)
 
 

@@ -5,6 +5,30 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Fixed — `list_documents` always raised `NameError`
+
+It delegates to `tool_lo_status`, which lives in `shared_recovery.py` and was
+never imported into `shared_lifecycle.py`, so every call failed with
+`name 'tool_lo_status' is not defined`. A new offline test,
+`tests/test_global_names.py`, checks that every global name a server function
+references resolves, which catches this class of bug across all tools.
+
+### Fixed — `lo_status` / `list_documents` crashed while a chart was open
+
+A chart being edited in place is listed among the desktop's documents, and its
+`getTitle()` resolves to `XChartDocument.getTitle()`, which returns the title
+*shape*, not a string. Serialising the reply then failed with
+`'NoneType' object has no attribute '__name__'`. The document title now falls
+back to the frame title, then the URL, then `"?"`.
+
+### Fixed — offline tests could reach a real LibreOffice
+
+Every `tools/call` runs inside an undo context on the current document, so
+`tests/test_action_summary.py` and `mcp/test_reconnect.py` connected to a
+running office, or auto-launched one. On Linux the launch is absorbed by an
+already-open office, which then keeps a `localhost:2002` acceptor open. Both
+now stub `_connect`. `test_reconnect.py` also expects the `arg_sep` state key.
+
 ## [0.10.0] — 2026-09-10
 
 Closes [#15](https://github.com/swe-sanad/LibreOffice-Claude-Connector/issues/15):
