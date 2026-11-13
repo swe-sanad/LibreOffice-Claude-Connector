@@ -584,13 +584,32 @@ def _doc_kind(doc):
             else "draw" if ub.is_draw(doc) else "other")
 
 
+def _safe_title(doc, url):
+    """Title precedence: getTitle(), the frame title, the URL, then "?".
+
+    Only a non-empty string counts. A chart being edited in place is listed
+    among the documents, and its getTitle() is XChartDocument.getTitle(): the
+    title *shape*, not a string.
+    """
+    for read in (lambda: doc.getTitle(),
+                 lambda: doc.getCurrentController().getFrame().getTitle()):
+        try:
+            title = read()
+        except Exception:
+            continue
+        if isinstance(title, str) and title:
+            return title
+    return url or "?"
+
+
 def _doc_info(doc):
-    try:
-        title = doc.getTitle()
-    except Exception:
-        title = doc.getURL() if hasattr(doc, "getURL") else "?"
-    return {"title": title, "type": _doc_kind(doc),
-            "url": doc.getURL() if hasattr(doc, "getURL") else ""}
+    url = doc.getURL() if hasattr(doc, "getURL") else ""
+    return {"title": _safe_title(doc, url), "type": _doc_kind(doc), "url": url}
+
+
+def _open_docs_info():
+    """What lo_status and list_documents list: _doc_info for each open doc."""
+    return [_doc_info(doc) for doc in _open_docs()]
 
 
 def _writer_end_cursor(doc):
