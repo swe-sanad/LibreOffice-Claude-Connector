@@ -405,12 +405,25 @@ def _catalog(filt=None):
 def tool_dispatch(args):
     """Portmanteau facade: run ANY of this server's tools by name — for MCP
     clients with a tool-count cap. args: {"tool": "<name>", "args": {...}}. Omit
-    'tool' (or use 'list'/'help') for the catalog of names + one-line usage. Does
-    NOT replace the discrete tools; it fans out to the very same handlers."""
+    'tool' (or use 'list'/'help') for the catalog of names + one-line usage.
+    Use tool='describe' with args={'tool': '<name>'} to inspect a tool's schema
+    safely without calling it. Does NOT replace the discrete tools; it fans out
+    to the very same handlers."""
     name = args.get("tool") or args.get("name")
     if not name or str(name).lower() in ("list", "help", "?"):
         return _catalog(args.get("filter"))
     name = str(name)
+    if name.lower() in ("describe", "schema", "info"):
+        sub_args = args.get("args") or {}
+        target_name = sub_args.get("tool") or sub_args.get("name") or args.get("target")
+        if not target_name:
+            raise RuntimeError("Provide 'args': {'tool': '<name>'} to describe a tool.")
+        for d in _ALL_TOOL_DEFS:
+            if d["name"] == target_name:
+                return {"tool": d["name"], "description": d.get("description", ""),
+                        "inputSchema": d.get("inputSchema", {}),
+                        "advertised": d["name"] in _BASIC_TOOLS}
+        raise RuntimeError("No tool named %r found in catalog." % target_name)
     if name == "dispatch":
         raise RuntimeError("Refusing to dispatch to 'dispatch' (recursion).")
     fn = TOOLS.get(name)
@@ -845,10 +858,10 @@ TOOL_DEFS = [
      "description": "Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable).",
      "inputSchema": _schema()},
     {"name": "dispatch",
-     "description": "Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog — ALL registered tools, grouped by application (writer/calc/impress/draw/document/server/escape-hatch), one line each; add filter='writer' or filter='paragraph' to narrow it. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible.",
-     "inputSchema": _schema({"tool": dict(_STR, description="tool name to run; omit or 'list' for the catalog"),
+     "description": "Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog; use tool='describe' with args={'tool': '<name>'} to inspect a tool's schema without executing it. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible.",
+     "inputSchema": _schema({"tool": dict(_STR, description="tool name to run; omit or 'list' for the catalog, 'describe' for schema"),
                              "filter": dict(_STR, description="with 'list': a group name (writer, calc, ...) or a tool-name substring"),
-                             "args": {"type": "object", "description": "arguments for that tool"}})},
+                             "args": {"type": "object", "description": "arguments for that tool (or {'tool': '<name>'} with 'describe')"}})},
 ]
 
 register(globals(), TOOL_DEFS,

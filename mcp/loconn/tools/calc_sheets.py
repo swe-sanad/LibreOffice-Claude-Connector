@@ -246,6 +246,77 @@ def tool_calc_set_print_area(args):
     return {"print_area": args["range"]}
 
 
+def tool_calc_set_print_setup(args):
+    """Consolidated print area and page scaling setup in one call.
+    Sets the print range (or clears it) and configures fit-to-pages scaling,
+    orientation, and paper size on the sheet's page style."""
+    doc = _require_calc()
+    sheet = _resolve_sheet(doc, args.get("sheet"))
+    out = {}
+
+    if args.get("clear"):
+        sheet.setPrintAreas(())
+        out["print_area"] = "cleared"
+    elif "range" in args:
+        addr = sheet.getCellRangeByName(args["range"]).getRangeAddress()
+        sheet.setPrintAreas((addr,))
+        out["print_area"] = args["range"]
+        if args.get("title_rows"):
+            sheet.setTitleRows(sheet.getCellRangeByName(args["title_rows"]).getRangeAddress())
+            sheet.setPrintTitleRows(True)
+            out["title_rows"] = args["title_rows"]
+        if args.get("title_columns"):
+            sheet.setTitleColumns(sheet.getCellRangeByName(args["title_columns"]).getRangeAddress())
+            sheet.setPrintTitleColumns(True)
+            out["title_columns"] = args["title_columns"]
+
+    ps = doc.getStyleFamilies().getByName("PageStyles").getByName(sheet.PageStyle)
+    changed = []
+
+    orientation = args.get("orientation")
+    if orientation:
+        ps.IsLandscape = (str(orientation).lower() == "landscape")
+        changed.append("orientation")
+    elif args.get("landscape") is not None:
+        ps.IsLandscape = bool(args["landscape"])
+        changed.append("landscape")
+
+    if args.get("paper"):
+        size = _PAPER.get(str(args["paper"]).lower())
+        if size:
+            w, h = size
+            if getattr(ps, "IsLandscape", False):
+                w, h = h, w
+            s = _uno_struct("com.sun.star.awt.Size")
+            s.Width, s.Height = w, h
+            ps.Size = s
+            changed.append("paper")
+
+    fit_x = args.get("fit_to_pages_wide") if args.get("fit_to_pages_wide") is not None else args.get("fit_pages_x")
+    if fit_x is not None:
+        ps.ScaleToPagesX = int(fit_x)
+        changed.append("fit_pages_x")
+
+    fit_y = args.get("fit_to_pages_tall") if args.get("fit_to_pages_tall") is not None else args.get("fit_pages_y")
+    if fit_y is not None:
+        ps.ScaleToPagesY = int(fit_y)
+        changed.append("fit_pages_y")
+
+    if args.get("scale") is not None:
+        ps.PageScale = int(args["scale"])
+        changed.append("scale")
+
+    for key, prop in (("margin_top", "TopMargin"), ("margin_bottom", "BottomMargin"),
+                      ("margin_left", "LeftMargin"), ("margin_right", "RightMargin")):
+        if args.get(key) is not None:
+            setattr(ps, prop, _mm100(args[key]))
+            changed.append(key)
+
+    out["page_style"] = sheet.PageStyle
+    out["changed"] = changed
+    return out
+
+
 def tool_calc_group_outline(args):
     from com.sun.star.table.TableOrientation import ROWS, COLUMNS
     doc = _require_calc()
@@ -424,6 +495,19 @@ TOOL_DEFS = [
      "description": "Define the print range for a sheet (or clear=true), with optional repeating title_rows / title_columns ranges.",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "clear": _BOOL,
                              "title_rows": _STR, "title_columns": _STR})},
+    {"name": "calc_set_print_setup",
+     "description": "Consolidated print range and page scaling setup in ONE call: print range (or clear=true), fit_to_pages_wide (fit_pages_x), fit_to_pages_tall (fit_pages_y), orientation (landscape/portrait), paper (a4/letter/etc.), and repeating header rows/columns.",
+     "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "clear": _BOOL,
+                             "fit_to_pages_wide": dict(_INT, description="scale to fit N pages wide (e.g. 1)"),
+                             "fit_to_pages_tall": dict(_INT, description="scale to fit N pages tall (e.g. 1)"),
+                             "fit_pages_x": _INT, "fit_pages_y": _INT,
+                             "orientation": dict(_STR, enum=["landscape", "portrait"]),
+                             "landscape": _BOOL,
+                             "paper": dict(_STR, enum=["a4", "a5", "a3", "letter", "legal"]),
+                             "margin_top": _NUM, "margin_bottom": _NUM,
+                             "margin_left": _NUM, "margin_right": _NUM,
+                             "scale": dict(_INT, description="direct percentage scale, e.g. 100"),
+                             "title_rows": _STR, "title_columns": _STR})},
     {"name": "calc_group_outline",
      "description": "Row/column outline: action group/ungroup/show/hide over a range (axis rows|columns), or clear the whole outline.",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
@@ -436,5 +520,5 @@ TOOL_DEFS = [
 ]
 
 register(globals(), TOOL_DEFS,
-         basic=['calc_add_sheet', 'calc_list_sheets'],
+         basic=['calc_add_sheet', 'calc_list_sheets', 'calc_page_setup', 'calc_set_print_area', 'calc_set_print_setup'],
          read_only=['calc_list_sheets', 'calc_set_active_sheet'])

@@ -104,5 +104,82 @@ class BackwardsCompatibleNamesTest(unittest.TestCase):
         self.assertIs(m._NO_UNDO, registry.NO_UNDO)
 
 
+class PatchV0101SurfaceTest(unittest.TestCase):
+    """Verifications for v0.10.1: CTL font sync, writing mode, calc print setup, catalog describe, and everyday tier."""
+
+    def test_catalog_counts_match_registered_tools(self):
+        cat = m.tool_dispatch({"tool": "list"})
+        self.assertEqual(cat["total_registered"], len(registry.TOOL_DEFS))
+        self.assertEqual(cat["count"], len(registry.TOOL_DEFS))
+
+    def test_dispatch_describe(self):
+        desc = m.tool_dispatch({"tool": "describe", "args": {"tool": "writer_format_text"}})
+        self.assertEqual(desc["tool"], "writer_format_text")
+        self.assertIn("properties", desc["inputSchema"])
+        self.assertIn("script", desc["inputSchema"]["properties"])
+        with self.assertRaises(RuntimeError):
+            m.tool_dispatch({"tool": "describe", "args": {}})
+
+    def test_promoted_tools_in_basic_tier(self):
+        promoted = [
+            "writer_set_text_direction",
+            "writer_set_writing_mode",
+            "writer_insert_toc",
+            "writer_update_indexes",
+            "calc_set_borders",
+            "calc_set_print_setup",
+            "calc_set_print_area",
+            "calc_page_setup",
+        ]
+        for name in promoted:
+            self.assertIn(name, registry.BASIC_TOOLS, "%s not in BASIC_TOOLS" % name)
+            self.assertIn(name, registry.TOOLS, "%s not registered" % name)
+
+    def test_template_filters_registered(self):
+        from loconn.tools.shared_lifecycle import _FILTERS
+        self.assertEqual(_FILTERS.get(("writer", "ott")), "writer8_template")
+        self.assertEqual(_FILTERS.get(("calc", "ots")), "calc8_template")
+
+    def test_apply_char_format_ctl_sync(self):
+        from loconn.tools.writer_format import _apply_char_format
+        class MockRange:
+            def __init__(self):
+                self.CharWeight = None
+                self.CharWeightComplex = None
+                self.CharFontName = None
+                self.CharFontNameComplex = None
+                self.CharHeight = None
+                self.CharHeightComplex = None
+
+        # Default script='all' sets both
+        r = MockRange()
+        applied = _apply_char_format(r, {"bold": True, "font_name": "Amiri", "font_size": 14})
+        self.assertEqual(r.CharWeight, 150.0)
+        self.assertEqual(r.CharWeightComplex, 150.0)
+        self.assertEqual(r.CharFontName, "Amiri")
+        self.assertEqual(r.CharFontNameComplex, "Amiri")
+        self.assertEqual(r.CharHeight, 14.0)
+        self.assertEqual(r.CharHeightComplex, 14.0)
+        self.assertIn("bold", applied)
+        self.assertIn("font_name", applied)
+        self.assertIn("font_size", applied)
+
+        # Explicit script='western' only
+        rw = MockRange()
+        _apply_char_format(rw, {"bold": True, "font_name": "Liberation Sans", "script": "western"})
+        self.assertEqual(rw.CharWeight, 150.0)
+        self.assertIsNone(rw.CharWeightComplex)
+        self.assertEqual(rw.CharFontName, "Liberation Sans")
+        self.assertIsNone(rw.CharFontNameComplex)
+
+        # Explicit script='ctl' only
+        rc = MockRange()
+        _apply_char_format(rc, {"bold": True, "font_name": "Amiri", "script": "ctl"})
+        self.assertIsNone(rc.CharWeight)
+        self.assertEqual(rc.CharWeightComplex, 150.0)
+        self.assertIsNone(rc.CharFontName)
+        self.assertEqual(rc.CharFontNameComplex, "Amiri")
+
+
 if __name__ == "__main__":
     unittest.main()

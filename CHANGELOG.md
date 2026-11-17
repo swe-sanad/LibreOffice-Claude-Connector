@@ -5,6 +5,32 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.10.1] — 2026-11-18
+
+Minor patch addressing CTL/RTL typography synchronization, Calc print setup consolidation, everyday tool tier expansion, and template saving.
+
+### Fixed & Improved
+
+- **Writer CTL Typography Synchronization (`writer_format_text`)**:
+  - `_apply_char_format` now synchronizes Complex Text Layout (CTL) properties (`CharFontNameComplex`, `CharHeightComplex`, `CharWeightComplex`, `CharPostureComplex`) alongside Western properties when formatting runs or whole paragraphs.
+  - Added optional `script: 'all' | 'western' | 'ctl' | 'asian'` parameter (defaulting to `'all'`) allowing explicit script targeting.
+- **Writing Mode & Alignment**:
+  - `writer_format_document` now accepts `direction: 'rtl' | 'ltr'` to configure both page style and Standard paragraph writing mode and alignment in a single shot.
+  - Added `writer_set_writing_mode` as an explicit alias for `writer_set_text_direction`.
+- **Calc Print Setup Consolidation (`calc_set_print_setup`)**:
+  - Added `calc_set_print_setup` combining print range definition (`range`, `clear`, `title_rows`, `title_columns`) with page scaling (`fit_to_pages_wide`, `fit_to_pages_tall`, `scale`, `orientation`, `paper`) in one call to prevent multi-page export fragmentation.
+- **Calc Formatting Enhancements (`calc_format_range`)**:
+  - Added `bg_color` alias for `background_color`.
+  - Added inline border styling (`border_color`, `border_width_pt`, `border_outline_only`) directly within `calc_format_range`.
+- **Everyday Tool Surface (74 → 82 advertised)**:
+  - Promoted high-frequency formatting, TOC, and print tools into `BASIC_TOOLS`:
+    `writer_set_text_direction`, `writer_set_writing_mode`, `writer_insert_toc`, `writer_update_indexes`, `calc_set_borders`, `calc_set_print_setup`, `calc_set_print_area`, `calc_page_setup`.
+- **Safe Tool Inspection (`dispatch describe`)**:
+  - `dispatch` with `tool='describe'` safely returns a tool's description, schema, and advertised status without executing it or causing unintended document mutations.
+- **Template Saving & Navigation**:
+  - Added template filter mappings `("writer", "ott")` -> `writer8_template` and `("calc", "ots")` -> `calc8_template` to `_FILTERS`.
+  - Fixed `list_documents` referencing `tool_lo_status` across module boundaries.
+
 ## [0.10.0] — 2026-09-10
 
 Closes [#15](https://github.com/swe-sanad/LibreOffice-Claude-Connector/issues/15):

@@ -1,9 +1,9 @@
 # MCP tool reference
 
-All **220 tools** of the `libreoffice` MCP server (v0.10.0), generated from the
+All **222 tools** of the `libreoffice` MCP server (v0.10.1), generated from the
 live registry by `scripts/gen_mcp_tools_doc.py`. Do not edit by hand.
 
-**74** are advertised by default; the rest are reachable by name through
+**82** are advertised by default; the rest are reachable by name through
 `dispatch`. Set `LO_TOOLS=full` to advertise them all. A ✅ marks a tool in
 the everyday tier.
 
@@ -73,7 +73,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `calc_clear_conditional_formats` |  | Remove all conditional formats from a Calc range. |
 | `calc_add_comment` |  | Add (or replace) a cell comment/annotation on a single cell. |
 | `calc_get_comments` |  | List cell comments on one sheet, or across all sheets if 'sheet' is omitted: [{sheet, cell, author, text}]. |
-| `calc_set_borders` |  | Draw borders around/through a Calc range (table styling). Full grid by default; outline_only=true draws only the outer border. |
+| `calc_set_borders` | ✅ | Draw borders around/through a Calc range (table styling). Full grid by default; outline_only=true draws only the outer border. |
 | `calc_set_validation` |  | Cell validity for a range: 'list' shows a dropdown (blocking wrong entries unless blocking=false), 'hint' shows an on-select help message, 'clear' removes validation. List and hint can combine. |
 | `calc_delete_comment` |  | Delete the cell comment/annotation on a cell (companion to calc_add_comment / calc_get_comments). |
 | `calc_cell_protection` |  | Set locked/formula-hidden/hidden/print-hidden protection attributes on a range. Only takes effect once the sheet is protected (protect_document). |
@@ -101,8 +101,9 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `calc_set_document_defaults` |  | Set the workbook's base font and size by editing the 'Default' cell style — the Calc twin of writer_set_document_defaults. Applied to Western, Complex (RTL/CTL) and Asian scripts together, so an Arabic base font actually takes effect. Cells with their own explicit formatting keep it. |
 | `calc_set_header_footer` |  | Set the printed page header or footer of a spreadsheet — the Calc twin of writer_set_header_footer. Each has independent left/center/right parts. Use enable=false to switch it off. Applies to the active sheet's page style unless 'sheet' or 'style_name' says otherwise. |
 | `calc_named_ranges` |  | Workbook named ranges: action 'list', 'add' (name + content like 'Sheet1.$A$1:$B$5'), or 'delete'. |
-| `calc_page_setup` |  | Calc page style: landscape, paper (a4/a5/a3/letter/legal), margins (mm), scale %, fit_pages_x/y, center_h/center_v. |
-| `calc_set_print_area` |  | Define the print range for a sheet (or clear=true), with optional repeating title_rows / title_columns ranges. |
+| `calc_page_setup` | ✅ | Calc page style: landscape, paper (a4/a5/a3/letter/legal), margins (mm), scale %, fit_pages_x/y, center_h/center_v. |
+| `calc_set_print_area` | ✅ | Define the print range for a sheet (or clear=true), with optional repeating title_rows / title_columns ranges. |
+| `calc_set_print_setup` | ✅ | Consolidated print range and page scaling setup in ONE call: print range (or clear=true), fit_to_pages_wide (fit_pages_x), fit_to_pages_tall (fit_pages_y), orientation (landscape/portrait), paper (a4/letter/etc.), and repeating header rows/columns. |
 | `calc_group_outline` |  | Row/column outline: action group/ungroup/show/hide over a range (axis rows\|columns), or clear the whole outline. |
 | `calc_copy_sheet` |  | Duplicate a sheet within the document to 'new_name' at an optional 0-based position. |
 
@@ -125,7 +126,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `batch` |  | Run several tool calls in one round-trip. 'operations' is a list of {tool, args}; returns each result/error in order. stop_on_error (default true) halts on the first failure. Cuts latency on long multi-step document builds. |
 | `run_python_macro` |  | Invoke a PYTHON macro via the script provider (complements run_macro's Basic). 'name' is a full vnd.sun.star.script: URI, or 'file.py$function' resolved at 'location' (user/share/document; default user). Returns the macro's return value. |
 | `list_macros` |  | Discover macros: document Basic libraries -> modules, plus user Python script files. Best-effort (application Basic isn't always enumerable). |
-| `dispatch` | ✅ | Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog — ALL registered tools, grouped by application (writer/calc/impress/draw/document/server/escape-hatch), one line each; add filter='writer' or filter='paragraph' to narrow it. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible. |
+| `dispatch` | ✅ | Escape hatch to EVERY tool this server has, including the ones not advertised in the current tier: run any of them by name — {tool, args}. Omit 'tool' (or use 'list'/'help') for the full catalog; use tool='describe' with args={'tool': '<name>'} to inspect a tool's schema without executing it. Use this whenever the advertised set has no tool for the job — the catalog is the authoritative list of what is possible. |
 
 ## Cross-application — lifecycle
 
@@ -185,7 +186,8 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `writer_set_page_style` |  | Page styling for Writer: paper size (a4/a5/a3/letter/legal, or width_mm+height_mm), orientation (portrait/landscape), page margins (mm), and column count. Applies to the document's page style. |
 | `writer_set_header_footer` |  | Enable/disable and set the text of the Writer page header or footer. |
 | `writer_list_objects` |  | Enumerate objects in the active Writer doc — graphics, text frames, embedded/OLE objects, and draw shapes (rectangle/ellipse/line/text) — with name, type, anchor, and size (mm). Discovery companion to writer_read_table / writer_get_paragraphs. |
-| `writer_set_text_direction` |  | Set text writing direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Default flips the WHOLE document: every body paragraph, every table-cell paragraph (tables=false to skip), and the page style (page=false to skip). Give 'start'/'count' to flip only a body-paragraph range instead. Also sets paragraph alignment to match (align=false to keep alignment, e.g. a centered title). |
+| `writer_set_text_direction` | ✅ | Set text writing direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Default flips the WHOLE document: every body paragraph, every table-cell paragraph (tables=false to skip), and the page style (page=false to skip). Give 'start'/'count' to flip only a body-paragraph range instead. Also sets paragraph alignment to match (align=false to keep alignment, e.g. a centered title). |
+| `writer_set_writing_mode` | ✅ | Set text writing mode/direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Alias for writer_set_text_direction. |
 | `writer_delete_object` |  | Delete a graphic, text frame, embedded object, draw shape, or text section by name. |
 | `writer_set_image_layout` |  | Set anchor (as_char/char/paragraph/page/frame), text wrap (none/through/parallel/dynamic/left/right), and absolute position (x_mm/y_mm) of an existing image or text frame by name. |
 | `writer_insert_shape` |  | Draw a rectangle/ellipse/line/text shape on the draw page at position/size (mm) with optional fill/line color, caption text, and name. |
@@ -197,7 +199,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `writer_replace_image` |  | Replace an existing image by 'name': swap its graphic (new 'path') and/or resize it (width_mm/height_mm) in place — e.g. update a logo without rebuilding. Use writer_list_objects to find image names. |
 | `writer_set_document_defaults` |  | Set the document's base typography via the 'Standard' paragraph style: font_name and/or font_size, applied to Western + Complex (RTL/CTL) + Asian scripts so an Arabic base font actually takes effect document-wide. |
 | `writer_insert_tab_stops` |  | Set paragraph tab stops (positions_mm = list of mm) on matched paragraphs ('search') or a body-paragraph range (start/count, default all). align left/right/center/decimal; optional 'fill' char (e.g. '.' for dotted signature lines). |
-| `writer_format_document` | ✅ | Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). |
+| `writer_format_document` | ✅ | Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). Optional direction 'rtl' sets Right-to-Left writing mode. |
 
 ## Writer — structure
 
@@ -207,8 +209,8 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `writer_get_outline` |  | List the document's headings/subheadings as an outline: [{level, text, index, style}, ...]. 'level' is the outline depth (1 = heading, 2 = subheading, 3 = sub-subheading, ...); 'index' is the body-paragraph index for targeting with writer_format_paragraph / writer_apply_style / writer_move_paragraphs. |
 | `writer_add_conditional_section` |  | Writer's analog of conditional formatting: append text wrapped in a named CONDITIONAL SECTION that is HIDDEN when 'condition' evaluates true (LibreOffice field syntax, e.g. '1==1', 'user_field=="x"'). The condition is evaluated by Writer's layout when the document is viewed/printed. Set visible=false to hide the section immediately regardless of condition. |
 | `writer_insert_field` |  | Insert a dynamic field at the document end (or a new trailing paragraph): page_number, page_count, date, time, title, or author. Refresh later with writer_update_indexes. |
-| `writer_insert_toc` |  | Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings. |
-| `writer_update_indexes` |  | Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits. |
+| `writer_insert_toc` | ✅ | Insert a Table of Contents built from heading outline levels, at the document end or (at_start=true) the top. Populated immediately; re-run writer_update_indexes after adding headings. |
+| `writer_update_indexes` | ✅ | Refresh ALL tables of contents/indexes and all dynamic fields (page numbers, dates, counts) so they stop being stale after programmatic edits. |
 | `writer_apply_list` |  | Turn body paragraphs into a bulleted (default) or numbered (ordered=true) list by attaching NumberingRules directly (works regardless of localized list-style names). Targets paragraphs from 'start' (0-based) for 'count' paragraphs; omit count to go to the end. To MATCH the document's own bullets, pass list_style (the numbering style name writer_get_paragraphs detail=true reports) or copy_from_index (reuse an existing list paragraph's rules + level). Errors if the range matches no paragraph or none could be changed. |
 | `writer_content_control` | ✅ | Insert a Word-compatible content control (Form > Content Controls): rich_text, plain_text, checkbox, dropdown, combobox, date or picture. Unlike form controls these sit IN the text flow rather than floating over it, survive round-tripping to .docx, and can be bound to XML data via 'xpath'. Wrap existing text with 'search', or append with 'text'. |
 | `writer_add_section` |  | Insert a named text section at the end, optionally multi-column and/or write-protected, wrapping optional text. |
