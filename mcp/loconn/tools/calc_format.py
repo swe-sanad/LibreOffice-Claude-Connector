@@ -80,9 +80,17 @@ def tool_calc_format_range(args):
     if "font_color" in args:
         rng.CharColor = _hex_color(args["font_color"])
         applied.append("font_color")
-    if "background_color" in args:
-        rng.CellBackColor = _hex_color(args["background_color"])
+    bg = args.get("background_color") or args.get("bg_color")
+    if bg:
+        rng.CellBackColor = _hex_color(bg)
         applied.append("background_color")
+    if "border_color" in args or "border_width_pt" in args or "border_width" in args:
+        b_width = float(args.get("border_width_pt") or args.get("border_width") or 0.5)
+        b_color = args.get("border_color", "#000000")
+        outline_only = bool(args.get("border_outline_only", False))
+        rng.setPropertyValue("TableBorder2",
+                             _full_grid_border(b_width, b_color, outline_only))
+        applied.append("borders")
     if "wrap_text" in args:
         rng.IsTextWrapped = bool(args["wrap_text"])
         applied.append("wrap_text")
@@ -116,8 +124,8 @@ def tool_calc_format_range(args):
     if not applied:
         raise RuntimeError("No formatting property given. Supported: bold, "
                            "italic, underline, font_name, font_size, font_color, "
-                           "background_color, wrap_text, horizontal_align, "
-                           "number_format, auto_fit_columns.")
+                           "background_color (or bg_color), border_color, border_width_pt, "
+                           "wrap_text, horizontal_align, number_format, auto_fit_columns.")
     return {"formatted": args["range"], "applied": applied}
 
 
@@ -577,6 +585,10 @@ TOOL_DEFS = [
                              "font_name": _STR, "font_size": _NUM,
                              "font_color": dict(_STR, description="'#RRGGBB'"),
                              "background_color": dict(_STR, description="'#RRGGBB'"),
+                             "bg_color": dict(_STR, description="'#RRGGBB' (alias for background_color)"),
+                             "border_color": dict(_STR, description="'#RRGGBB' border color"),
+                             "border_width_pt": dict(_NUM, description="border width in points (default 0.5)"),
+                             "border_outline_only": dict(_BOOL, description="when borders are set, outline only (default false = full grid)"),
                              "wrap_text": _BOOL,
                              "horizontal_align": dict(_STR, enum=["left", "center", "right", "justify", "default"]),
                              "number_format": dict(_STR, description="raw LibreOffice number format code, e.g. '#,##0.00'"),
@@ -665,5 +677,5 @@ TOOL_DEFS = [
 ]
 
 register(globals(), TOOL_DEFS,
-         basic=['calc_format_range', 'calc_format_table'],
+         basic=['calc_format_range', 'calc_format_table', 'calc_set_borders'],
          read_only=['calc_get_cell_format', 'calc_get_comments', 'calc_get_conditional_formats', 'calc_get_validation'])
