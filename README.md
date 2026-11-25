@@ -2,7 +2,7 @@
   <img src="docs/logo.png" alt="LibreOffice ↔ Claude Connector" width="180">
 </p>
 
-# LibreOffice ↔ Claude Connector
+# LibreOffice MCP
 
 Two complementary open-source integrations between **LibreOffice** and Anthropic's
 **Claude**, both built on the UNO API and LibreOffice's own bundled Python interpreter —
