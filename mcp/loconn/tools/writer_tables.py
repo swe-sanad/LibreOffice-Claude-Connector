@@ -88,25 +88,41 @@ def tool_writer_format_table(args):
                               args.get("border_color", "#000000")))
         applied.append("border")
 
-    header = (bool(args.get("header_bold")) or "header_background" in args
-              or "header_font_color" in args)
+    h_bg = args.get("header_background") or args.get("header_bg")
+    h_fg = args.get("header_font_color") or args.get("header_fg")
+    header = bool(args.get("header_bold")) or h_bg is not None or h_fg is not None
     if header:
         ncols = len(table.getColumns())
         for c in range(ncols):
             cell = table.getCellByPosition(c, 0)
-            if "header_background" in args:
-                cell.BackColor = _hex_color(args["header_background"])
+            if h_bg is not None:
+                cell.BackColor = _hex_color(h_bg)
                 cell.BackTransparent = False
             cur = cell.getText().createTextCursor()
             cur.gotoEnd(True)
             if args.get("header_bold"):
                 cur.CharWeight = 150.0
-            if "header_font_color" in args:
-                cur.CharColor = _hex_color(args["header_font_color"])
+            if h_fg is not None:
+                cur.CharColor = _hex_color(h_fg)
         applied.append("header_row")
 
+    zebra_bg = args.get("zebra_bg") or args.get("even_row_bg")
+    odd_bg = args.get("odd_row_bg")
+    if zebra_bg or odd_bg:
+        nrows = len(table.getRows())
+        ncols = len(table.getColumns())
+        for r in range(1, nrows):
+            is_even = (r - 1) % 2 == 1
+            bg = zebra_bg if is_even else odd_bg
+            if bg:
+                for c in range(ncols):
+                    cell = table.getCellByPosition(c, r)
+                    cell.BackColor = _hex_color(bg)
+                    cell.BackTransparent = False
+        applied.append("zebra")
+
     if not applied:
-        raise RuntimeError("Give border_width_pt/border_color and/or "
+        raise RuntimeError("Give border_width_pt/border_color, zebra_bg/odd_row_bg, and/or "
                            "header_bold/header_background/header_font_color.")
     return {"table": table.getName(), "applied": applied}
 
@@ -381,7 +397,12 @@ TOOL_DEFS = [
                              "border_color": dict(_STR, description="'#RRGGBB'"),
                              "header_bold": _BOOL,
                              "header_background": dict(_STR, description="'#RRGGBB'"),
-                             "header_font_color": dict(_STR, description="'#RRGGBB'")})},
+                             "header_bg": dict(_STR, description="alias for header_background '#RRGGBB'"),
+                             "header_font_color": dict(_STR, description="'#RRGGBB'"),
+                             "header_fg": dict(_STR, description="alias for header_font_color '#RRGGBB'"),
+                             "zebra_bg": dict(_STR, description="alternating (even) body row background '#RRGGBB'"),
+                             "even_row_bg": dict(_STR, description="alias for zebra_bg '#RRGGBB'"),
+                             "odd_row_bg": dict(_STR, description="odd body row background '#RRGGBB'")})},
     {"name": "writer_read_table",
      "description": "Read an existing Writer table back as a 2-D grid of cell strings. Give 'name' (from writer_list_objects / find) or a 0-based 'index' (default 0).",
      "inputSchema": _schema({"name": dict(_STR, description="table name (e.g. 'Table1')"),

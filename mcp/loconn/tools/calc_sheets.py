@@ -115,11 +115,24 @@ def tool_calc_set_dimensions(args):
     sheet = _resolve_sheet(doc, args.get("sheet"))
     coll, axis = _calc_axis(sheet, args["axis"])
     start = int(args["start"])
+    sizes_mm = args.get("sizes_mm")
+    if sizes_mm is not None:
+        if not isinstance(sizes_mm, (list, tuple)) or not sizes_mm:
+            raise RuntimeError("'sizes_mm' must be a non-empty list of numbers.")
+        for offset, sz in enumerate(sizes_mm):
+            item = coll.getByIndex(start + offset)
+            v = _mm100(sz)
+            if axis == "columns":
+                item.Width = v
+            else:
+                item.Height = v
+        return {"axis": axis, "start": start, "count": len(sizes_mm),
+                "autofit": False, "sizes_mm": list(sizes_mm)}
     count = int(args.get("count", 1))
     autofit = bool(args.get("autofit", False))
     size_mm = args.get("size_mm")
     if not autofit and size_mm is None:
-        raise RuntimeError("Provide 'size_mm' or set 'autofit': true.")
+        raise RuntimeError("Provide 'size_mm', 'sizes_mm', or set 'autofit': true.")
     for i in range(start, start + count):
         item = coll.getByIndex(i)
         if autofit:
@@ -226,6 +239,12 @@ def tool_calc_page_setup(args):
     if args.get("center_v") is not None:
         ps.CenterVertically = bool(args["center_v"])
         changed.append("center_v")
+    if args.get("header_on") is not None:
+        ps.HeaderIsOn = bool(args["header_on"])
+        changed.append("header_on")
+    if args.get("footer_on") is not None:
+        ps.FooterIsOn = bool(args["footer_on"])
+        changed.append("footer_on")
     return {"page_style": sheet.PageStyle, "changed": changed}
 
 
@@ -453,6 +472,7 @@ TOOL_DEFS = [
                              "axis": dict(_STR, enum=["columns", "rows"]),
                              "start": _INT, "count": _INT,
                              "size_mm": dict(_NUM, description="width/height in mm"),
+                             "sizes_mm": {"type": "array", "items": {"type": "number"}, "description": "list of widths/heights in mm starting at 'start' (overrides count/size_mm)"},
                              "autofit": dict(_BOOL, description="auto-fit instead of a fixed size")},
                             ["axis", "start"])},
     {"name": "calc_set_visibility",
@@ -490,7 +510,8 @@ TOOL_DEFS = [
                              "margin_top": _NUM, "margin_bottom": _NUM,
                              "margin_left": _NUM, "margin_right": _NUM,
                              "scale": _INT, "fit_pages_x": _INT, "fit_pages_y": _INT,
-                             "center_h": _BOOL, "center_v": _BOOL})},
+                             "center_h": _BOOL, "center_v": _BOOL,
+                             "header_on": _BOOL, "footer_on": _BOOL})},
     {"name": "calc_set_print_area",
      "description": "Define the print range for a sheet (or clear=true), with optional repeating title_rows / title_columns ranges.",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET, "clear": _BOOL,

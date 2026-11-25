@@ -712,7 +712,7 @@ TOOL_DEFS = [
      "description": "Read a Calc range as formulas (e.g. '=SUM(A1:A3)') instead of computed values.",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET}, ["range"])},
     {"name": "calc_set_formulas",
-     "description": "Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify).",
+     "description": "Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). Use UI syntax ='Sheet'.A1 without ODF [...] brackets. The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify).",
      "inputSchema": _schema({"range": _RANGE,
                              "formulas": dict(_GRID, description="rows of formula strings, e.g. [['=A1*2'], ['=A2*2']]"),
                              "sheet": _SHEET}, ["range", "formulas"])},

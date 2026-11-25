@@ -62,20 +62,31 @@ def tool_calc_format_range(args):
     applied = []
 
     if "bold" in args:
-        rng.CharWeight = 150.0 if args["bold"] else 100.0
+        w = 150.0 if args["bold"] else 100.0
+        rng.CharWeight = w
+        rng.CharWeightComplex = w
+        rng.CharWeightAsian = w
         applied.append("bold")
     if "italic" in args:
-        rng.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
-                                    "ITALIC" if args["italic"] else "NONE")
+        posture = _uno_enum("com.sun.star.awt.FontSlant",
+                            "ITALIC" if args["italic"] else "NONE")
+        rng.CharPosture = posture
+        rng.CharPostureComplex = posture
+        rng.CharPostureAsian = posture
         applied.append("italic")
     if "underline" in args:
         rng.CharUnderline = 1 if args["underline"] else 0
         applied.append("underline")
     if "font_name" in args:
         rng.CharFontName = args["font_name"]
+        rng.CharFontNameComplex = args["font_name"]
+        rng.CharFontNameAsian = args["font_name"]
         applied.append("font_name")
     if "font_size" in args:
-        rng.CharHeight = float(args["font_size"])
+        sz = float(args["font_size"])
+        rng.CharHeight = sz
+        rng.CharHeightComplex = sz
+        rng.CharHeightAsian = sz
         applied.append("font_size")
     if "font_color" in args:
         rng.CharColor = _hex_color(args["font_color"])
@@ -102,6 +113,27 @@ def tool_calc_format_range(args):
         rng.HoriJustify = _uno_enum("com.sun.star.table.CellHoriJustify",
                                     _H_ALIGN[key])
         applied.append("horizontal_align")
+    if args.get("writing_mode") is not None:
+        wm_map = {"ltr": 0, "rtl": 1, "page": 4}
+        wm_key = str(args["writing_mode"]).lower()
+        if wm_key not in wm_map:
+            raise RuntimeError("writing_mode must be one of %s"
+                               % sorted(wm_map))
+        rng.WritingMode = wm_map[wm_key]
+        applied.append("writing_mode")
+    if ("padding_mm" in args or "padding_v_mm" in args
+            or "padding_h_mm" in args):
+        pad_v = args.get("padding_v_mm", args.get("padding_mm"))
+        pad_h = args.get("padding_h_mm", args.get("padding_mm"))
+        if pad_v is not None:
+            v_100mm = int(round(float(pad_v) * 100))
+            rng.TopBorderDistance = v_100mm
+            rng.BottomBorderDistance = v_100mm
+        if pad_h is not None:
+            h_100mm = int(round(float(pad_h) * 100))
+            rng.LeftBorderDistance = h_100mm
+            rng.RightBorderDistance = h_100mm
+        applied.append("padding")
     if "number_format" in args:
         formats = doc.getNumberFormats()
         locale = _uno_struct("com.sun.star.lang.Locale")
@@ -507,6 +539,8 @@ _TABLE_PRESETS = {
     "clean":     ("#EFEFEF", "#000000", None),
     "report":    ("#2F5597", "#FFFFFF", None),
     "financial": ("#2F5597", "#FFFFFF", "#,##0.00"),
+    "neutral":   ("#B2B2B2", "#FFFFFF", None),
+    "sanad":     ("#B2B2B2", "#FFFFFF", None),
 }
 
 
@@ -519,6 +553,11 @@ def tool_calc_format_table(args):
     if preset not in _TABLE_PRESETS:
         raise RuntimeError("preset must be one of %s" % sorted(_TABLE_PRESETS))
     head_bg, head_fg, number_format = _TABLE_PRESETS[preset]
+    head_bg = args.get("header_bg") or head_bg
+    head_fg = args.get("header_fg") or head_fg
+    border_color = args.get("border_color", "#B0B0B0")
+    zebra_bg = args.get("zebra_bg") or args.get("even_row_bg")
+    odd_bg = args.get("odd_row_bg")
 
     a1 = args.get("range")
     if not a1:
@@ -532,8 +571,19 @@ def tool_calc_format_table(args):
     has_header = bool(args.get("header", True))
     applied = []
 
-    rng.setPropertyValue("TableBorder2", _full_grid_border(0.5, "#B0B0B0", False))
+    rng.setPropertyValue("TableBorder2", _full_grid_border(0.5, border_color, False))
     applied.append("borders")
+
+    if zebra_bg or odd_bg:
+        body_start = addr.StartRow + (1 if has_header else 0)
+        for r in range(body_start, addr.EndRow + 1):
+            is_even = (r - body_start) % 2 == 1
+            bg = zebra_bg if is_even else odd_bg
+            if bg:
+                row_rng = sheet.getCellRangeByPosition(
+                    addr.StartColumn, r, addr.EndColumn, r)
+                row_rng.CellBackColor = _hex_color(bg)
+        applied.append("zebra")
 
     if has_header:
         header = sheet.getCellRangeByPosition(
@@ -591,6 +641,10 @@ TOOL_DEFS = [
                              "border_outline_only": dict(_BOOL, description="when borders are set, outline only (default false = full grid)"),
                              "wrap_text": _BOOL,
                              "horizontal_align": dict(_STR, enum=["left", "center", "right", "justify", "default"]),
+                             "writing_mode": dict(_STR, enum=["rtl", "ltr", "page"], description="text/paragraph direction: 'rtl' (RL_TB), 'ltr' (LR_TB), or 'page'"),
+                             "padding_mm": dict(_NUM, description="uniform cell border padding in mm (sets Top/Bottom/Left/RightBorderDistance)"),
+                             "padding_v_mm": dict(_NUM, description="vertical cell border padding in mm (overrides padding_mm for top/bottom)"),
+                             "padding_h_mm": dict(_NUM, description="horizontal cell border padding in mm (overrides padding_mm for left/right)"),
                              "number_format": dict(_STR, description="raw LibreOffice number format code, e.g. '#,##0.00'"),
                              "number_preset": dict(_STR, enum=["number", "currency", "percent", "date", "time", "datetime", "text"],
                                                    description="named format resolved FOR A LOCALE — prefer this over number_format for money and dates, it gets the currency symbol, digit grouping and date order right per country"),
@@ -669,9 +723,15 @@ TOOL_DEFS = [
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
                              "kind": dict(_STR, enum=["colorscale", "databar"])}, ["range"])},
     {"name": "calc_format_table",
-     "description": "Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range.",
+     "description": "Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body), neutral/sanad (#B2B2B2 header + white text). Supports header_bg, header_fg, zebra_bg/even_row_bg, odd_row_bg, and border_color overrides. Defaults to the sheet's used range.",
      "inputSchema": _schema({"range": _RANGE, "sheet": _SHEET,
-                             "preset": dict(_STR, enum=["clean", "report", "financial"]),
+                             "preset": dict(_STR, enum=["clean", "report", "financial", "neutral", "sanad"]),
+                             "header_bg": dict(_STR, description="override header background '#RRGGBB'"),
+                             "header_fg": dict(_STR, description="override header font color '#RRGGBB'"),
+                             "zebra_bg": dict(_STR, description="alternating (even) body row background '#RRGGBB'"),
+                             "even_row_bg": dict(_STR, description="alias for zebra_bg '#RRGGBB'"),
+                             "odd_row_bg": dict(_STR, description="odd body row background '#RRGGBB'"),
+                             "border_color": dict(_STR, description="grid border color '#RRGGBB' (default '#B0B0B0')"),
                              "header": dict(_BOOL, description="treat row 1 as a header (default true)"),
                              "freeze": dict(_BOOL, description="freeze the header row (default true)")})},
 ]

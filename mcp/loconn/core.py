@@ -655,7 +655,14 @@ def _arg_separator(doc):
 def _normalize_formula(s, sep):
     """Rewrite TOP-LEVEL ',' argument separators to `sep`, skipping commas inside
     "..." string literals AND {...} array constants (whose separators follow a
-    different locale convention). No-op when the doc already uses ','."""
+    different locale convention). Also strips accidental ODF [...] brackets around
+    sheet-qualified references (e.g. ['Sheet'.A1] -> 'Sheet'.A1).
+    No-op for non-formula text cells (not starting with '=')."""
+    if not s.startswith("="):
+        return s
+    # Strip accidental ODF XML OpenFormula brackets around sheet-qualified refs
+    if "[" in s:
+        s = re.sub(r"\[((?:'[^']+'|[A-Za-z0-9_]+)\.[^\[\]]+)\]", r"\1", s)
     if sep == "," or "," not in s:
         return s
     out, in_str, brace = [], False, 0

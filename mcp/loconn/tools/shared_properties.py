@@ -621,7 +621,19 @@ def _lifecycle_facts(doc, ub):
 def tool_document_lifecycle(args):
     """Where this document is in its life, and the next thing worth doing."""
     ub = _bridge()
-    doc = _select_doc(args) or _current_doc()
+    try:
+        doc = _select_doc(args) or _current_doc()
+    except RuntimeError as exc:
+        if "no_document" in str(exc) or "no open" in str(exc).lower():
+            return {
+                "phase": "no_document",
+                "next_actions": [
+                    {"tool": "create_document", "why": "create a new Writer, Calc, Impress, or Draw document"},
+                    {"tool": "open_document", "why": "open an existing document from disk"},
+                ],
+                "ask_the_user": "No document is currently open in LibreOffice. Would you like to create a new document or open an existing file?",
+            }
+        raise
     f = _lifecycle_facts(doc, ub)
     writer = f["kind"] == "writer"
     has_content = (f.get("characters", 0) > 40 if writer
