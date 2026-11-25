@@ -1,6 +1,6 @@
 # MCP tool reference
 
-All **222 tools** of the `libreoffice` MCP server (v0.10.1), generated from the
+All **222 tools** of the `libreoffice` MCP server (v0.10.2), generated from the
 live registry by `scripts/gen_mcp_tools_doc.py`. Do not edit by hand.
 
 **82** are advertised by default; the rest are reachable by name through
@@ -37,7 +37,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `calc_read_range` | ✅ | Read a Calc cell range as a 2-D array of values. |
 | `calc_write_range` | ✅ | Write a 2-D array of values into a Calc range (dimensions must match the range). |
 | `calc_get_formulas` |  | Read a Calc range as formulas (e.g. '=SUM(A1:A3)') instead of computed values. |
-| `calc_set_formulas` | ✅ | Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify). |
+| `calc_set_formulas` | ✅ | Write a 2-D array of formula strings (or literals) into a Calc range; dimensions must match. Formulas may use ',' argument separators regardless of the document's locale (auto-normalized). Use UI syntax ='Sheet'.A1 without ODF [...] brackets. The reply flags any resulting error cells in 'errors' (and 'error_scan' if the range was too large to verify). |
 | `calc_clear_range` |  | Clear the contents of a Calc range (values, text, formulas; optionally formatting too). |
 | `calc_copy_range` |  | Copy a Calc range (values, formulas, formatting) to a target cell, optionally on another sheet. |
 | `calc_find_replace` |  | Find & replace cell text in one sheet, or in every sheet when 'sheet' is omitted. Returns the replacement count. |
@@ -83,7 +83,7 @@ One section per source module — the document mirrors `mcp/loconn/tools/`.
 | `calc_get_validation` |  | Read back the data-validation rule on a range (type, formulas, input/error messages, dropdown flag). |
 | `calc_apply_cell_style` |  | Apply a named cell style (e.g. 'Good', 'Heading 1') to a range, or read the current style if 'style' is omitted. |
 | `calc_add_scale_format` |  | Add a color-scale or data-bar conditional format to a range (kind colorscale\|databar), with default thresholds/colors. |
-| `calc_format_table` | ✅ | Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body). Defaults to the sheet's used range. |
+| `calc_format_table` | ✅ | Make a data range look like a finished table in ONE call: bold coloured header, full border grid, auto-fitted columns and a frozen header row. Presets: clean (grey header), report (blue header), financial (blue header + #,##0.00 on the body), neutral/sanad (#B2B2B2 header + white text). Supports header_bg, header_fg, zebra_bg/even_row_bg, odd_row_bg, and border_color overrides. Defaults to the sheet's used range. |
 
 ## Calc — sheets
 
