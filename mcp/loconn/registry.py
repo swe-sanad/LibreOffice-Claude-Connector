@@ -50,7 +50,7 @@ def register(namespace, defs, basic=(), read_only=()):
         TOOLS[name] = func
         TOOL_DEFS.append(definition)
 
-    BASIC_TOOLS.update(basic)
+    BASIC_TOOLS.update(d["name"] for d in defs)
     NO_UNDO.update(read_only)
 
 

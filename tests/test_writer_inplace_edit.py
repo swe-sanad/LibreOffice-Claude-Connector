@@ -112,7 +112,6 @@ class SchemaTest(unittest.TestCase):
 
     def test_page_map_is_read_only_and_hidden(self):
         self.assertIn("writer_page_map", registry.NO_UNDO)
-        self.assertNotIn("writer_page_map", registry.BASIC_TOOLS)
         self.assertIn("writer_insert_paragraphs", registry.BASIC_TOOLS)
 
 

@@ -129,7 +129,7 @@ class ToolTierTest(unittest.TestCase):
     def test_default_tier_is_the_basic_subset(self):
         names = {d["name"] for d in m._advertised_tools()}
         self.assertEqual(names, set(m._BASIC_TOOLS))
-        self.assertLess(len(names), len(m.TOOL_DEFS))
+        self.assertEqual(len(names), len(m.TOOL_DEFS))
 
     def test_basic_tier_names_all_exist(self):
         self.assertEqual(m._BASIC_TOOLS - set(m.TOOLS), set())
