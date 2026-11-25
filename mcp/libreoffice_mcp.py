@@ -24,7 +24,7 @@ from loconn import tools as _tools           # noqa: E402,F401 - self-registerin
 globals().update({"tool_" + _n: _f for _n, _f in TOOLS.items()})
 
 SERVER_NAME = "libreoffice"
-SERVER_VERSION = "0.10.0"
+SERVER_VERSION = "0.10.1"
 DEFAULT_PROTOCOL = "2024-11-05"
 
 # TOOLS, TOOL_DEFS, _BASIC_TOOLS, _NO_UNDO, _full_tier, _advertised_tools all

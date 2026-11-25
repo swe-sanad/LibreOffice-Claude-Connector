@@ -17,21 +17,74 @@ def _apply_char_format(rng, args):
     """Character props shared by writer_format_text (runs) and
     writer_format_paragraph (whole paragraphs). Returns the keys applied."""
     applied = []
+    script = str(args.get("script", "all")).lower()
+    set_western = script in ("western", "all")
+    set_ctl = script in ("ctl", "complex", "all")
+    set_asian = script in ("asian", "all")
+
     if "bold" in args:
-        rng.CharWeight = 150.0 if args["bold"] else 100.0
+        weight = 150.0 if args["bold"] else 100.0
+        if set_western:
+            rng.CharWeight = weight
+        if set_ctl:
+            try:
+                rng.CharWeightComplex = weight
+            except Exception:
+                pass
+        if set_asian:
+            try:
+                rng.CharWeightAsian = weight
+            except Exception:
+                pass
         applied.append("bold")
     if "italic" in args:
-        rng.CharPosture = _uno_enum("com.sun.star.awt.FontSlant",
-                                    "ITALIC" if args["italic"] else "NONE")
+        slant = _uno_enum("com.sun.star.awt.FontSlant",
+                          "ITALIC" if args["italic"] else "NONE")
+        if set_western:
+            rng.CharPosture = slant
+        if set_ctl:
+            try:
+                rng.CharPostureComplex = slant
+            except Exception:
+                pass
+        if set_asian:
+            try:
+                rng.CharPostureAsian = slant
+            except Exception:
+                pass
         applied.append("italic")
     if "underline" in args:
         rng.CharUnderline = 1 if args["underline"] else 0
         applied.append("underline")
     if "font_name" in args:
-        rng.CharFontName = args["font_name"]
+        name = args["font_name"]
+        if set_western:
+            rng.CharFontName = name
+        if set_ctl:
+            try:
+                rng.CharFontNameComplex = name
+            except Exception:
+                pass
+        if set_asian:
+            try:
+                rng.CharFontNameAsian = name
+            except Exception:
+                pass
         applied.append("font_name")
     if "font_size" in args:
-        rng.CharHeight = float(args["font_size"])
+        size = float(args["font_size"])
+        if set_western:
+            rng.CharHeight = size
+        if set_ctl:
+            try:
+                rng.CharHeightComplex = size
+            except Exception:
+                pass
+        if set_asian:
+            try:
+                rng.CharHeightAsian = size
+            except Exception:
+                pass
         applied.append("font_size")
     if "font_color" in args:
         rng.CharColor = _hex_color(args["font_color"])
@@ -439,6 +492,11 @@ def tool_writer_set_text_direction(args):
             "table_cell_paragraphs": cells, "page_style_set": page}
 
 
+def tool_writer_set_writing_mode(args):
+    """Set document/paragraph writing mode. Alias for writer_set_text_direction."""
+    return tool_writer_set_text_direction(args)
+
+
 def tool_writer_delete_object(args):
     doc = _require_writer()
     name = args["name"]
@@ -808,9 +866,31 @@ def tool_writer_format_document(args):
         setattr(page, side, mm100)
     applied.append("margins")
 
-    return {"preset": preset, "font_name": font, "font_size": size,
-            "margin_mm": margin_mm, "line_spacing_percent": spacing,
-            "page_style": page.Name, "applied": applied}
+    if "direction" in args:
+        direction = str(args["direction"]).lower()
+        if direction not in ("rtl", "ltr"):
+            raise RuntimeError("direction must be 'rtl' or 'ltr'.")
+        wm = 1 if direction == "rtl" else 0
+        try:
+            page.WritingMode = wm
+        except Exception:
+            pass
+        try:
+            std.WritingMode = wm
+            if bool(args.get("align_direction", True)):
+                std.ParaAdjust = _uno_enum(
+                    "com.sun.star.style.ParagraphAdjust",
+                    "RIGHT" if direction == "rtl" else "LEFT")
+        except Exception:
+            pass
+        applied.append("writing_mode")
+
+    res = {"preset": preset, "font_name": font, "font_size": size,
+           "margin_mm": margin_mm, "line_spacing_percent": spacing,
+           "page_style": page.Name, "applied": applied}
+    if "direction" in args:
+        res["direction"] = str(args["direction"]).lower()
+    return res
 
 
 TOOL_DEFS = [
@@ -824,7 +904,9 @@ TOOL_DEFS = [
                              "char_end": dict(_INT, description="end offset (exclusive; default: paragraph end)"),
                              "bold": _BOOL, "italic": _BOOL, "underline": _BOOL,
                              "font_name": _STR, "font_size": _NUM,
-                             "font_color": dict(_STR, description="'#RRGGBB'")})},
+                             "font_color": dict(_STR, description="'#RRGGBB'"),
+                             "script": dict(_STR, enum=["all", "western", "ctl", "asian"],
+                                            description="target script group (default 'all' synchronizes Western and CTL/Arabic)")})},
     {"name": "writer_insert_image",
      "description": "Insert an image file at the end of the Writer document (size in mm; defaults to the image's own size).",
      "inputSchema": _schema({"path": _STR, "width_mm": _INT, "height_mm": _INT}, ["path"])},
@@ -866,6 +948,16 @@ TOOL_DEFS = [
      "inputSchema": _schema()},
     {"name": "writer_set_text_direction",
      "description": "Set text writing direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Default flips the WHOLE document: every body paragraph, every table-cell paragraph (tables=false to skip), and the page style (page=false to skip). Give 'start'/'count' to flip only a body-paragraph range instead. Also sets paragraph alignment to match (align=false to keep alignment, e.g. a centered title).",
+     "inputSchema": _schema({"direction": dict(_STR, enum=["rtl", "ltr"]),
+                             "start": dict(_INT, description="range mode: first paragraph index (0-based)"),
+                             "count": dict(_INT, description="range mode: how many paragraphs (default: to end)"),
+                             "align": dict(_BOOL, description="also set alignment right/left to match (default true)"),
+                             "tables": dict(_BOOL, description="whole-doc mode: also flip table cells (default true)"),
+                             "page": dict(_BOOL, description="whole-doc mode: also set the page style direction (default true)"),
+                             "style_name": dict(_STR, description="page style to set (default: the one in use)")},
+                            ["direction"])},
+    {"name": "writer_set_writing_mode",
+     "description": "Set text writing mode/direction to 'rtl' (Arabic/Hebrew) or 'ltr'. Alias for writer_set_text_direction.",
      "inputSchema": _schema({"direction": dict(_STR, enum=["rtl", "ltr"]),
                              "start": dict(_INT, description="range mode: first paragraph index (0-based)"),
                              "count": dict(_INT, description="range mode: how many paragraphs (default: to end)"),
@@ -933,12 +1025,15 @@ TOOL_DEFS = [
                              "start": _INT, "count": _INT},
                             ["positions_mm"])},
     {"name": "writer_format_document",
-     "description": "Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single).",
+     "description": "Make a Writer document presentable in ONE call: base font and size (all scripts, so Arabic/CTL takes effect), line spacing and page margins. Presets: report (sans 11pt, 20mm, 1.15), essay (serif 12pt, 1in, double), letter (serif 12pt, 25mm, single). Optional direction 'rtl' sets Right-to-Left writing mode.",
      "inputSchema": _schema({"preset": dict(_STR, enum=["report", "essay", "letter"]),
                              "font_name": dict(_STR, description="override the preset font"),
-                             "font_size": dict(_NUM, description="override the preset size (pt)")})},
+                             "font_size": dict(_NUM, description="override the preset size (pt)"),
+                             "direction": dict(_STR, enum=["rtl", "ltr"], description="text direction: 'rtl' sets page and Standard paragraph styles to Right-to-Left"),
+                             "align_direction": dict(_BOOL, description="when direction is set, whether to align right/left (default true)")})},
 ]
 
 register(globals(), TOOL_DEFS,
-         basic=['writer_apply_style', 'writer_format_document', 'writer_format_text', 'writer_insert_image'],
+         basic=['writer_apply_style', 'writer_format_document', 'writer_format_text', 'writer_insert_image',
+                'writer_set_text_direction', 'writer_set_writing_mode'],
          read_only=['writer_list_objects'])

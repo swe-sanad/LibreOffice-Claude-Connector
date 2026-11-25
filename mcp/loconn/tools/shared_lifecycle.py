@@ -11,6 +11,7 @@ from ..registry import register
 
 
 def tool_list_documents(_args):
+    from .shared_recovery import tool_lo_status
     return tool_lo_status(_args)
 
 
@@ -23,11 +24,13 @@ _FACTORY_URLS = {"calc": "private:factory/scalc",
 _FILTERS = {
     ("calc", "native"): "calc8",
     ("calc", "ods"): "calc8",
+    ("calc", "ots"): "calc8_template",
     ("calc", "xlsx"): "Calc MS Excel 2007 XML",
     ("calc", "csv"): "Text - txt - csv (StarCalc)",
     ("calc", "pdf"): "calc_pdf_Export",
     ("writer", "native"): "writer8",
     ("writer", "odt"): "writer8",
+    ("writer", "ott"): "writer8_template",
     ("writer", "docx"): "MS Word 2007 XML",
     ("writer", "txt"): "Text",
     ("writer", "pdf"): "writer_pdf_Export",

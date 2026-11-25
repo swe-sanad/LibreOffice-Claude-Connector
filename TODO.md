@@ -106,3 +106,46 @@ Full mapping in `docs/UPSTREAM-PARITY.md`.
 - [ ] Add regression tests (extend `tests/integration/test_mcp_tools_extended.py`)
   for each new capability before merging.
 - [ ] Re-run the live Calc/Writer MCP verification flow after implementation.
+
+## Found in real use — 2026-09-18, building an RTL proposal template (contracts repo)
+
+Session: Claude Code drove the connector from `E:\Sanad-SWE\contracts` to build
+`_Templates/مقترح خدمة برمجية - قالب.ott` and a filled ODT + PDF. Four bugs, one gap,
+one design note. Reproduced against v0.9.8 (`lo_status` reported 52 of 191 advertised).
+
+### Bugs
+
+- [x] **`dispatch` with tool='list' returns only 15 tools (its own module).**
+  Fixed in v0.10.0 / v0.10.1: iterates `_ALL_TOOL_DEFS` from `registry`. Tested.
+- [x] **`list_documents` raises `NameError: tool_lo_status`.**
+  Fixed in v0.10.1: correctly imported from `shared_recovery`.
+- [x] **Duplicate definitions in `writer_text.py`:**
+  Removed duplicates in v0.10.0.
+- [x] **Probing a tool with `{}` mutates the document.**
+  Fixed in v0.10.1: `dispatch` provides side-effect-free `tool='describe'` (`args={'tool': '...'}`) returning `inputSchema` and description.
+
+### Gap
+
+- [x] **`save_document` cannot write templates.**
+  Fixed in v0.10.1: added `("writer", "ott") -> "writer8_template"` and `("calc", "ots") -> "calc8_template"`.
+
+### Design note (not a bug)
+
+- Building a 60-block, 7-table RTL document through discrete tools is ~80 round trips
+  (`batch` helps). `uno_exec` + a builder script did it in one call; keep both paths, and
+  document that a fresh `CharacterStyle` created over UNO renders Latin in caps until
+  `CharCaseMap = 0` is set (LibreOffice default, worth a line in `set_style`'s docs).
+- What was NOT a gap, after checking the source: `create_from_template`,
+  `writer_set_text_direction` (whole doc incl. tables + page), `writer_set_page_style`
+  (a4, margins), `writer_set_header_footer`, `writer_insert_field`, `writer_insert_toc`,
+  `set_style` (all families), `writer_set_document_defaults` (CTL fonts),
+  `writer_format_table`, `writer_repeat_heading_rows`, `writer_apply_list`,
+  `writer_set_chapter_numbering`, `set_active_document`. They are simply not in the basic
+  tier, and the truncated catalog hid them.
+- [ ] **Lists: `writer_apply_list` attaches `NumberingRules` directly to paragraphs.** In practice
+  the next paragraph typed or inserted after such an item inherits the list, and resetting it with
+  `setPropertyToDefault("NumberingRules")` was unreliable (a heading picked up a "1.", another a
+  bullet). The robust pattern is a named list style (`NumberingStyles`) bound to a paragraph style
+  via `NumberingStyleName`. Consider: `set_style` accepting `list_style` for paragraph styles, and a
+  `writer_set_list_style {name, ordered, bullet_char, indent_mm}` that creates/edits the named list
+  style. Found 2026-09-18 building the proposal template.

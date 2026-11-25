@@ -830,5 +830,6 @@ TOOL_DEFS = [
 ]
 
 register(globals(), TOOL_DEFS,
-         basic=['writer_captions', 'writer_content_control', 'writer_insert_caption', 'writer_insert_heading'],
+         basic=['writer_captions', 'writer_content_control', 'writer_insert_caption', 'writer_insert_heading',
+                'writer_insert_toc', 'writer_update_indexes'],
          read_only=['writer_get_outline', 'writer_list_figures'])
