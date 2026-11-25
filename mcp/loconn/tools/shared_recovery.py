@@ -37,7 +37,7 @@ def tool_lo_status(_args):
            "tools_advertised": advertised,
            "tools_total": len(TOOLS),
            "tool_tier": os.environ.get("LO_TOOLS", "basic").strip().lower(),
-           "documents": [_doc_info(doc) for doc in _open_docs()]}
+           "documents": _open_docs_info()}
     if advertised < len(TOOLS):
         out["more_tools"] = ("%d further tools are callable via dispatch {tool, args}. "
                             "dispatch tool='list' returns ALL %d grouped by application "

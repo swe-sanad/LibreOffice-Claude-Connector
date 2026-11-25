@@ -11,8 +11,7 @@ from ..registry import register
 
 
 def tool_list_documents(_args):
-    from .shared_recovery import tool_lo_status
-    return tool_lo_status(_args)
+    return {"documents": _open_docs_info()}
 
 
 _FACTORY_URLS = {"calc": "private:factory/scalc",
